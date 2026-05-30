@@ -1,11 +1,12 @@
 {
 	"name": "echo-notes",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"test": "node scripts/run-tests.mjs"
 	},
 	"keywords": [
 		"obsidian",
@@ -17,7 +18,6 @@
 	"license": "MIT",
 	"devDependencies": {
 		"@types/node": "^22.15.30",
-		"builtin-modules": "^5.0.0",
 		"esbuild": "^0.25.5",
 		"obsidian": "latest",
 		"typescript": "^5.8.3"

@@ -1,4 +1,4 @@
-import { App, normalizePath, TFile } from "obsidian";
+import { TFile, type App } from "obsidian";
 import { isSupportedAudioFile } from "./audio-detector";
 import { normalizeAudioLinkPath } from "./audio-link-parser";
 
@@ -24,10 +24,7 @@ export class AudioFileService {
 			}
 		}
 
-		const fallback = this.app.vault
-			.getFiles()
-			.find((file) => file.name === normalizedLinkPath || file.path === normalizedLinkPath);
-		return fallback instanceof TFile && isSupportedAudioFile(fallback) ? fallback : null;
+		return null;
 	}
 
 	private buildPathCandidates(linkPath: string, sourceNote?: TFile): string[] {
@@ -46,5 +43,5 @@ export class AudioFileService {
 }
 
 export function normalizeVaultPath(path: string): string {
-	return normalizePath(path.trim().replace(/^\/+/, "").replace(/^\.\//, ""));
+	return path.trim().replace(/^\/+/, "").replace(/^\.\//, "").replace(/\\/g, "/").replace(/\/+/g, "/");
 }

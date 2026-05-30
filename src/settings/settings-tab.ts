@@ -45,10 +45,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				text.inputEl.type = "password";
 				text
 					.setPlaceholder("sk-...")
-					.setValue(this.plugin.settings.apiKey)
+					.setValue(this.plugin.getApiKey())
 					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
+						await this.plugin.saveApiKey(value.trim());
 					});
 			});
 

@@ -29,14 +29,16 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 
 	private app: App;
 	private settings: EchoNotesSettings;
+	private apiKey: string;
 
-	constructor(app: App, settings: EchoNotesSettings) {
+	constructor(app: App, settings: EchoNotesSettings, apiKey: string) {
 		this.app = app;
 		this.settings = settings;
+		this.apiKey = apiKey;
 	}
 
 	async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
-		const apiKey = this.settings.apiKey.trim();
+		const apiKey = this.apiKey.trim();
 		if (!apiKey) {
 			throw new TranscriptionError("missing_api_key", "请先在 Echo Notes 设置中配置阿里百炼 API Key。");
 		}

@@ -1,4 +1,3 @@
-import { normalizePath } from "obsidian";
 import { isSupportedAudioExtension } from "./audio-detector";
 
 export type AudioLinkType = "wiki" | "markdown";
@@ -99,7 +98,7 @@ function stripWrappingAngleBrackets(value: string): string {
 }
 
 function normalizeVaultLinkPath(path: string): string {
-	return normalizePath(path.replace(/^\/+/, "").replace(/^\.\//, ""));
+	return path.replace(/^\/+/, "").replace(/^\.\//, "").replace(/\\/g, "/").replace(/\/+/g, "/");
 }
 
 function buildLineStarts(markdown: string): number[] {

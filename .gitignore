@@ -3,3 +3,4 @@ main.js
 data.json
 .DS_Store
 *.map
+.tmp/

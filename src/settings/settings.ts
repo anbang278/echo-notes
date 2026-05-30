@@ -6,7 +6,7 @@ export type InsertStyle = "linkOnly" | "callout";
 
 export interface EchoNotesSettings {
 	provider: string;
-	apiKey: string;
+	apiKey?: string;
 	baseUrl: string;
 	model: string;
 	language: string;
@@ -21,7 +21,6 @@ export interface EchoNotesSettings {
 
 export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	provider: "siliconflow",
-	apiKey: "",
 	baseUrl: "https://api.siliconflow.cn",
 	model: "TeleAI/TeleSpeechASR",
 	language: "auto",

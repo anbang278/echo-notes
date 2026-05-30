@@ -1,73 +1,36 @@
 # Echo Notes
 
-Echo Notes 是一个 Obsidian 音频转写与知识沉淀插件。它可以识别 Vault 中笔记引用的音频文件，调用配置的转写 Provider 生成 Markdown 转写稿，并在原始音频引用下方插入转写稿链接。
+Echo Notes is an Obsidian plugin that turns audio files referenced in your vault into readable, searchable, and linkable Markdown transcripts.
 
-> 注意：MVP 版本会把被转写的音频文件上传到你配置的 Provider API 地址。请确认音频内容适合发送到外部服务。
+The plugin is designed for a common note-taking workflow: insert or link an audio file in a Markdown note, run a transcription command, and Echo Notes creates a transcript file and inserts a link back into the original note.
 
-## 功能列表
+> Privacy notice: Echo Notes uploads the selected audio file to the transcription provider you configure. Do not transcribe audio that you do not want to send to that external service.
 
-- 在设置页配置 Provider、API Key、Base URL、模型和语言。
-- 支持 SiliconFlow `TeleAI/TeleSpeechASR`。
-- 支持阿里百炼 `qwen3-asr-flash`。
-- 支持选中音频链接后转写。
-- 支持扫描当前笔记全部音频链接并逐个转写。
-- 支持生成 transcript Markdown 文件。
-- 支持将 transcript 链接插入原音频引用下方。
-- 支持跳过已存在 transcript，并补充缺失链接。
-- 支持监听 Markdown 新增音频链接。
-- 支持监听 Vault 新增音频文件。
+## Features
 
-## 配置 SiliconFlow API Key
+- Configure a transcription provider, API key, base URL, model, and language in Obsidian settings.
+- Supports SiliconFlow with `TeleAI/TeleSpeechASR`.
+- Supports Alibaba Bailian / DashScope with `qwen3-asr-flash`.
+- Transcribe the selected audio link in the current note.
+- Scan and transcribe all supported audio links in the current note.
+- Generate a Markdown transcript file with source metadata.
+- Insert a transcript link below the source audio reference.
+- Skip existing transcripts and insert missing transcript links.
+- Optional automation for newly added Markdown audio links.
+- Optional automation for newly created audio files.
 
-1. 打开 Obsidian 设置。
-2. 进入 Community plugins 中的 Echo Notes 设置页。
-3. 设置：
-   - Provider：`SiliconFlow`
-   - API Key：你的 SiliconFlow API Key
-   - Base URL：`https://api.siliconflow.cn`
-   - Model：`TeleAI/TeleSpeechASR`
-   - Language：`auto`
+## Network and Data Use
 
-## 配置阿里百炼 qwen3-asr-flash
+Echo Notes makes network requests only when a transcription is triggered.
 
-1. 打开 Obsidian 设置。
-2. 进入 Echo Notes 设置页。
-3. 设置：
-   - Provider：`阿里百炼`
-   - API Key：你的 DashScope API Key
-   - Base URL：`https://dashscope.aliyuncs.com/compatible-mode/v1`
-   - Model：`qwen3-asr-flash`
-   - Language：`auto`
+- SiliconFlow provider: sends audio to `https://api.siliconflow.cn` by default.
+- Alibaba Bailian provider: sends audio to `https://dashscope.aliyuncs.com/compatible-mode/v1` by default.
+- The API key is stored with Obsidian `SecretStorage`.
+- Transcript files are written inside your Obsidian vault.
 
-阿里百炼 Provider 使用 OpenAI 兼容模式的 `/chat/completions` 接口，并将本地音频编码为 Data URL 发送。Base64 编码后超过 10MB 的音频会被阻止上传。
+You can change the provider base URL in settings. If you use a custom endpoint, audio is sent to that endpoint instead.
 
-## 使用 Transcribe selected audio
-
-在当前 Markdown 笔记中选中一条音频链接：
-
-```markdown
-![[Recording 20260531001942.m4a]]
-```
-
-执行命令 `Transcribe selected audio`。插件会解析选中的音频、调用 Provider 转写、生成 transcript，并在音频下方插入链接。
-
-## 使用 Transcribe all audio files in current note
-
-在当前笔记中放入一个或多个音频链接：
-
-```markdown
-![[Recording 20260531001942.m4a]]
-![[Recording 20260531002010.m4a]]
-```
-
-执行命令 `Transcribe all audio files in current note`。插件会扫描当前笔记中的所有支持音频引用并逐个处理。
-
-## 自动化触发
-
-- 自动识别 Markdown 音频链接：开启后，插件监听 Markdown 文件变化，延迟 1000ms 扫描新增音频链接，自动生成 transcript 并补充链接。
-- 自动识别新音频文件：开启后，插件监听 Vault 新增音频文件，自动生成 transcript，但不会强行插入来源笔记链接。
-
-## 支持的音频格式
+## Supported Audio Formats
 
 - `mp3`
 - `mp4`
@@ -77,57 +40,127 @@ Echo Notes 是一个 Obsidian 音频转写与知识沉淀插件。它可以识�
 - `wav`
 - `webm`
 
-SiliconFlow Provider MVP 上传前会检查文件大小，超过 50MB 会阻止上传并提示：
+Provider limits:
 
-```text
-Audio file exceeds SiliconFlow 50MB limit.
-```
+- SiliconFlow: files over 50 MB are blocked before upload.
+- Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs, and payloads over 10 MB are blocked before upload.
 
-阿里百炼 `qwen3-asr-flash` 使用 Base64 Data URL，编码后超过 10MB 会阻止上传。
+## Configure SiliconFlow
 
-## 示例
+1. Open Obsidian settings.
+2. Open the Echo Notes settings tab.
+3. Set:
+   - Provider: `SiliconFlow`
+   - API Key: your SiliconFlow API key
+   - Base URL: `https://api.siliconflow.cn`
+   - Model: `TeleAI/TeleSpeechASR`
+   - Language: `auto`
 
-输入：
+## Configure Alibaba Bailian
+
+1. Open Obsidian settings.
+2. Open the Echo Notes settings tab.
+3. Set:
+   - Provider: `阿里百炼`
+   - API Key: your DashScope API key
+   - Base URL: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+   - Model: `qwen3-asr-flash`
+   - Language: `auto`
+
+## Usage
+
+### Transcribe selected audio
+
+Select an audio reference in the current Markdown note:
 
 ```markdown
 ![[Recording 20260531001942.m4a]]
 ```
 
-输出：
+Run the command `Echo Notes: Transcribe selected audio`.
+
+Echo Notes resolves the audio file, calls the configured provider, creates a transcript, and inserts a transcript link below the audio reference.
+
+### Transcribe all audio files in the current note
+
+Add one or more audio links to a note:
+
+```markdown
+![[Recording 20260531001942.m4a]]
+![[Recording 20260531002010.m4a]]
+```
+
+Run the command `Echo Notes: Transcribe all audio files in current note`.
+
+## Output Example
+
+Input:
+
+```markdown
+![[Recording 20260531001942.m4a]]
+```
+
+Output:
 
 ```markdown
 ![[Recording 20260531001942.m4a]]
 [[Recording 20260531001942/Recording 20260531001942.transcript|查看转写稿]]
 ```
 
-生成文件：
+Generated file:
 
 ```text
 Recording 20260531001942/Recording 20260531001942.transcript.md
 ```
 
-## 构建
+## Automation
+
+Echo Notes can optionally watch for Markdown audio links and newly created audio files.
+
+- Markdown audio links: after a Markdown file changes, Echo Notes waits briefly, scans supported audio references, transcribes missing transcripts, and inserts missing transcript links.
+- New audio files: after Obsidian finishes loading the workspace, Echo Notes can transcribe newly created audio files without modifying any source note.
+
+Both automation options are disabled by default.
+
+## Build
 
 ```bash
 npm install
 npm run build
 ```
 
-## 在 Obsidian 中测试
+Run smoke tests:
 
-1. 建议使用独立测试 Vault，不要直接在主 Vault 中开发测试插件。
-2. 将本目录放到测试 Vault 的 `.obsidian/plugins/echo-notes/`。
-3. 执行 `npm install` 和 `npm run build`。
-4. 在 Obsidian 设置中关闭安全模式或启用 Community plugins。
-5. 启用 Echo Notes。
-6. 配置 SiliconFlow API Key。
-7. 在笔记中插入音频链接并执行命令。
+```bash
+npm test
+```
 
-## 当前限制
+## Install for Local Testing
 
-- 已实现 SiliconFlow 和阿里百炼 Provider；其他 Provider 尚未实现。
-- 不支持说话人分离。
-- 不支持时间戳切片。
-- 不支持大文件自动切片。
-- 不支持本地 Whisper。
-- 不包含复杂任务队列 UI。
+1. Use a dedicated test vault.
+2. Copy or symlink this folder to `.obsidian/plugins/echo-notes/`.
+3. Run `npm install` and `npm run build`.
+4. Enable community plugins in Obsidian.
+5. Enable Echo Notes.
+6. Configure a provider API key.
+7. Insert an audio link and run one of the Echo Notes commands.
+
+## Current Limitations
+
+- Only SiliconFlow and Alibaba Bailian providers are implemented.
+- Speaker diarization is not supported.
+- Timestamped transcript segments are not supported.
+- Large-file chunking is not supported.
+- Local Whisper is not supported.
+- There is no advanced task queue UI yet.
+
+## 中文说明
+
+Echo Notes 是一个 Obsidian 音频转写与知识沉淀插件。它可以识别 Vault 中笔记引用的音频文件，调用你配置的 Provider 生成 Markdown 转写稿，并在原始音频引用下方插入转写稿链接。
+
+隐私提醒：Echo Notes 只在触发转写时发起网络请求，但会把所选音频上传到你配置的转写服务。请确认音频内容适合发送到该外部服务。
+
+常用命令：
+
+- `Echo Notes: Transcribe selected audio`：转写当前选中的音频链接。
+- `Echo Notes: Transcribe all audio files in current note`：扫描并转写当前笔记中的所有支持音频。

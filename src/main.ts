@@ -10,6 +10,8 @@ import { DEFAULT_SETTINGS, type EchoNotesSettings } from "./settings/settings";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { TranscriptService } from "./transcript/transcript-service";
 
+const API_KEY_SECRET_ID = "echo-notes-api-key";
+
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = { ...DEFAULT_SETTINGS };
 
@@ -20,6 +22,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private processingAudio = new Set<string>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
+	private loadedAt = Date.now();
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -38,11 +41,25 @@ export default class EchoNotesPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		await this.migrateApiKeyToSecretStorage();
 	}
 
 	async saveSettings(): Promise<void> {
+		delete this.settings.apiKey;
 		await this.saveData(this.settings);
 		this.refreshServices();
+	}
+
+	getApiKey(): string {
+		return this.app.secretStorage.getSecret(API_KEY_SECRET_ID) ?? this.settings.apiKey ?? "";
+	}
+
+	async saveApiKey(apiKey: string): Promise<void> {
+		this.app.secretStorage.setSecret(API_KEY_SECRET_ID, apiKey);
+		if (this.settings.apiKey !== undefined) {
+			delete this.settings.apiKey;
+			await this.saveSettings();
+		}
 	}
 
 	refreshServices(): void {
@@ -69,6 +86,20 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 	}
 
+	private async migrateApiKeyToSecretStorage(): Promise<void> {
+		const legacyApiKey = this.settings.apiKey?.trim();
+		if (!legacyApiKey) {
+			delete this.settings.apiKey;
+			return;
+		}
+
+		if (!this.app.secretStorage.getSecret(API_KEY_SECRET_ID)) {
+			this.app.secretStorage.setSecret(API_KEY_SECRET_ID, legacyApiKey);
+		}
+		delete this.settings.apiKey;
+		await this.saveData(this.settings);
+	}
+
 	private registerAutomation(): void {
 		this.registerEvent(
 			this.app.vault.on("modify", (file) => {
@@ -83,14 +114,19 @@ export default class EchoNotesPlugin extends Plugin {
 			})
 		);
 
-		this.registerEvent(
-			this.app.vault.on("create", (file) => {
-				if (!this.settings.autoTranscribeOnAudioCreated || !(file instanceof TFile) || !isSupportedAudioFile(file)) {
-					return;
-				}
-				void this.processAudioToTranscript(file, undefined);
-			})
-		);
+		this.app.workspace.onLayoutReady(() => {
+			this.registerEvent(
+				this.app.vault.on("create", (file) => {
+					if (!this.settings.autoTranscribeOnAudioCreated || !(file instanceof TFile) || !isSupportedAudioFile(file)) {
+						return;
+					}
+					if (file.stat.ctime < this.loadedAt) {
+						return;
+					}
+					void this.processAudioToTranscript(file, undefined);
+				})
+			);
+		});
 	}
 
 	private async handleTranscribeSelectedAudio(editor: Editor, view: MarkdownFileInfo): Promise<void> {
@@ -110,7 +146,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const audioMatch = matches[0];
 		const audioFile = this.audioFileService.resolveAudioFile(audioMatch.linkPath, sourceNote);
 		if (!audioFile) {
-			new Notice(`文件不存在或格式不支持：${audioMatch.linkPath}`);
+			new Notice(`文件不存在或格式不支持，请确认链接包含正确的 Vault 路径：${audioMatch.linkPath}`);
 			return;
 		}
 
@@ -149,7 +185,7 @@ export default class EchoNotesPlugin extends Plugin {
 		for (const audioMatch of [...matches].reverse()) {
 			const audioFile = this.audioFileService.resolveAudioFile(audioMatch.linkPath, sourceNote);
 			if (!audioFile) {
-				new Notice(`文件不存在或格式不支持：${audioMatch.linkPath}`);
+				new Notice(`文件不存在或格式不支持，请确认链接包含正确的 Vault 路径：${audioMatch.linkPath}`);
 				continue;
 			}
 
@@ -184,7 +220,7 @@ export default class EchoNotesPlugin extends Plugin {
 		this.processingAudio.add(audioFile.path);
 		try {
 			new Notice(`开始转写：${audioFile.name}`);
-			const provider = createTranscriptionProvider(this.app, this.settings);
+			const provider = createTranscriptionProvider(this.app, this.settings, this.getApiKey());
 			const result = await provider.transcribe({
 				audioFile,
 				sourceNote,
