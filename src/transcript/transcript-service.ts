@@ -1,0 +1,93 @@
+import { App, normalizePath, TFile } from "obsidian";
+import type { TranscriptionResult } from "../providers/transcription-provider";
+import type { EchoNotesSettings } from "../settings/settings";
+import { FileService, getBaseName, getParentPath } from "../obsidian/file-service";
+import { renderFailedTranscriptTemplate, renderTranscriptTemplate } from "./transcript-template";
+
+export class TranscriptService {
+	private app: App;
+	private settings: EchoNotesSettings;
+	private fileService: FileService;
+
+	constructor(app: App, settings: EchoNotesSettings) {
+		this.app = app;
+		this.settings = settings;
+		this.fileService = new FileService(app);
+	}
+
+	getTranscriptPath(audioFile: TFile): string {
+		const audioFolder = getParentPath(audioFile.path);
+		const audioBaseName = getBaseName(audioFile.path);
+		const transcriptFileName = `${audioBaseName}.transcript.md`;
+
+		switch (this.settings.outputStrategy) {
+			case "same-folder":
+				return normalizePath(joinPath(audioFolder, transcriptFileName));
+			case "custom-folder":
+				return normalizePath(joinPath(this.settings.customOutputFolder || "Transcripts", transcriptFileName));
+			case "same-name-subfolder":
+			default:
+				return normalizePath(joinPath(audioFolder, audioBaseName, transcriptFileName));
+		}
+	}
+
+	getTranscriptFile(audioFile: TFile): TFile | null {
+		const path = this.getTranscriptPath(audioFile);
+		const file = this.app.vault.getAbstractFileByPath(path);
+		return file instanceof TFile ? file : null;
+	}
+
+	async writeSuccessTranscript(audioFile: TFile, sourceNote: TFile | undefined, result: TranscriptionResult): Promise<TFile> {
+		const transcriptPath = this.getTranscriptPath(audioFile);
+		const content = renderTranscriptTemplate({
+			app: this.app,
+			audioFile,
+			transcriptPath,
+			sourceNote,
+			result
+		});
+		return this.writeTranscript(transcriptPath, content);
+	}
+
+	async writeFailedTranscript(
+		audioFile: TFile,
+		sourceNote: TFile | undefined,
+		provider: string,
+		model: string,
+		error: string,
+		traceId?: string
+	): Promise<TFile> {
+		const transcriptPath = this.getTranscriptPath(audioFile);
+		const content = renderFailedTranscriptTemplate({
+			app: this.app,
+			audioFile,
+			transcriptPath,
+			sourceNote,
+			provider,
+			model,
+			error,
+			traceId
+		});
+		return this.writeTranscript(transcriptPath, content);
+	}
+
+	private async writeTranscript(path: string, content: string): Promise<TFile> {
+		const parentPath = getParentPath(path);
+		await this.fileService.ensureFolder(parentPath);
+
+		const existing = this.app.vault.getAbstractFileByPath(path);
+		if (existing instanceof TFile) {
+			await this.app.vault.process(existing, () => content);
+			return existing;
+		}
+		if (existing) {
+			throw new Error(`无法写入 transcript，路径已被文件夹占用：${path}`);
+		}
+
+		return this.app.vault.create(path, content);
+	}
+}
+
+function joinPath(...parts: string[]): string {
+	return parts.filter(Boolean).join("/");
+}

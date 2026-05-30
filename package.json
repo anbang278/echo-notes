@@ -1,0 +1,25 @@
+{
+	"name": "echo-notes",
+	"version": "0.1.0",
+	"description": "Echo Notes Obsidian plugin MVP",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": [
+		"obsidian",
+		"obsidian-plugin",
+		"audio",
+		"transcription"
+	],
+	"author": "anbang278",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^22.15.30",
+		"builtin-modules": "^5.0.0",
+		"esbuild": "^0.25.5",
+		"obsidian": "latest",
+		"typescript": "^5.8.3"
+	}
+}

@@ -1,0 +1,10 @@
+{
+	"id": "echo-notes",
+	"name": "Echo Notes",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Turn audio files in your vault into linked Markdown transcripts.",
+	"author": "anbang278",
+	"authorUrl": "https://github.com/anbang278",
+	"isDesktopOnly": false
+}
