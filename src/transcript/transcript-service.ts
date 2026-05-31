@@ -44,7 +44,8 @@ export class TranscriptService {
 			audioFile,
 			transcriptPath,
 			sourceNote,
-			result
+			result,
+			copyLanguage: this.settings.copyLanguage
 		});
 		return this.writeTranscript(transcriptPath, content);
 	}
@@ -66,7 +67,8 @@ export class TranscriptService {
 			provider,
 			model,
 			error,
-			traceId
+			traceId,
+			copyLanguage: this.settings.copyLanguage
 		});
 		return this.writeTranscript(transcriptPath, content);
 	}

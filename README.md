@@ -18,8 +18,11 @@ The workflow is simple: insert or link an audio file in a Markdown note, run a t
 - Generate a Markdown transcript file with source metadata.
 - Insert a transcript link below the source audio reference.
 - Skip existing transcripts and insert missing transcript links.
+- Analyze transcript Markdown files with a separate AI model using work minutes, study notes, or product requirement mining templates.
+- Generate standalone analysis notes and link them from the transcript.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
+- Optional automation for running a default AI analysis after transcription.
 
 ## Providers
 
@@ -29,9 +32,12 @@ Implemented providers:
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
 - OpenAI（OpenAI） with OpenAI-compatible audio transcription
 - Groq（Groq） with OpenAI-compatible audio transcription
+- Ollama, Ollama Open WebUI, Google Gemini, OpenRouter, LM Studio, 302.AI, Anthropic, Mistral AI, Together AI, Fireworks AI, Perplexity AI, DeepSeek, xAI, Novita AI, DeepInfra, SambaNova, Cerebras, and Z.AI as OpenAI-compatible transcription presets
 - 自定义兼容接口（Custom OpenAI-compatible） for custom `/audio/transcriptions` endpoints
 
 Provider defaults can be changed in settings.
+
+AI analysis uses a separate provider configuration. The default is DeepSeek `deepseek-chat` through an OpenAI-compatible `/chat/completions` endpoint.
 
 ## Network and Data Use
 
@@ -41,9 +47,10 @@ Echo Notes makes network requests only when a transcription is triggered.
 - Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - OpenAI default endpoint: `https://api.openai.com/v1`
 - Groq default endpoint: `https://api.groq.com/openai/v1`
+- AI analysis default endpoint: `https://api.deepseek.com/v1`
 - Custom OpenAI-compatible endpoint: user configured
 
-The API key is stored with Obsidian `SecretStorage`. Transcript files are written inside your Obsidian vault.
+Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript and analysis files are written inside your Obsidian vault.
 
 ## Supported Audio Formats
 
@@ -69,6 +76,7 @@ Provider limits:
 4. Confirm or edit Base URL and Model.
 5. Enter the provider API key.
 6. Keep Language as `auto`, or set a provider-supported language code.
+7. Choose the copy language for inserted links and generated template labels.
 
 Recommended defaults:
 
@@ -79,6 +87,21 @@ Recommended defaults:
 | OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` |
 | Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` |
 | 自定义兼容接口（Custom OpenAI-compatible） | your endpoint | `whisper-1` |
+
+## Configure AI Analysis
+
+1. Open the Echo Notes settings tab.
+2. Find the AI analysis section.
+3. Keep the default provider as `DeepSeek`, or choose another OpenAI-compatible chat endpoint.
+4. Keep Base URL as `https://api.deepseek.com/v1` and Model as `deepseek-chat`, or edit them.
+5. Enter the separate analysis API key.
+6. Enable automatic analysis after transcription only if you want Echo Notes to create an analysis note after every successful transcript.
+
+Built-in templates:
+
+- Work minutes: Summary, Key decisions, Action items, Risks/Blockers, Open questions.
+- Study notes: Core concepts, Key points, Examples, Common confusions, Review checklist.
+- Product requirement mining: Users/Scenarios, Pain points, Requirement opportunities, Feature suggestions, Priority, Acceptance criteria, Open questions.
 
 ## Usage
 
@@ -105,6 +128,16 @@ Add one or more audio links to a note:
 
 Run the command `Echo Notes: Transcribe all audio files in current note`.
 
+### Generate AI analysis
+
+Open a `.transcript.md` note, or a note with `type: audio-transcript` in frontmatter, then run one of these commands:
+
+- `Echo Notes: Analyze current transcript as work minutes`
+- `Echo Notes: Analyze current transcript as study notes`
+- `Echo Notes: Analyze current transcript as product requirement mining`
+
+Echo Notes creates a standalone analysis note and inserts a deduplicated analysis link block at the end of the transcript. Existing analysis files with the same name are overwritten.
+
 ## Output Example
 
 Input:
@@ -126,14 +159,39 @@ Generated file:
 Recording 20260531001942/Recording 20260531001942.transcript.md
 ```
 
+Analysis link example:
+
+```markdown
+<!-- echo-notes-analysis-links:start -->
+## AI Analysis
+
+- [[Recording 20260531001942.transcript.analysis.work-minutes|Work minutes]]
+<!-- echo-notes-analysis-links:end -->
+```
+
+Generated analysis file:
+
+```text
+Recording 20260531001942/Recording 20260531001942.transcript.analysis.work-minutes.md
+```
+
 ## Automation
 
 Echo Notes can optionally watch for Markdown audio links and newly created audio files.
 
 - Markdown audio links: after a Markdown file changes, Echo Notes waits briefly, scans supported audio references, transcribes missing transcripts, and inserts missing transcript links.
 - New audio files: after Obsidian finishes loading the workspace, Echo Notes can transcribe newly created audio files without modifying any source note.
+- Post-transcription analysis: after a transcript is created, Echo Notes can run the default analysis template and write a standalone analysis note.
 
-Both automation options are disabled by default.
+All automation options are disabled by default.
+
+## Future Directions
+
+- Custom analysis templates and prompt editing.
+- Batch analysis across multiple transcripts.
+- Structured extraction for tasks, requirements, risks, and acceptance criteria.
+- Long-transcript chunking, merge, and review workflows.
+- Broader local model support.
 
 ## Build
 
@@ -164,4 +222,5 @@ npm test
 - Timestamped transcript segments are not supported.
 - Large-file chunking is not supported.
 - Local Whisper is not supported.
+- AI analysis does not yet support custom templates or long-text chunking.
 - There is no advanced task queue UI yet.

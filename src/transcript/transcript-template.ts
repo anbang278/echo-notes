@@ -1,5 +1,6 @@
 import type { App, TFile } from "obsidian";
 import type { TranscriptionResult } from "../providers/transcription-provider";
+import { getLocalizedCopy, type CopyLanguage } from "../settings/settings";
 
 export interface TranscriptTemplateInput {
 	app: App;
@@ -7,6 +8,7 @@ export interface TranscriptTemplateInput {
 	transcriptPath: string;
 	sourceNote?: TFile;
 	result: TranscriptionResult;
+	copyLanguage: CopyLanguage;
 }
 
 export interface FailedTranscriptTemplateInput {
@@ -18,9 +20,11 @@ export interface FailedTranscriptTemplateInput {
 	model: string;
 	error: string;
 	traceId?: string;
+	copyLanguage: CopyLanguage;
 }
 
 export function renderTranscriptTemplate(input: TranscriptTemplateInput): string {
+	const copy = getLocalizedCopy(input.copyLanguage);
 	const sourceAudioLink = input.app.fileManager.generateMarkdownLink(input.audioFile, input.transcriptPath);
 	const sourceNoteLink = input.sourceNote
 		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
@@ -39,11 +43,11 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 		`trace_id: "${escapeYaml(input.result.traceId ?? "")}"`,
 		"---",
 		"",
-		`# ${title} 转写稿`,
+		`# ${title} ${copy.transcriptTitleSuffix}`,
 		"",
-		`原始录音：!${sourceAudioLink}`,
-		...(sourceNoteLink ? [`来源笔记：${sourceNoteLink}`, ""] : [""]),
-		"## Transcript",
+		`${copy.sourceAudioLabel}!${sourceAudioLink}`,
+		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
+		`## ${copy.transcriptHeading}`,
 		"",
 		input.result.text.trim(),
 		""
@@ -51,6 +55,7 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 }
 
 export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateInput): string {
+	const copy = getLocalizedCopy(input.copyLanguage);
 	const sourceAudioLink = input.app.fileManager.generateMarkdownLink(input.audioFile, input.transcriptPath);
 	const sourceNoteLink = input.sourceNote
 		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
@@ -69,9 +74,9 @@ export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateIn
 		`trace_id: "${escapeYaml(input.traceId ?? "")}"`,
 		"---",
 		"",
-		"# 转写失败",
+		`# ${copy.failedTitle}`,
 		"",
-		"错误原因：",
+		copy.errorReasonLabel,
 		"",
 		input.error,
 		""

@@ -1,4 +1,7 @@
 import { Editor, Notice, Plugin, TFile, type MarkdownFileInfo } from "obsidian";
+import { AnalysisService } from "./analysis/analysis-service";
+import { ANALYSIS_TEMPLATE_ORDER, getAnalysisTemplate, getAnalysisTemplateTitle } from "./analysis/analysis-templates";
+import { OpenAICompatibleAnalysisProvider } from "./analysis/openai-compatible-analysis-provider";
 import { AudioFileService } from "./audio/audio-file-service";
 import { isSupportedAudioFile } from "./audio/audio-detector";
 import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
@@ -6,11 +9,12 @@ import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { shouldWriteFailedTranscript, TranscriptionError } from "./providers/transcription-provider";
-import { DEFAULT_SETTINGS, type EchoNotesSettings } from "./settings/settings";
+import { DEFAULT_SETTINGS, type AnalysisTemplateId, type EchoNotesSettings } from "./settings/settings";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { TranscriptService } from "./transcript/transcript-service";
 
 const API_KEY_SECRET_ID = "echo-notes-api-key";
+const ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
 
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = { ...DEFAULT_SETTINGS };
@@ -18,8 +22,10 @@ export default class EchoNotesPlugin extends Plugin {
 	private audioFileService: AudioFileService;
 	private transcriptService: TranscriptService;
 	private linkService: LinkService;
+	private analysisService: AnalysisService;
 	private editorService = new EditorService();
 	private processingAudio = new Set<string>();
+	private processingAnalyses = new Set<string>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
 	private loadedAt = Date.now();
@@ -42,10 +48,12 @@ export default class EchoNotesPlugin extends Plugin {
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		await this.migrateApiKeyToSecretStorage();
+		await this.migrateAnalysisApiKeyToSecretStorage();
 	}
 
 	async saveSettings(): Promise<void> {
 		delete this.settings.apiKey;
+		delete this.settings.analysisApiKey;
 		await this.saveData(this.settings);
 		this.refreshServices();
 	}
@@ -62,10 +70,23 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	getAnalysisApiKey(): string {
+		return this.app.secretStorage.getSecret(ANALYSIS_API_KEY_SECRET_ID) ?? this.settings.analysisApiKey ?? "";
+	}
+
+	async saveAnalysisApiKey(apiKey: string): Promise<void> {
+		this.app.secretStorage.setSecret(ANALYSIS_API_KEY_SECRET_ID, apiKey);
+		if (this.settings.analysisApiKey !== undefined) {
+			delete this.settings.analysisApiKey;
+			await this.saveSettings();
+		}
+	}
+
 	refreshServices(): void {
 		this.audioFileService = new AudioFileService(this.app);
 		this.transcriptService = new TranscriptService(this.app, this.settings);
 		this.linkService = new LinkService(this.app, this.settings);
+		this.analysisService = new AnalysisService(this.app);
 	}
 
 	private registerCommands(): void {
@@ -84,6 +105,17 @@ export default class EchoNotesPlugin extends Plugin {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
 			}
 		});
+
+		for (const templateId of ANALYSIS_TEMPLATE_ORDER) {
+			const template = getAnalysisTemplate(templateId);
+			this.addCommand({
+				id: `analyze-current-transcript-as-${templateId}`,
+				name: `Analyze current transcript as ${template.commandName}`,
+				editorCallback: (_editor, view) => {
+					void this.handleAnalyzeCurrentTranscript(view, templateId);
+				}
+			});
+		}
 	}
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {
@@ -97,6 +129,20 @@ export default class EchoNotesPlugin extends Plugin {
 			this.app.secretStorage.setSecret(API_KEY_SECRET_ID, legacyApiKey);
 		}
 		delete this.settings.apiKey;
+		await this.saveData(this.settings);
+	}
+
+	private async migrateAnalysisApiKeyToSecretStorage(): Promise<void> {
+		const legacyApiKey = this.settings.analysisApiKey?.trim();
+		if (!legacyApiKey) {
+			delete this.settings.analysisApiKey;
+			return;
+		}
+
+		if (!this.app.secretStorage.getSecret(ANALYSIS_API_KEY_SECRET_ID)) {
+			this.app.secretStorage.setSecret(ANALYSIS_API_KEY_SECRET_ID, legacyApiKey);
+		}
+		delete this.settings.analysisApiKey;
 		await this.saveData(this.settings);
 	}
 
@@ -228,6 +274,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			new Notice(`转写完成：${audioFile.name}`);
+			await this.handleAutoAnalyzeTranscript(transcriptFile);
 			return transcriptFile;
 		} catch (error) {
 			const message = getErrorMessage(error);
@@ -253,6 +300,71 @@ export default class EchoNotesPlugin extends Plugin {
 			return null;
 		} finally {
 			this.processingAudio.delete(audioFile.path);
+		}
+	}
+
+	private async handleAnalyzeCurrentTranscript(view: MarkdownFileInfo, templateId: AnalysisTemplateId): Promise<void> {
+		const transcriptFile = view.file;
+		if (!transcriptFile) {
+			new Notice("当前没有可用的 Markdown 文件。");
+			return;
+		}
+
+		if (!this.isTranscriptMarkdown(transcriptFile)) {
+			new Notice("当前文件不是 Echo Notes 转写稿。请打开 .transcript.md 或 type: audio-transcript 的笔记后再分析。");
+			return;
+		}
+
+		await this.analyzeTranscriptFile(transcriptFile, templateId);
+	}
+
+	private async handleAutoAnalyzeTranscript(transcriptFile: TFile): Promise<void> {
+		if (!this.settings.autoAnalyzeAfterTranscription) {
+			return;
+		}
+
+		await this.analyzeTranscriptFile(transcriptFile, this.settings.autoAnalysisTemplate);
+	}
+
+	private async analyzeTranscriptFile(transcriptFile: TFile, templateId: AnalysisTemplateId): Promise<TFile | null> {
+		const templateTitle = getAnalysisTemplateTitle(templateId, this.settings.copyLanguage);
+		const processingKey = `${transcriptFile.path}:${templateId}`;
+		if (this.processingAnalyses.has(processingKey)) {
+			new Notice(`正在生成 ${templateTitle}：${transcriptFile.name}`);
+			return null;
+		}
+
+		this.processingAnalyses.add(processingKey);
+		try {
+			const transcriptText = await this.analysisService.readTranscriptText(transcriptFile);
+			if (!transcriptText.trim()) {
+				new Notice("转写稿内容为空，已跳过 AI 纪要分析。");
+				return null;
+			}
+
+			new Notice(`开始生成 ${templateTitle}：${transcriptFile.name}`);
+			const provider = new OpenAICompatibleAnalysisProvider(this.settings, this.getAnalysisApiKey());
+			const result = await provider.analyze({
+				templateId,
+				transcriptTitle: transcriptFile.basename,
+				transcriptText,
+				copyLanguage: this.settings.copyLanguage
+			});
+			const analysisFile = await this.analysisService.writeAnalysis(
+				transcriptFile,
+				templateId,
+				result,
+				this.settings.copyLanguage
+			);
+			await this.analysisService.insertAnalysisLink(transcriptFile, analysisFile, templateId, this.settings.copyLanguage);
+			new Notice(`${templateTitle} 已生成：${analysisFile.name}`);
+			return analysisFile;
+		} catch (error) {
+			new Notice(`${templateTitle} 生成失败：${getErrorMessage(error)}`);
+			this.log("AI 纪要分析失败", error);
+			return null;
+		} finally {
+			this.processingAnalyses.delete(processingKey);
 		}
 	}
 
@@ -326,6 +438,17 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private isScannableMarkdown(file: TFile): boolean {
 		return file.extension === "md" && !file.basename.endsWith(".transcript");
+	}
+
+	private isTranscriptMarkdown(file: TFile): boolean {
+		if (file.extension !== "md") {
+			return false;
+		}
+		if (file.basename.endsWith(".transcript")) {
+			return true;
+		}
+
+		return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === "audio-transcript";
 	}
 
 	private log(message: string, ...args: unknown[]): void {

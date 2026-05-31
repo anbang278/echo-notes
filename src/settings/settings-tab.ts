@@ -1,8 +1,15 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
+	ANALYSIS_PROVIDER_DEFAULTS,
+	ANALYSIS_PROVIDER_LABELS,
+	ANALYSIS_TEMPLATE_LABELS,
+	COPY_LANGUAGE_LABELS,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
+	type AnalysisProviderId,
+	type AnalysisTemplateId,
+	type CopyLanguage,
 	type InsertStyle,
 	type OutputStrategy,
 	type ProviderId
@@ -134,6 +141,100 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl)
+			.setName("文案语言")
+			.setDesc("控制插回原笔记的链接别名，以及转写稿正文中的标题和字段文案。")
+			.addDropdown((dropdown) =>
+				Object.entries(COPY_LANGUAGE_LABELS)
+					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
+					.setValue(this.plugin.settings.copyLanguage)
+					.onChange(async (value) => {
+						this.plugin.settings.copyLanguage = value as CopyLanguage;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl).setName("AI 纪要分析").setHeading();
+
+		new Setting(containerEl)
+			.setName("分析 Provider")
+			.setDesc("用于对转写稿生成工作纪要、学习纪要或产品需求挖掘纪要。")
+			.addDropdown((dropdown) =>
+				Object.entries(ANALYSIS_PROVIDER_LABELS)
+					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
+					.setValue(this.plugin.settings.analysisProvider)
+					.onChange(async (value) => {
+						this.plugin.settings.analysisProvider = value as AnalysisProviderId;
+						this.applyAnalysisProviderDefaults(value as AnalysisProviderId);
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("分析 API Key")
+			.setDesc("用于调用当前分析 Provider 的 API Key，会独立保存到 Obsidian SecretStorage。")
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text
+					.setPlaceholder("sk-...")
+					.setValue(this.plugin.getAnalysisApiKey())
+					.onChange(async (value) => {
+						await this.plugin.saveAnalysisApiKey(value.trim());
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("分析 Base URL")
+			.setDesc("OpenAI-compatible Chat Completions 基础地址，插件会调用 {Base URL}/chat/completions。")
+			.addText((text) =>
+				text
+					.setPlaceholder(this.getAnalysisProviderDefaults().analysisBaseUrl)
+					.setValue(this.plugin.settings.analysisBaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.analysisBaseUrl = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("分析模型")
+			.setDesc("用于生成纪要分析的文本模型。")
+			.addText((text) =>
+				text
+					.setPlaceholder(this.getAnalysisProviderDefaults().analysisModel)
+					.setValue(this.plugin.settings.analysisModel)
+					.onChange(async (value) => {
+						this.plugin.settings.analysisModel = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("转写后自动分析")
+			.setDesc("开启后，每次成功生成转写稿都会使用默认模板自动生成一个分析文档。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.autoAnalyzeAfterTranscription)
+					.onChange(async (value) => {
+						this.plugin.settings.autoAnalyzeAfterTranscription = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("自动分析模板")
+			.setDesc("转写完成后自动使用的纪要模板。手动命令仍可选择其他模板。")
+			.addDropdown((dropdown) =>
+				Object.entries(ANALYSIS_TEMPLATE_LABELS)
+					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
+					.setValue(this.plugin.settings.autoAnalysisTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.autoAnalysisTemplate = value as AnalysisTemplateId;
+						await this.plugin.saveSettings();
+					})
+			);
+
 		new Setting(containerEl).setName("自动化").setHeading();
 
 		new Setting(containerEl)
@@ -192,9 +293,20 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.plugin.settings.language = defaults.language;
 	}
 
+	private applyAnalysisProviderDefaults(provider: AnalysisProviderId): void {
+		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider];
+		this.plugin.settings.analysisBaseUrl = defaults.analysisBaseUrl;
+		this.plugin.settings.analysisModel = defaults.analysisModel;
+	}
+
 	private getProviderDefaults(): Pick<EchoNotesPlugin["settings"], "baseUrl" | "model" | "language"> {
 		const provider = this.plugin.settings.provider as ProviderId;
 		return PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.siliconflow;
+	}
+
+	private getAnalysisProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
+		const provider = this.plugin.settings.analysisProvider as AnalysisProviderId;
+		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS.deepseek;
 	}
 
 	private getBaseUrlDescription(): string {
@@ -205,11 +317,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return "OpenAI API 基础地址，默认 https://api.openai.com/v1。";
 			case "groq":
 				return "Groq OpenAI 兼容 API 基础地址，默认 https://api.groq.com/openai/v1。";
+			case "ollama":
+				return "Ollama OpenAI 兼容基础地址，默认 http://localhost:11434/v1。需确认本地服务支持音频转写接口。";
+			case "ollama-open-webui":
+				return "Open WebUI 基础地址，默认 http://localhost:3000/api。插件会调用 {Base URL}/audio/transcriptions。";
+			case "lm-studio":
+				return "LM Studio OpenAI 兼容基础地址，默认 http://localhost:1234/v1。需确认本地服务支持音频转写接口。";
 			case "custom-openai-compatible":
 				return "自定义 OpenAI 兼容转写接口基础地址，插件会调用 {Base URL}/audio/transcriptions。";
 			case "siliconflow":
-			default:
 				return "硅基流动（SiliconFlow）API 基础地址。";
+			default:
+				return "该服务商的基础地址。新增服务商默认按 OpenAI-compatible 音频转写接口调用 {Base URL}/audio/transcriptions。";
 		}
 	}
 }

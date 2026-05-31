@@ -1,6 +1,6 @@
 import type { App, TFile } from "obsidian";
 import type { AudioLinkMatch } from "../audio/audio-link-parser";
-import type { EchoNotesSettings } from "../settings/settings";
+import { getLocalizedCopy, type EchoNotesSettings } from "../settings/settings";
 
 export class LinkService {
 	private app: App;
@@ -12,9 +12,10 @@ export class LinkService {
 	}
 
 	createTranscriptLink(transcriptFile: TFile, sourcePath: string): string {
-		const link = this.app.fileManager.generateMarkdownLink(transcriptFile, sourcePath, undefined, "查看转写稿");
+		const copy = getLocalizedCopy(this.settings.copyLanguage);
+		const link = this.app.fileManager.generateMarkdownLink(transcriptFile, sourcePath, undefined, copy.transcriptLinkAlias);
 		if (this.settings.insertStyle === "callout") {
-			return ["> [!note] Audio Transcript", `> ${link}`].join("\n");
+			return [`> [!note] ${copy.calloutTitle}`, `> ${link}`].join("\n");
 		}
 
 		return link;

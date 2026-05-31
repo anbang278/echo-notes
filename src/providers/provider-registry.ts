@@ -1,5 +1,5 @@
 import type { App } from "obsidian";
-import { PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
+import { isProviderId, PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
 import { AliyunBailianQwenAsrProvider } from "./aliyun-bailian-provider";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-provider";
 import { SiliconFlowTeleSpeechProvider } from "./siliconflow-provider";
@@ -24,6 +24,15 @@ export function createTranscriptionProvider(app: App, settings: EchoNotesSetting
 		case "siliconflow":
 			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
 		default:
+			if (isProviderId(settings.provider)) {
+				return new OpenAICompatibleAudioProvider(
+					app,
+					settings,
+					apiKey,
+					settings.provider,
+					PROVIDER_LABELS[settings.provider]
+				);
+			}
 			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
 	}
 }
