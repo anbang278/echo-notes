@@ -26,9 +26,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setName("Provider")
 			.setDesc("选择用于音频转写的服务商。切换后会自动填入该 Provider 的默认 Base URL 和模型。")
 			.addDropdown((dropdown) =>
-				dropdown
-					.addOption("siliconflow", PROVIDER_LABELS.siliconflow)
-					.addOption("aliyun-bailian", PROVIDER_LABELS["aliyun-bailian"])
+				Object.entries(PROVIDER_LABELS)
+					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
 					.setValue(this.plugin.settings.provider)
 					.onChange(async (value) => {
 						this.plugin.settings.provider = value;
@@ -40,7 +39,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API Key")
-			.setDesc("用于调用当前 Provider 的 API Key。SiliconFlow 使用 SiliconFlow API Key，阿里百炼使用 DashScope API Key。")
+			.setDesc("用于调用当前服务商的 API Key，会保存到 Obsidian SecretStorage。")
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
@@ -199,10 +198,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getBaseUrlDescription(): string {
-		if (this.plugin.settings.provider === "aliyun-bailian") {
-			return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
+		switch (this.plugin.settings.provider) {
+			case "aliyun-bailian":
+				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
+			case "openai":
+				return "OpenAI API 基础地址，默认 https://api.openai.com/v1。";
+			case "groq":
+				return "Groq OpenAI 兼容 API 基础地址，默认 https://api.groq.com/openai/v1。";
+			case "custom-openai-compatible":
+				return "自定义 OpenAI 兼容转写接口基础地址，插件会调用 {Base URL}/audio/transcriptions。";
+			case "siliconflow":
+			default:
+				return "硅基流动（SiliconFlow）API 基础地址。";
 		}
-
-		return "SiliconFlow API 基础地址。";
 	}
 }
