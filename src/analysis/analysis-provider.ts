@@ -1,7 +1,7 @@
-import type { AnalysisTemplateId, CopyLanguage } from "../settings/settings";
+import type { AnalysisTemplateConfig, CopyLanguage } from "../settings/settings";
 
 export interface AnalysisInput {
-	templateId: AnalysisTemplateId;
+	template: AnalysisTemplateConfig;
 	transcriptTitle: string;
 	transcriptText: string;
 	copyLanguage: CopyLanguage;

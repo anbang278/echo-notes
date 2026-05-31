@@ -1,7 +1,6 @@
 import { App, normalizePath, TFile } from "obsidian";
 import { FileService, getParentPath } from "../obsidian/file-service";
-import { getLocalizedCopy, type AnalysisTemplateId, type CopyLanguage } from "../settings/settings";
-import { getAnalysisTemplateTitle } from "./analysis-templates";
+import { getLocalizedCopy, type AnalysisTemplateConfig, type AnalysisTemplateId, type CopyLanguage } from "../settings/settings";
 import {
 	extractTranscriptText,
 	getAnalysisPathForTranscriptPath,
@@ -30,28 +29,29 @@ export class AnalysisService {
 
 	async writeAnalysis(
 		transcriptFile: TFile,
-		templateId: AnalysisTemplateId,
+		template: AnalysisTemplateConfig,
 		result: AnalysisResult,
 		copyLanguage: CopyLanguage
 	): Promise<TFile> {
-		const analysisPath = this.getAnalysisPath(transcriptFile, templateId);
+		const analysisPath = this.getAnalysisPath(transcriptFile, template.id);
 		const sourceTranscriptLink = this.app.fileManager.generateMarkdownLink(transcriptFile, analysisPath);
 		const content = renderAnalysisMarkdown({
 			sourceTranscriptLink,
 			transcriptBaseName: transcriptFile.basename,
-			templateId,
+			templateId: template.id,
+			templateName: template.name,
 			result,
 			copyLanguage
 		});
 		return this.writeAnalysisFile(analysisPath, content);
 	}
 
-	async insertAnalysisLink(transcriptFile: TFile, analysisFile: TFile, templateId: AnalysisTemplateId, copyLanguage: CopyLanguage): Promise<void> {
+	async insertAnalysisLink(transcriptFile: TFile, analysisFile: TFile, template: AnalysisTemplateConfig, copyLanguage: CopyLanguage): Promise<void> {
 		const analysisLink = this.app.fileManager.generateMarkdownLink(
 			analysisFile,
 			transcriptFile.path,
 			undefined,
-			getAnalysisTemplateTitle(templateId, copyLanguage)
+			template.name
 		);
 		const copy = getLocalizedCopy(copyLanguage);
 

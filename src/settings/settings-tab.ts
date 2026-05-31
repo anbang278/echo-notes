@@ -3,12 +3,13 @@ import type EchoNotesPlugin from "../main";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
-	ANALYSIS_TEMPLATE_LABELS,
 	COPY_LANGUAGE_LABELS,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
+	createCustomAnalysisTemplate,
+	restoreDefaultAnalysisTemplate,
 	type AnalysisProviderId,
-	type AnalysisTemplateId,
+	type AnalysisTemplateConfig,
 	type CopyLanguage,
 	type InsertStyle,
 	type OutputStrategy,
@@ -96,6 +97,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
+		this.renderAnalysisSettings(containerEl);
+
 		new Setting(containerEl).setName("输出与插入").setHeading();
 
 		new Setting(containerEl)
@@ -154,11 +157,80 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl).setName("自动化").setHeading();
+
+		new Setting(containerEl)
+			.setName("跳过已存在 transcript")
+			.setDesc("开启后不会重复调用转写，但仍会尝试补充 transcript 链接。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.skipExistingTranscript)
+					.onChange(async (value) => {
+						this.plugin.settings.skipExistingTranscript = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("自动识别 Markdown 音频链接")
+			.setDesc("监听笔记变更，发现新增音频链接后自动转写并补充链接。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.autoTranscribeOnAudioLink)
+					.onChange(async (value) => {
+						this.plugin.settings.autoTranscribeOnAudioLink = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("自动识别新音频文件")
+			.setDesc("监听 Vault 新增音频文件，自动生成 transcript，不回写来源笔记。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.autoTranscribeOnAudioCreated)
+					.onChange(async (value) => {
+						this.plugin.settings.autoTranscribeOnAudioCreated = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("显示详细日志")
+			.setDesc("开启后在开发者控制台输出更多调试信息。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.verboseLog)
+					.onChange(async (value) => {
+						this.plugin.settings.verboseLog = value;
+						await this.plugin.saveSettings();
+					})
+			);
+	}
+
+	private renderAnalysisSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl).setName("AI 纪要分析").setHeading();
 
 		new Setting(containerEl)
+			.setName("启用 AI 纪要分析")
+			.setDesc("开启后显示分析模型配置、模板提示词设置，并允许对转写稿生成 AI 纪要。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.analysisEnabled)
+					.onChange(async (value) => {
+						this.plugin.settings.analysisEnabled = value;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		if (!this.plugin.settings.analysisEnabled) {
+			return;
+		}
+
+		new Setting(containerEl)
 			.setName("分析 Provider")
-			.setDesc("用于对转写稿生成工作纪要、学习纪要或产品需求挖掘纪要。")
+			.setDesc("用于对转写稿生成工作纪要、学习纪要、产品需求挖掘纪要或自定义纪要。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
 					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
@@ -211,79 +283,120 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("转写后自动分析")
-			.setDesc("开启后，每次成功生成转写稿都会使用默认模板自动生成一个分析文档。")
+			.setName("转写时选择分析模板")
+			.setDesc("开启后，手动发起转写时会先选择分析模板；也可以选择仅转写。")
 			.addToggle((toggle) =>
 				toggle
-					.setValue(this.plugin.settings.autoAnalyzeAfterTranscription)
+					.setValue(this.plugin.settings.promptForAnalysisTemplateOnTranscription)
 					.onChange(async (value) => {
-						this.plugin.settings.autoAnalyzeAfterTranscription = value;
+						this.plugin.settings.promptForAnalysisTemplateOnTranscription = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl).setName("分析模板提示词").setHeading();
+
+		for (const template of this.plugin.settings.analysisTemplates) {
+			this.renderAnalysisTemplateSetting(containerEl, template);
+		}
+
+		new Setting(containerEl)
+			.setName("新增自定义模板")
+			.setDesc("创建后会出现在模板选择窗口，并注册对应的命令，方便绑定快捷键。")
+			.addButton((button) =>
+				button
+					.setButtonText("新增模板")
+					.onClick(async () => {
+						this.plugin.settings.analysisTemplates.push(
+							createCustomAnalysisTemplate("自定义模板", this.plugin.settings.analysisTemplates)
+						);
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+	}
+
+	private renderAnalysisTemplateSetting(containerEl: HTMLElement, template: AnalysisTemplateConfig): void {
+		const label = template.builtin ? `${template.name}（预设）` : template.name;
+		new Setting(containerEl)
+			.setName(label)
+			.setDesc(template.description || template.id)
+			.addToggle((toggle) =>
+				toggle
+					.setTooltip("是否在模板选择窗口中显示此模板")
+					.setValue(template.enabled)
+					.onChange(async (value) => {
+						template.enabled = value;
+						await this.plugin.saveSettings();
+					})
+			)
+			.addButton((button) => {
+				if (!template.builtin) {
+					button
+						.setButtonText("删除")
+						.onClick(async () => {
+							this.plugin.settings.analysisTemplates = this.plugin.settings.analysisTemplates.filter(
+								(candidate) => candidate.id !== template.id
+							);
+							await this.plugin.saveSettings();
+							this.display();
+						});
+					return;
+				}
+
+				button
+					.setButtonText("恢复默认")
+					.onClick(async () => {
+						const restored = restoreDefaultAnalysisTemplate(template.id);
+						if (!restored) {
+							return;
+						}
+						const index = this.plugin.settings.analysisTemplates.findIndex((candidate) => candidate.id === template.id);
+						if (index !== -1) {
+							this.plugin.settings.analysisTemplates.splice(index, 1, restored);
+						}
+						await this.plugin.saveSettings();
+						this.display();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("模板名称")
+			.setDesc("命令面板和生成文件中的显示名称。")
+			.addText((text) =>
+				text
+					.setValue(template.name)
+					.onChange(async (value) => {
+						template.name = value.trim() || template.id;
 						await this.plugin.saveSettings();
 					})
 			);
 
 		new Setting(containerEl)
-			.setName("自动分析模板")
-			.setDesc("转写完成后自动使用的纪要模板。手动命令仍可选择其他模板。")
-			.addDropdown((dropdown) =>
-				Object.entries(ANALYSIS_TEMPLATE_LABELS)
-					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
-					.setValue(this.plugin.settings.autoAnalysisTemplate)
+			.setName("模板说明")
+			.setDesc("用于帮助区分模板用途。")
+			.addText((text) =>
+				text
+					.setValue(template.description)
 					.onChange(async (value) => {
-						this.plugin.settings.autoAnalysisTemplate = value as AnalysisTemplateId;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl).setName("自动化").setHeading();
-
-		new Setting(containerEl)
-			.setName("跳过已存在 transcript")
-			.setDesc("开启后不会重复调用转写，但仍会尝试补充 transcript 链接。")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.skipExistingTranscript)
-					.onChange(async (value) => {
-						this.plugin.settings.skipExistingTranscript = value;
+						template.description = value.trim();
 						await this.plugin.saveSettings();
 					})
 			);
 
 		new Setting(containerEl)
-			.setName("自动识别 Markdown 音频链接")
-			.setDesc("监听笔记变更，发现新增音频链接后自动转写并补充链接。")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoTranscribeOnAudioLink)
+			.setName("模板提示词")
+			.setDesc("只填写分析要求和输出结构；系统会自动补充语言、安全和转写稿上下文。")
+			.addTextArea((text) => {
+				text.inputEl.rows = 8;
+				text.inputEl.cols = 60;
+				text
+					.setValue(template.prompt)
 					.onChange(async (value) => {
-						this.plugin.settings.autoTranscribeOnAudioLink = value;
+						template.prompt = value;
 						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("自动识别新音频文件")
-			.setDesc("监听 Vault 新增音频文件，自动生成 transcript，不回写来源笔记。")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.autoTranscribeOnAudioCreated)
-					.onChange(async (value) => {
-						this.plugin.settings.autoTranscribeOnAudioCreated = value;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("显示详细日志")
-			.setDesc("开启后在开发者控制台输出更多调试信息。")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.verboseLog)
-					.onChange(async (value) => {
-						this.plugin.settings.verboseLog = value;
-						await this.plugin.saveSettings();
-					})
-			);
+					});
+			});
 	}
 
 	private applyProviderDefaults(provider: ProviderId): void {

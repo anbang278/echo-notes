@@ -22,7 +22,8 @@ Echo Notes 是一个 Obsidian 音频转写与知识沉淀插件。它可以把 V
 - 生成独立分析文档，并在转写稿中补充分析链接。
 - 可选：自动识别新增 Markdown 音频链接。
 - 可选：自动识别新创建的音频文件。
-- 可选：转写完成后自动生成默认 AI 纪要分析。
+- 可选：手动发起转写时先选择 AI 纪要分析模板。
+- 支持按模板转写选中音频并生成纪要的快捷键命令。
 
 ## 服务商
 
@@ -41,7 +42,7 @@ AI 纪要分析使用独立配置，默认是 DeepSeek `deepseek-chat`，调用 
 
 ## 网络与数据使用
 
-Echo Notes 只在触发转写时发起网络请求。
+Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 
 - 硅基流动默认地址：`https://api.siliconflow.cn`
 - 阿里百炼默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
@@ -50,7 +51,7 @@ Echo Notes 只在触发转写时发起网络请求。
 - AI 分析默认地址：`https://api.deepseek.com/v1`
 - 自定义兼容接口：由用户自行配置
 
-转写 API Key 和分析 API Key 都使用 Obsidian `SecretStorage` 独立保存。转写稿和分析文档会写入你的 Obsidian Vault。
+转写会把所选音频上传到你配置的转写服务商。AI 纪要分析会把转写稿文本上传到你配置的分析服务商。转写 API Key 和分析 API Key 都使用 Obsidian `SecretStorage` 独立保存。转写稿和分析文档会写入你的 Obsidian Vault。
 
 ## 支持的音频格式
 
@@ -90,18 +91,21 @@ Echo Notes 只在触发转写时发起网络请求。
 
 ## 配置 AI 纪要分析
 
-1. 在 Echo Notes 设置页打开“AI 纪要分析”。
+1. 在 Echo Notes 设置页打开“启用 AI 纪要分析”。
 2. 分析 Provider 默认使用 `DeepSeek`。
 3. 分析 Base URL 默认是 `https://api.deepseek.com/v1`。
 4. 分析模型默认是 `deepseek-chat`。
 5. 输入独立的分析 API Key。
-6. 如需转写后自动分析，开启“转写后自动分析”，并选择默认模板。
+6. 如需在手动发起转写时顺手生成纪要，开启“转写时选择分析模板”。
+7. 在“分析模板提示词”中编辑、启用、禁用、恢复或新增模板。
 
 内置模板：
 
 - 工作纪要：摘要、关键结论、行动项、风险/阻塞、待确认问题。
 - 学习纪要：核心概念、知识要点、案例/例子、易混淆点、复习清单。
 - 产品需求挖掘纪要：用户/场景、痛点、需求机会、功能建议、优先级、验收标准、开放问题。
+
+自定义模板支持名称、说明、提示词和启用开关。已启用模板会出现在模板选择窗口中，并注册对应命令，便于绑定快捷键。
 
 ## 使用方式
 
@@ -117,6 +121,10 @@ Echo Notes 只在触发转写时发起网络请求。
 
 Echo Notes 会解析音频文件、调用配置的服务商、创建转写稿，并在音频引用下方插入转写稿链接。
 
+如果已启用 AI 纪要分析和“转写时选择分析模板”，Echo Notes 会在转写开始前弹出模板选择窗口。选择模板会在转写稿可用后生成分析文档；选择仅转写则不会调用分析服务。
+
+你也可以给按模板转写命令绑定快捷键，例如 `Echo Notes: Transcribe selected audio and analyze as work minutes`。
+
 ### 转写当前笔记中的全部音频
 
 在当前笔记中放入一个或多个音频链接：
@@ -128,10 +136,13 @@ Echo Notes 会解析音频文件、调用配置的服务商、创建转写稿，
 
 执行命令 `Echo Notes: Transcribe all audio files in current note`。
 
+如果开启了“转写时选择分析模板”，该次批量转写会共用同一个模板，并应用到所有成功生成或复用的转写稿。
+
 ### 生成 AI 纪要分析
 
 打开一个 `.transcript.md` 转写稿，或打开 frontmatter 中 `type: audio-transcript` 的笔记，然后执行以下任一命令：
 
+- `Echo Notes: Analyze current transcript with template`
 - `Echo Notes: Analyze current transcript as work minutes`
 - `Echo Notes: Analyze current transcript as study notes`
 - `Echo Notes: Analyze current transcript as product requirement mining`
@@ -181,13 +192,12 @@ Echo Notes 可以选择性监听 Markdown 音频链接和新创建的音频文�
 
 - Markdown 音频链接：笔记变更后，插件会短暂等待，扫描支持的音频引用，转写缺失的转写稿，并插入缺失的转写稿链接。
 - 新音频文件：Obsidian workspace 加载完成后，插件可以转写新创建的音频文件，但不会强行修改来源笔记。
-- 转写后自动分析：成功生成转写稿后，插件可使用默认模板自动生成一个 AI 纪要分析文档。
+- 转写时分析：开启后，手动转写命令会先选择一个分析模板，再在转写稿可用后生成 AI 纪要分析文档。
 
 所有自动化选项默认都是关闭的。
 
 ## 未来技术方向
 
-- 自定义纪要模板和提示词编辑器。
 - 批量分析多个转写稿。
 - 从纪要中抽取结构化字段，例如任务、需求、风险和验收标准。
 - 长转写稿自动分块、合并和二次校对。
@@ -222,5 +232,5 @@ npm test
 - 不支持带时间戳的分段转写。
 - 不支持大文件自动切片。
 - 不支持本地 Whisper。
-- AI 纪要分析暂不支持自定义模板和长文本分块。
+- AI 纪要分析暂不支持长文本分块。
 - 暂无复杂任务队列 UI。

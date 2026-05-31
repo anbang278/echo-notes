@@ -22,7 +22,8 @@ The workflow is simple: insert or link an audio file in a Markdown note, run a t
 - Generate standalone analysis notes and link them from the transcript.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
-- Optional automation for running a default AI analysis after transcription.
+- Optional template picker when starting a manual transcription.
+- Template-specific commands for transcribing the selected audio and generating an analysis note.
 
 ## Providers
 
@@ -41,7 +42,7 @@ AI analysis uses a separate provider configuration. The default is DeepSeek `dee
 
 ## Network and Data Use
 
-Echo Notes makes network requests only when a transcription is triggered.
+Echo Notes makes network requests only when a transcription or AI analysis is triggered.
 
 - SiliconFlow default endpoint: `https://api.siliconflow.cn`
 - Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
@@ -50,7 +51,7 @@ Echo Notes makes network requests only when a transcription is triggered.
 - AI analysis default endpoint: `https://api.deepseek.com/v1`
 - Custom OpenAI-compatible endpoint: user configured
 
-Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript and analysis files are written inside your Obsidian vault.
+Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript and analysis files are written inside your Obsidian vault.
 
 ## Supported Audio Formats
 
@@ -91,17 +92,20 @@ Recommended defaults:
 ## Configure AI Analysis
 
 1. Open the Echo Notes settings tab.
-2. Find the AI analysis section.
+2. Enable AI analysis.
 3. Keep the default provider as `DeepSeek`, or choose another OpenAI-compatible chat endpoint.
 4. Keep Base URL as `https://api.deepseek.com/v1` and Model as `deepseek-chat`, or edit them.
 5. Enter the separate analysis API key.
-6. Enable automatic analysis after transcription only if you want Echo Notes to create an analysis note after every successful transcript.
+6. Enable the transcription-time template picker if you want Echo Notes to ask for an analysis template before manual transcription.
+7. Edit, enable, disable, restore, or add templates in the analysis template prompt settings.
 
 Built-in templates:
 
 - Work minutes: Summary, Key decisions, Action items, Risks/Blockers, Open questions.
 - Study notes: Core concepts, Key points, Examples, Common confusions, Review checklist.
 - Product requirement mining: Users/Scenarios, Pain points, Requirement opportunities, Feature suggestions, Priority, Acceptance criteria, Open questions.
+
+Custom templates are supported. Each template has a name, description, prompt, and enabled switch. Enabled templates appear in the picker and receive template-specific commands.
 
 ## Usage
 
@@ -117,6 +121,10 @@ Run the command `Echo Notes: Transcribe selected audio`.
 
 Echo Notes resolves the audio file, calls the configured provider, creates a transcript, and inserts a transcript link below the audio reference.
 
+If AI analysis and the transcription-time template picker are enabled, Echo Notes asks you to choose an analysis template before transcription starts. Choose a template to generate an analysis note after the transcript is available, or choose plain transcription.
+
+You can also bind shortcuts to template-specific commands such as `Echo Notes: Transcribe selected audio and analyze as work minutes`.
+
 ### Transcribe all audio files in the current note
 
 Add one or more audio links to a note:
@@ -128,10 +136,13 @@ Add one or more audio links to a note:
 
 Run the command `Echo Notes: Transcribe all audio files in current note`.
 
+If the transcription-time template picker is enabled, the same selected template is applied to every successfully generated or reused transcript in that batch.
+
 ### Generate AI analysis
 
 Open a `.transcript.md` note, or a note with `type: audio-transcript` in frontmatter, then run one of these commands:
 
+- `Echo Notes: Analyze current transcript with template`
 - `Echo Notes: Analyze current transcript as work minutes`
 - `Echo Notes: Analyze current transcript as study notes`
 - `Echo Notes: Analyze current transcript as product requirement mining`
@@ -181,13 +192,12 @@ Echo Notes can optionally watch for Markdown audio links and newly created audio
 
 - Markdown audio links: after a Markdown file changes, Echo Notes waits briefly, scans supported audio references, transcribes missing transcripts, and inserts missing transcript links.
 - New audio files: after Obsidian finishes loading the workspace, Echo Notes can transcribe newly created audio files without modifying any source note.
-- Post-transcription analysis: after a transcript is created, Echo Notes can run the default analysis template and write a standalone analysis note.
+- Transcription-time analysis: when enabled, manual transcription commands can ask for one analysis template before processing.
 
 All automation options are disabled by default.
 
 ## Future Directions
 
-- Custom analysis templates and prompt editing.
 - Batch analysis across multiple transcripts.
 - Structured extraction for tasks, requirements, risks, and acceptance criteria.
 - Long-transcript chunking, merge, and review workflows.
@@ -222,5 +232,5 @@ npm test
 - Timestamped transcript segments are not supported.
 - Large-file chunking is not supported.
 - Local Whisper is not supported.
-- AI analysis does not yet support custom templates or long-text chunking.
+- AI analysis does not yet support long-text chunking.
 - There is no advanced task queue UI yet.

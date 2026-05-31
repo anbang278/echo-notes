@@ -1,4 +1,3 @@
-import { getAnalysisTemplateTitle } from "./analysis-templates";
 import { getLocalizedCopy, type AnalysisTemplateId, type CopyLanguage } from "../settings/settings";
 import type { AnalysisResult } from "./analysis-provider";
 
@@ -9,6 +8,7 @@ export interface RenderAnalysisMarkdownInput {
 	sourceTranscriptLink: string;
 	transcriptBaseName: string;
 	templateId: AnalysisTemplateId;
+	templateName: string;
 	result: AnalysisResult;
 	copyLanguage: CopyLanguage;
 }
@@ -21,7 +21,6 @@ export function getAnalysisPathForTranscriptPath(transcriptPath: string, templat
 
 export function renderAnalysisMarkdown(input: RenderAnalysisMarkdownInput): string {
 	const copy = getLocalizedCopy(input.copyLanguage);
-	const templateTitle = getAnalysisTemplateTitle(input.templateId, input.copyLanguage);
 
 	return [
 		"---",
@@ -35,7 +34,7 @@ export function renderAnalysisMarkdown(input: RenderAnalysisMarkdownInput): stri
 		`trace_id: "${escapeYaml(input.result.traceId ?? "")}"`,
 		"---",
 		"",
-		`# ${input.transcriptBaseName} ${templateTitle}`,
+		`# ${input.transcriptBaseName} ${input.templateName}`,
 		"",
 		`${copy.sourceTranscriptLabel}${input.sourceTranscriptLink}`,
 		"",

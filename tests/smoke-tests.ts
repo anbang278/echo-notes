@@ -5,9 +5,16 @@ import {
 	insertAnalysisLinkBlock,
 	renderAnalysisMarkdown
 } from "../src/analysis/analysis-output";
-import { ANALYSIS_TEMPLATE_ORDER, ANALYSIS_TEMPLATES, buildAnalysisMessages } from "../src/analysis/analysis-templates";
+import { ANALYSIS_TEMPLATE_ORDER, buildAnalysisMessages, getCommandAnalysisTemplates } from "../src/analysis/analysis-templates";
 import { parseAudioLinks } from "../src/audio/audio-link-parser";
 import { LinkService } from "../src/obsidian/link-service";
+import {
+	createAnalysisTemplateId,
+	createCustomAnalysisTemplate,
+	DEFAULT_ANALYSIS_TEMPLATES,
+	normalizeAnalysisTemplates,
+	normalizeEchoNotesSettings
+} from "../src/settings/settings";
 import { renderFailedTranscriptTemplate, renderTranscriptTemplate } from "../src/transcript/transcript-template";
 
 const sample = [
@@ -117,37 +124,74 @@ assert.match(englishFailedTranscript, /# Transcription failed/);
 assert.match(englishFailedTranscript, /Error reason:/);
 
 assert.deepEqual(ANALYSIS_TEMPLATE_ORDER, ["work-minutes", "study-notes", "product-requirement-mining"]);
-assert.deepEqual(ANALYSIS_TEMPLATES["work-minutes"].sections.zh, ["摘要", "关键结论", "行动项", "风险/阻塞", "待确认问题"]);
-assert.deepEqual(ANALYSIS_TEMPLATES["study-notes"].sections.zh, ["核心概念", "知识要点", "案例/例子", "易混淆点", "复习清单"]);
-assert.deepEqual(ANALYSIS_TEMPLATES["product-requirement-mining"].sections.zh, [
-	"用户/场景",
-	"痛点",
-	"需求机会",
-	"功能建议",
-	"优先级",
-	"验收标准",
-	"开放问题"
-]);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].prompt, /## 摘要/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].prompt, /## 行动项/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].prompt, /## 核心概念/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].prompt, /## 复习清单/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].prompt, /## 需求机会/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].prompt, /## 验收标准/);
+
+const normalizedSettings = normalizeEchoNotesSettings({
+	autoAnalyzeAfterTranscription: true,
+	promptForAnalysisAfterTranscription: true,
+	analysisTemplates: [
+		{
+			id: "work-minutes",
+			name: "",
+			description: "",
+			prompt: "",
+			enabled: false
+		},
+		{
+			name: "访谈纪要",
+			description: "从访谈中提炼事实和机会。",
+			prompt: "请输出访谈纪要。",
+			enabled: true
+		}
+	]
+});
+assert.equal(normalizedSettings.analysisEnabled, true);
+assert.equal(normalizedSettings.promptForAnalysisTemplateOnTranscription, true);
+assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
+assert.equal(normalizedSettings.analysisTemplates[0].name, "工作纪要");
+assert.equal(normalizedSettings.analysisTemplates[0].enabled, false);
+assert.equal(normalizedSettings.analysisTemplates[0].builtin, true);
+assert.equal(normalizedSettings.analysisTemplates[3].id, "custom-template");
+assert.equal(normalizedSettings.analysisTemplates[3].name, "访谈纪要");
+assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "autoAnalyzeAfterTranscription"), false);
+
+assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
+assert.equal(createCustomAnalysisTemplate("自定义模板", []).id, "custom-template");
+assert.deepEqual(
+	normalizeAnalysisTemplates([{ id: "custom-review", name: "复盘纪要", prompt: "请复盘。", enabled: true }]).map(
+		(template) => template.id
+	),
+	["work-minutes", "study-notes", "product-requirement-mining", "custom-review"]
+);
+assert.deepEqual(
+	getCommandAnalysisTemplates(normalizedSettings).map((template) => template.id),
+	["study-notes", "product-requirement-mining", "custom-template"]
+);
 
 const workMinutesPrompt = buildAnalysisMessages({
-	templateId: "work-minutes",
+	template: DEFAULT_ANALYSIS_TEMPLATES["work-minutes"],
 	transcriptTitle: "Recording 20260531001942.transcript",
 	transcriptText: "张三负责下周提交方案。",
 	copyLanguage: "zh"
 });
 assert.match(workMinutesPrompt.system, /简体中文/);
-assert.match(workMinutesPrompt.user, /关键结论/);
+assert.match(workMinutesPrompt.user, /分析模板：工作纪要/);
 assert.match(workMinutesPrompt.user, /行动项/);
 
 const productPrompt = buildAnalysisMessages({
-	templateId: "product-requirement-mining",
+	template: DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"],
 	transcriptTitle: "Interview.transcript",
 	transcriptText: "用户希望减少重复录入。",
 	copyLanguage: "en"
 });
 assert.match(productPrompt.system, /English/);
-assert.match(productPrompt.user, /Requirement opportunities/);
-assert.match(productPrompt.user, /Acceptance criteria/);
+assert.match(productPrompt.user, /分析模板：产品需求挖掘纪要/);
+assert.match(productPrompt.user, /P0\/P1\/P2/);
 
 assert.equal(
 	getAnalysisPathForTranscriptPath("Daily/Recording 20260531001942/Recording 20260531001942.transcript.md", "work-minutes"),
@@ -158,6 +202,7 @@ const analysisMarkdown = renderAnalysisMarkdown({
 	sourceTranscriptLink: "[[Recording 20260531001942.transcript]]",
 	transcriptBaseName: "Recording 20260531001942.transcript",
 	templateId: "work-minutes",
+	templateName: "工作纪要",
 	result: {
 		text: "## 摘要\n\n这是纪要。",
 		provider: "deepseek",
