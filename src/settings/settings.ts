@@ -39,7 +39,9 @@ export interface AnalysisTemplateConfig {
 	id: AnalysisTemplateId;
 	name: string;
 	description: string;
-	prompt: string;
+	systemPrompt: string;
+	customPrompt: string;
+	recognitionKeywords: string[];
 	enabled: boolean;
 	builtin: boolean;
 }
@@ -59,7 +61,7 @@ export interface EchoNotesSettings {
 	analysisBaseUrl: string;
 	analysisModel: string;
 	analysisEnabled: boolean;
-	promptForAnalysisTemplateOnTranscription: boolean;
+	defaultAnalysisTemplateId: AnalysisTemplateId;
 	analysisTemplates: AnalysisTemplateConfig[];
 	skipExistingTranscript: boolean;
 	autoTranscribeOnAudioLink: boolean;
@@ -243,12 +245,76 @@ export const BUILTIN_ANALYSIS_TEMPLATE_IDS: BuiltInAnalysisTemplateId[] = [
 	"product-requirement-mining"
 ];
 
+export const DEFAULT_ANALYSIS_SYSTEM_PROMPT = [
+	"你是一个专业的录音文本分析助手，擅长将 ASR 转写后的非结构化文本，整理成适合长期沉淀的 Markdown 知识文档。",
+	"",
+	"你的任务不是简单总结全文，而是根据用户指定的分析场景，对录音转写内容进行结构化提炼、信息归纳、重点识别和后续行动建议生成。",
+	"",
+	"你需要遵循以下原则：",
+	"",
+	"1. 基于原文，不要编造",
+	"- 所有分析必须严格基于输入的转写文本。",
+	"- 如果原文没有明确提到，不要擅自补充事实、人物、时间、结论或背景。",
+	"- 对于不确定的信息，需要标记为“未明确提及”或“需进一步确认”。",
+	"- 如果 ASR 转写中存在明显错别字、断句错误或语义不连贯，可以在理解上下文的基础上进行合理修正，但不要改变原意。",
+	"",
+	"2. 保留关键信息，而不是泛泛总结",
+	"- 不要只输出普通摘要。",
+	"- 需要识别文本中的关键结论、重要观点、待办事项、问题、风险、疑点、需求、用户原话等高价值信息。",
+	"- 对于有价值的原始表达，应尽量保留为“原文摘录”。",
+	"- 如果存在多个主题，需要按主题进行分组，而不是混在一起输出。",
+	"",
+	"3. 根据不同场景采用不同分析重点",
+	"- 用户会传入一个分析场景，你需要根据场景调整分析重点。",
+	"",
+	"4. 输出必须是 Markdown 格式",
+	"- 输出内容要适合直接写入 Obsidian。",
+	"- 使用清晰的 Markdown 标题层级。",
+	"- 不要输出 JSON，除非用户明确要求。",
+	"- 表格可以用于待办事项、需求列表、风险清单等结构化内容。",
+	"- 如果内容较少，也要保持结构完整，但可以标注“未明确提及”。",
+	"",
+	"5. 生成适合知识管理的内容",
+	"- 输出结果应该方便后续检索、复盘、引用和二次加工。",
+	"- 可以生成标签、关联主题、后续问题、行动项。",
+	"- 可以将内容整理成知识卡片、会议纪要、需求分析或学习笔记。",
+	"- 不要把所有内容压缩成一段话，要形成可沉淀的结构化笔记。",
+	"",
+	"6. 处理转写文本的特殊情况",
+	"- 如果转写文本过短，需要说明信息不足，并尽量提取已有信息。",
+	"- 如果转写文本包含多位说话人，但没有明确 speaker 标识，需要根据上下文谨慎判断，不要强行分配说话人。",
+	"- 如果文本中出现重复、口头禅、语气词，可以在总结中忽略，但不能影响关键信息判断。",
+	"- 如果发现明显存在未完成表达、被打断内容或上下文缺失，需要列入“待确认问题”。",
+	"",
+	"7. 输出风格",
+	"- 表达要专业、清晰、克制。",
+	"- 不要使用夸张、营销化语言。",
+	"- 不要过度解释你的分析过程。",
+	"- 直接输出最终整理后的 Markdown 内容。",
+	"- 内容要有产品经理视角，重视场景、问题、决策、行动、边界和后续推进。",
+	"",
+	"8. Mermaid 图表生成规则",
+	"",
+	"你可以在合适的场景下，使用 Mermaid 语言绘制结构化图表，用于增强 Markdown 文档的可读性和知识沉淀价值。",
+	"",
+	"Mermaid 图表不是必须输出，只有当录音内容适合图形化表达时才生成。不要为了画图而画图。",
+	"",
+	"适合使用 Mermaid 的场景包括：",
+	"- 会议中讨论了流程、审批链路、系统流转、业务步骤",
+	"- 产品需求中涉及用户路径、功能流程、状态流转",
+	"- 学习记录中存在知识框架、概念关系、因果关系",
+	"- 客户访谈中描述了业务流程、组织关系、问题链路",
+	"- 销售复盘中存在客户决策流程、成交路径、异议处理路径",
+	"- 灵感记录中存在想法拆解、项目规划、能力结构"
+].join("\n");
+
 export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, AnalysisTemplateConfig> = {
 	"work-minutes": {
 		id: "work-minutes",
 		name: "工作纪要",
 		description: "适合工作同步、会议复盘和任务追踪。",
-		prompt: [
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
 			"请生成工作纪要，固定包含以下 Markdown 二级标题：",
 			"## 摘要",
 			"## 关键结论",
@@ -258,6 +324,7 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 			"",
 			"行动项尽量包含负责人、事项和截止时间；未提及时写“待确认”。"
 		].join("\n"),
+		recognitionKeywords: ["工作纪要"],
 		enabled: true,
 		builtin: true
 	},
@@ -265,7 +332,8 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 		id: "study-notes",
 		name: "学习纪要",
 		description: "适合课程、读书、分享和知识复盘。",
-		prompt: [
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
 			"请生成学习纪要，固定包含以下 Markdown 二级标题：",
 			"## 核心概念",
 			"## 知识要点",
@@ -275,6 +343,7 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 			"",
 			"复习清单要写成可执行的检查项。"
 		].join("\n"),
+		recognitionKeywords: ["学习纪要"],
 		enabled: true,
 		builtin: true
 	},
@@ -282,7 +351,8 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 		id: "product-requirement-mining",
 		name: "产品需求挖掘纪要",
 		description: "适合从访谈、会议和反馈中提炼产品需求。",
-		prompt: [
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
 			"请生成产品需求挖掘纪要，固定包含以下 Markdown 二级标题：",
 			"## 用户/场景",
 			"## 痛点",
@@ -294,6 +364,7 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 			"",
 			"优先级请使用 P0/P1/P2；验收标准尽量写成可验证条目。"
 		].join("\n"),
+		recognitionKeywords: ["产品需求挖掘纪要"],
 		enabled: true,
 		builtin: true
 	}
@@ -312,7 +383,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	analysisBaseUrl: "https://api.deepseek.com/v1",
 	analysisModel: "deepseek-chat",
 	analysisEnabled: false,
-	promptForAnalysisTemplateOnTranscription: false,
+	defaultAnalysisTemplateId: "work-minutes",
 	analysisTemplates: createDefaultAnalysisTemplates(),
 	skipExistingTranscript: true,
 	autoTranscribeOnAudioLink: false,
@@ -379,20 +450,22 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	const raw = isRecord(rawData) ? rawData : {};
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
 	const oldAutoAnalyze = raw.autoAnalyzeAfterTranscription === true;
+	const rawDefaultAnalysisTemplateId =
+		typeof raw.defaultAnalysisTemplateId === "string"
+			? raw.defaultAnalysisTemplateId
+			: typeof raw.autoAnalysisTemplate === "string"
+				? raw.autoAnalysisTemplate
+				: undefined;
 
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
-	settings.promptForAnalysisTemplateOnTranscription =
-		typeof raw.promptForAnalysisTemplateOnTranscription === "boolean"
-			? raw.promptForAnalysisTemplateOnTranscription
-			: typeof raw.promptForAnalysisAfterTranscription === "boolean"
-				? raw.promptForAnalysisAfterTranscription
-				: oldAutoAnalyze;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
+	settings.defaultAnalysisTemplateId = normalizeDefaultAnalysisTemplateId(rawDefaultAnalysisTemplateId, settings.analysisTemplates);
 
 	const mutableSettings = settings as EchoNotesSettings & Record<string, unknown>;
 	delete mutableSettings.autoAnalyzeAfterTranscription;
 	delete mutableSettings.autoAnalysisTemplate;
 	delete mutableSettings.promptForAnalysisAfterTranscription;
+	delete mutableSettings.promptForAnalysisTemplateOnTranscription;
 
 	return settings;
 }
@@ -406,6 +479,7 @@ export function normalizeAnalysisTemplates(value: unknown): AnalysisTemplateConf
 		byId.set(id, {
 			...template,
 			id,
+			recognitionKeywords: normalizeRecognitionKeywords(template.recognitionKeywords, template.name),
 			builtin: BUILTIN_ANALYSIS_TEMPLATE_IDS.includes(id as BuiltInAnalysisTemplateId)
 		});
 	}
@@ -424,7 +498,9 @@ export function normalizeAnalysisTemplates(value: unknown): AnalysisTemplateConf
 			id,
 			name: existing.name.trim() || defaults.name,
 			description: existing.description.trim() || defaults.description,
-			prompt: existing.prompt.trim() || defaults.prompt,
+			systemPrompt: existing.systemPrompt.trim() || defaults.systemPrompt,
+			customPrompt: existing.customPrompt.trim() || defaults.customPrompt,
+			recognitionKeywords: existing.recognitionKeywords.length > 0 ? existing.recognitionKeywords : defaults.recognitionKeywords,
 			builtin: true
 		});
 	}
@@ -448,10 +524,12 @@ export function createCustomAnalysisTemplate(name: string, existingTemplates: An
 		id: createAnalysisTemplateId(name, existingTemplates.map((template) => template.id)),
 		name: name.trim() || "自定义模板",
 		description: "自定义转写稿分析模板。",
-		prompt: [
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
 			"请根据转写稿生成一份结构化纪要。",
 			"你可以自行组织标题，但必须突出关键结论、行动建议和待确认问题。"
 		].join("\n"),
+		recognitionKeywords: [name.trim() || "自定义模板"],
 		enabled: true,
 		builtin: false
 	};
@@ -484,7 +562,8 @@ export function sanitizeAnalysisTemplateId(value: string): string {
 
 function cloneAnalysisTemplate(template: AnalysisTemplateConfig): AnalysisTemplateConfig {
 	return {
-		...template
+		...template,
+		recognitionKeywords: [...template.recognitionKeywords]
 	};
 }
 
@@ -492,17 +571,68 @@ function isAnalysisTemplateLike(value: unknown): value is Partial<AnalysisTempla
 	return isRecord(value) && (typeof value.id === "string" || typeof value.name === "string");
 }
 
-function normalizeAnalysisTemplate(value: Partial<AnalysisTemplateConfig>): AnalysisTemplateConfig {
+function normalizeAnalysisTemplate(value: Partial<AnalysisTemplateConfig> & { prompt?: unknown }): AnalysisTemplateConfig {
 	const id = typeof value.id === "string" ? value.id : value.name ?? "";
 	const name = typeof value.name === "string" ? value.name : id;
+	const legacyPrompt = typeof value.prompt === "string" ? value.prompt : "";
+	const customPrompt = typeof value.customPrompt === "string" ? value.customPrompt : legacyPrompt;
 	return {
 		id,
 		name,
 		description: typeof value.description === "string" ? value.description : "",
-		prompt: typeof value.prompt === "string" ? value.prompt : "",
+		systemPrompt:
+			typeof value.systemPrompt === "string" && value.systemPrompt.trim()
+				? value.systemPrompt
+				: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt,
+		recognitionKeywords: normalizeRecognitionKeywords(value.recognitionKeywords, name),
 		enabled: typeof value.enabled === "boolean" ? value.enabled : true,
 		builtin: typeof value.builtin === "boolean" ? value.builtin : false
 	};
+}
+
+export function parseRecognitionKeywordsInput(value: string): string[] {
+	return uniqueNonEmptyStrings(value.split(/[\n,，、]+/g));
+}
+
+function normalizeRecognitionKeywords(value: unknown, fallbackName: string): string[] {
+	if (Array.isArray(value)) {
+		const keywords = uniqueNonEmptyStrings(value.filter((item): item is string => typeof item === "string"));
+		return keywords.length > 0 ? keywords : uniqueNonEmptyStrings([fallbackName]);
+	}
+	if (typeof value === "string") {
+		const keywords = parseRecognitionKeywordsInput(value);
+		return keywords.length > 0 ? keywords : uniqueNonEmptyStrings([fallbackName]);
+	}
+
+	return uniqueNonEmptyStrings([fallbackName]);
+}
+
+function normalizeDefaultAnalysisTemplateId(value: unknown, templates: AnalysisTemplateConfig[]): AnalysisTemplateId {
+	const ids = new Set(templates.map((template) => template.id));
+	if (typeof value === "string" && ids.has(value)) {
+		return value;
+	}
+	if (ids.has(DEFAULT_SETTINGS.defaultAnalysisTemplateId)) {
+		return DEFAULT_SETTINGS.defaultAnalysisTemplateId;
+	}
+	return templates[0]?.id ?? "work-minutes";
+}
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+
+	for (const value of values) {
+		const trimmed = value.trim();
+		if (!trimmed || seen.has(trimmed)) {
+			continue;
+		}
+		seen.add(trimmed);
+		result.push(trimmed);
+	}
+
+	return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

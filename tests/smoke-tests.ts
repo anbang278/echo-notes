@@ -5,12 +5,19 @@ import {
 	insertAnalysisLinkBlock,
 	renderAnalysisMarkdown
 } from "../src/analysis/analysis-output";
-import { ANALYSIS_TEMPLATE_ORDER, buildAnalysisMessages, getCommandAnalysisTemplates } from "../src/analysis/analysis-templates";
+import {
+	ANALYSIS_TEMPLATE_ORDER,
+	buildAnalysisMessages,
+	getAnalysisContextAroundAudioMatch,
+	getDefaultAnalysisTemplate,
+	selectAnalysisTemplateForContext
+} from "../src/analysis/analysis-templates";
 import { parseAudioLinks } from "../src/audio/audio-link-parser";
 import { LinkService } from "../src/obsidian/link-service";
 import {
 	createAnalysisTemplateId,
 	createCustomAnalysisTemplate,
+	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
 	normalizeAnalysisTemplates,
 	normalizeEchoNotesSettings
@@ -124,12 +131,16 @@ assert.match(englishFailedTranscript, /# Transcription failed/);
 assert.match(englishFailedTranscript, /Error reason:/);
 
 assert.deepEqual(ANALYSIS_TEMPLATE_ORDER, ["work-minutes", "study-notes", "product-requirement-mining"]);
-assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].prompt, /## 摘要/);
-assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].prompt, /## 行动项/);
-assert.match(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].prompt, /## 核心概念/);
-assert.match(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].prompt, /## 复习清单/);
-assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].prompt, /## 需求机会/);
-assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].prompt, /## 验收标准/);
+assert.match(DEFAULT_ANALYSIS_SYSTEM_PROMPT, /专业的录音文本分析助手/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].customPrompt, /## 摘要/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].customPrompt, /## 行动项/);
+assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].recognitionKeywords, ["工作纪要"]);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].customPrompt, /## 核心概念/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].customPrompt, /## 复习清单/);
+assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].recognitionKeywords, ["学习纪要"]);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 需求机会/);
+assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 验收标准/);
+assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].recognitionKeywords, ["产品需求挖掘纪要"]);
 
 const normalizedSettings = normalizeEchoNotesSettings({
 	autoAnalyzeAfterTranscription: true,
@@ -151,14 +162,22 @@ const normalizedSettings = normalizeEchoNotesSettings({
 	]
 });
 assert.equal(normalizedSettings.analysisEnabled, true);
-assert.equal(normalizedSettings.promptForAnalysisTemplateOnTranscription, true);
+assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].name, "工作纪要");
 assert.equal(normalizedSettings.analysisTemplates[0].enabled, false);
 assert.equal(normalizedSettings.analysisTemplates[0].builtin, true);
+assert.equal(normalizedSettings.analysisTemplates[0].systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
 assert.equal(normalizedSettings.analysisTemplates[3].id, "custom-template");
 assert.equal(normalizedSettings.analysisTemplates[3].name, "访谈纪要");
+assert.equal(normalizedSettings.analysisTemplates[3].systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
+assert.equal(normalizedSettings.analysisTemplates[3].customPrompt, "请输出访谈纪要。");
+assert.deepEqual(normalizedSettings.analysisTemplates[3].recognitionKeywords, ["访谈纪要"]);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "autoAnalyzeAfterTranscription"), false);
+assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "promptForAnalysisTemplateOnTranscription"), false);
+const migratedDefaultTemplateSettings = normalizeEchoNotesSettings({ autoAnalysisTemplate: "study-notes" });
+assert.equal(migratedDefaultTemplateSettings.defaultAnalysisTemplateId, "study-notes");
+assert.equal(Object.prototype.hasOwnProperty.call(migratedDefaultTemplateSettings, "autoAnalysisTemplate"), false);
 
 assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
 assert.equal(createCustomAnalysisTemplate("自定义模板", []).id, "custom-template");
@@ -168,10 +187,30 @@ assert.deepEqual(
 	),
 	["work-minutes", "study-notes", "product-requirement-mining", "custom-review"]
 );
-assert.deepEqual(
-	getCommandAnalysisTemplates(normalizedSettings).map((template) => template.id),
-	["study-notes", "product-requirement-mining", "custom-template"]
-);
+assert.equal(normalizeAnalysisTemplates([{ id: "custom-review", name: "复盘纪要", prompt: "请复盘。", enabled: true }])[3].customPrompt, "请复盘。");
+assert.equal(getDefaultAnalysisTemplate(normalizedSettings)?.id, "study-notes");
+assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为访谈纪要。")?.id, "custom-template");
+assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为学习纪要。")?.id, "study-notes");
+assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里没有任何关键字。")?.id, "study-notes");
+assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "学习纪要和产品需求挖掘纪要同时出现。")?.id, "study-notes");
+
+const contextNote = [
+	"第 0 行不应进入上下文",
+	"第 1 行：学习纪要",
+	"第 2 行",
+	"第 3 行",
+	"![[Recording 20260531001942.m4a]]",
+	"第 5 行",
+	"第 6 行",
+	"第 7 行",
+	"第 8 行：产品需求挖掘纪要"
+].join("\n");
+const contextMatch = parseAudioLinks(contextNote)[0];
+const contextText = getAnalysisContextAroundAudioMatch(contextNote, contextMatch);
+assert.match(contextText, /学习纪要/);
+assert.doesNotMatch(contextText, /第 0 行/);
+assert.doesNotMatch(contextText, /产品需求挖掘纪要/);
+assert.equal(selectAnalysisTemplateForContext(normalizedSettings, contextText)?.id, "study-notes");
 
 const workMinutesPrompt = buildAnalysisMessages({
 	template: DEFAULT_ANALYSIS_TEMPLATES["work-minutes"],
@@ -180,7 +219,8 @@ const workMinutesPrompt = buildAnalysisMessages({
 	copyLanguage: "zh"
 });
 assert.match(workMinutesPrompt.system, /简体中文/);
-assert.match(workMinutesPrompt.user, /分析模板：工作纪要/);
+assert.match(workMinutesPrompt.system, /专业的录音文本分析助手/);
+assert.match(workMinutesPrompt.user, /分析方案：工作纪要/);
 assert.match(workMinutesPrompt.user, /行动项/);
 
 const productPrompt = buildAnalysisMessages({
@@ -190,7 +230,7 @@ const productPrompt = buildAnalysisMessages({
 	copyLanguage: "en"
 });
 assert.match(productPrompt.system, /English/);
-assert.match(productPrompt.user, /分析模板：产品需求挖掘纪要/);
+assert.match(productPrompt.user, /分析方案：产品需求挖掘纪要/);
 assert.match(productPrompt.user, /P0\/P1\/P2/);
 
 assert.equal(

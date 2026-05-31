@@ -1,7 +1,10 @@
-import { Editor, Notice, Plugin, TFile, type Command, type MarkdownFileInfo } from "obsidian";
-import { AnalysisTemplatePickerModal } from "./analysis/analysis-template-picker-modal";
+import { Editor, Notice, Plugin, TFile, type MarkdownFileInfo } from "obsidian";
 import { AnalysisService } from "./analysis/analysis-service";
-import { getCommandAnalysisTemplates, getEnabledAnalysisTemplates, getAnalysisTemplate } from "./analysis/analysis-templates";
+import {
+	getAnalysisContextAroundAudioMatch,
+	getDefaultAnalysisTemplate,
+	selectAnalysisTemplateForContext
+} from "./analysis/analysis-templates";
 import { OpenAICompatibleAnalysisProvider } from "./analysis/openai-compatible-analysis-provider";
 import { AudioFileService } from "./audio/audio-file-service";
 import { isSupportedAudioFile } from "./audio/audio-detector";
@@ -10,7 +13,7 @@ import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { shouldWriteFailedTranscript, TranscriptionError } from "./providers/transcription-provider";
-import { normalizeEchoNotesSettings, type AnalysisTemplateConfig, type AnalysisTemplateId, type EchoNotesSettings } from "./settings/settings";
+import { normalizeEchoNotesSettings, type AnalysisTemplateConfig, type EchoNotesSettings } from "./settings/settings";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { TranscriptService } from "./transcript/transcript-service";
 
@@ -25,7 +28,6 @@ export default class EchoNotesPlugin extends Plugin {
 	private linkService: LinkService;
 	private analysisService: AnalysisService;
 	private editorService = new EditorService();
-	private analysisCommandIds = new Set<string>();
 	private processingAudio = new Set<string>();
 	private processingAnalyses = new Set<string>();
 	private mutatingFiles = new Set<string>();
@@ -59,7 +61,6 @@ export default class EchoNotesPlugin extends Plugin {
 		delete this.settings.analysisApiKey;
 		await this.saveData(this.settings);
 		this.refreshServices();
-		this.refreshAnalysisCommands();
 	}
 
 	getApiKey(): string {
@@ -109,52 +110,6 @@ export default class EchoNotesPlugin extends Plugin {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
 			}
 		});
-
-		this.refreshAnalysisCommands();
-	}
-
-	private refreshAnalysisCommands(): void {
-		for (const commandId of this.analysisCommandIds) {
-			this.removeCommand(commandId);
-		}
-		this.analysisCommandIds.clear();
-
-		if (!this.settings.analysisEnabled) {
-			return;
-		}
-
-		this.addAnalysisCommand({
-			id: "analyze-current-transcript",
-			name: "Analyze current transcript with template",
-			editorCallback: (_editor, view) => {
-				void this.handleAnalyzeCurrentTranscriptWithPicker(view);
-			}
-		});
-
-		for (const template of getCommandAnalysisTemplates(this.settings)) {
-			const commandName = getAnalysisTemplateCommandName(template);
-
-			this.addAnalysisCommand({
-				id: `analyze-current-transcript-as-${template.id}`,
-				name: `Analyze current transcript as ${commandName}`,
-				editorCallback: (_editor, view) => {
-					void this.handleAnalyzeCurrentTranscript(view, template.id);
-				}
-			});
-
-			this.addAnalysisCommand({
-				id: `transcribe-selected-audio-and-analyze-as-${template.id}`,
-				name: `Transcribe selected audio and analyze as ${commandName}`,
-				editorCallback: (editor, view) => {
-					void this.handleTranscribeSelectedAudioWithAnalysis(editor, view, template.id);
-				}
-			});
-		}
-	}
-
-	private addAnalysisCommand(command: Command): void {
-		this.addCommand(command);
-		this.analysisCommandIds.add(command.id);
 	}
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {
@@ -214,11 +169,7 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 	}
 
-	private async handleTranscribeSelectedAudio(
-		editor: Editor,
-		view: MarkdownFileInfo,
-		selectedAnalysisTemplate?: AnalysisTemplateConfig | null
-	): Promise<void> {
+	private async handleTranscribeSelectedAudio(editor: Editor, view: MarkdownFileInfo): Promise<void> {
 		const sourceNote = view.file;
 		if (!sourceNote) {
 			new Notice("当前没有可用的 Markdown 文件。");
@@ -239,14 +190,13 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 
-		const analysisTemplate =
-			selectedAnalysisTemplate === undefined ? await this.chooseAnalysisTemplateForTranscription() : selectedAnalysisTemplate;
+		const absoluteMatch = toAbsoluteMatch(audioMatch, range.lineStart);
+		const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), absoluteMatch);
 		const transcriptFile = await this.processAudioToTranscript(audioFile, sourceNote, analysisTemplate);
 		if (!transcriptFile) {
 			return;
 		}
 
-		const absoluteMatch = toAbsoluteMatch(audioMatch, range.lineStart);
 		const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
 		if (this.linkService.hasTranscriptLinkNear(editor.getValue(), absoluteMatch, transcriptLink)) {
 			new Notice("transcript 链接已存在，已跳过插入。");
@@ -255,19 +205,6 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.editorService.insertAfterLine(editor, absoluteMatch.lineEnd, transcriptLink);
 		new Notice("已插入 transcript 链接。");
-	}
-
-	private async handleTranscribeSelectedAudioWithAnalysis(
-		editor: Editor,
-		view: MarkdownFileInfo,
-		templateId: AnalysisTemplateId
-	): Promise<void> {
-		const template = this.getEnabledAnalysisTemplate(templateId);
-		if (!template) {
-			return;
-		}
-
-		await this.handleTranscribeSelectedAudio(editor, view, template);
 	}
 
 	private async handleTranscribeAllAudioInCurrentNote(editor: Editor, view: MarkdownFileInfo): Promise<void> {
@@ -283,7 +220,6 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 
-		const analysisTemplate = await this.chooseAnalysisTemplateForTranscription();
 		let completed = 0;
 		let linked = 0;
 
@@ -294,6 +230,7 @@ export default class EchoNotesPlugin extends Plugin {
 				continue;
 			}
 
+			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), audioMatch);
 			const transcriptFile = await this.processAudioToTranscript(audioFile, sourceNote, analysisTemplate);
 			if (!transcriptFile) {
 				continue;
@@ -315,10 +252,11 @@ export default class EchoNotesPlugin extends Plugin {
 		sourceNote: TFile | undefined,
 		analysisTemplate?: AnalysisTemplateConfig | null
 	): Promise<TFile | null> {
+		const selectedAnalysisTemplate = analysisTemplate === undefined ? this.getDefaultAnalysisTemplateForAnalysis() : analysisTemplate;
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
 		if (existingTranscript && this.settings.skipExistingTranscript) {
 			new Notice("transcript 已存在，已跳过转写。");
-			await this.analyzeTranscriptIfRequested(existingTranscript, analysisTemplate);
+			await this.analyzeTranscriptIfRequested(existingTranscript, selectedAnalysisTemplate);
 			return existingTranscript;
 		}
 
@@ -338,7 +276,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			new Notice(`转写完成：${audioFile.name}`);
-			await this.analyzeTranscriptIfRequested(transcriptFile, analysisTemplate);
+			await this.analyzeTranscriptIfRequested(transcriptFile, selectedAnalysisTemplate);
 			return transcriptFile;
 		} catch (error) {
 			const message = getErrorMessage(error);
@@ -367,76 +305,35 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private async handleAnalyzeCurrentTranscriptWithPicker(view: MarkdownFileInfo): Promise<void> {
-		const transcriptFile = this.getCurrentTranscriptFile(view);
-		if (!transcriptFile) {
-			return;
-		}
-
-		const template = await this.chooseAnalysisTemplate();
-		if (!template) {
-			return;
-		}
-
-		await this.analyzeTranscriptFile(transcriptFile, template);
-	}
-
-	private async handleAnalyzeCurrentTranscript(view: MarkdownFileInfo, templateId: AnalysisTemplateId): Promise<void> {
-		const transcriptFile = this.getCurrentTranscriptFile(view);
-		if (!transcriptFile) {
-			return;
-		}
-
-		const template = this.getEnabledAnalysisTemplate(templateId);
-		if (!template) {
-			return;
-		}
-
-		await this.analyzeTranscriptFile(transcriptFile, template);
-	}
-
-	private getCurrentTranscriptFile(view: MarkdownFileInfo): TFile | null {
-		const transcriptFile = view.file;
-		if (!transcriptFile) {
-			new Notice("当前没有可用的 Markdown 文件。");
-			return null;
-		}
-
-		if (!this.isTranscriptMarkdown(transcriptFile)) {
-			new Notice("当前文件不是 Echo Notes 转写稿。请打开 .transcript.md 或 type: audio-transcript 的笔记后再分析。");
-			return null;
-		}
-
-		return transcriptFile;
-	}
-
-	private getEnabledAnalysisTemplate(templateId: AnalysisTemplateId): AnalysisTemplateConfig | null {
+	private resolveAnalysisTemplateForAudioMatch(content: string, audioMatch: AudioLinkMatch): AnalysisTemplateConfig | null {
 		if (!this.settings.analysisEnabled) {
-			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
 			return null;
 		}
 
-		const template = getAnalysisTemplate(this.settings, templateId);
-		if (!template || !template.enabled) {
-			new Notice("分析模板不存在或未启用，请在 Echo Notes 设置中检查模板配置。");
+		const contextText = getAnalysisContextAroundAudioMatch(content, audioMatch);
+		const template = selectAnalysisTemplateForContext(this.settings, contextText);
+		if (!template) {
+			new Notice("没有启用的 AI 纪要分析方案，已跳过分析。");
 			return null;
 		}
 
+		this.log(`AI 纪要分析方案：${template.name}`, {
+			audioLink: audioMatch.linkPath,
+			keywords: template.recognitionKeywords
+		});
 		return template;
 	}
 
-	private async chooseAnalysisTemplateForTranscription(): Promise<AnalysisTemplateConfig | null> {
-		if (!this.settings.analysisEnabled || !this.settings.promptForAnalysisTemplateOnTranscription) {
+	private getDefaultAnalysisTemplateForAnalysis(): AnalysisTemplateConfig | null {
+		if (!this.settings.analysisEnabled) {
 			return null;
 		}
 
-		return this.chooseAnalysisTemplate("仅转写");
-	}
-
-	private async chooseAnalysisTemplate(emptyChoiceLabel = "取消"): Promise<AnalysisTemplateConfig | null> {
-		return new Promise((resolve) => {
-			new AnalysisTemplatePickerModal(this.app, getEnabledAnalysisTemplates(this.settings), resolve, emptyChoiceLabel).open();
-		});
+		const template = getDefaultAnalysisTemplate(this.settings);
+		if (!template) {
+			new Notice("没有启用的 AI 纪要分析方案，已跳过分析。");
+		}
+		return template;
 	}
 
 	private async analyzeTranscriptIfRequested(transcriptFile: TFile, template: AnalysisTemplateConfig | null | undefined): Promise<void> {
@@ -525,7 +422,8 @@ export default class EchoNotesPlugin extends Plugin {
 				continue;
 			}
 
-			const transcriptFile = await this.processAudioToTranscript(audioFile, file);
+			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(content, audioMatch);
+			const transcriptFile = await this.processAudioToTranscript(audioFile, file, analysisTemplate);
 			if (!transcriptFile) {
 				continue;
 			}
@@ -566,17 +464,6 @@ export default class EchoNotesPlugin extends Plugin {
 		return file.extension === "md" && !file.basename.endsWith(".transcript");
 	}
 
-	private isTranscriptMarkdown(file: TFile): boolean {
-		if (file.extension !== "md") {
-			return false;
-		}
-		if (file.basename.endsWith(".transcript")) {
-			return true;
-		}
-
-		return this.app.metadataCache.getFileCache(file)?.frontmatter?.type === "audio-transcript";
-	}
-
 	private log(message: string, ...args: unknown[]): void {
 		if (this.settings.verboseLog) {
 			console.log(`[Echo Notes] ${message}`, ...args);
@@ -594,17 +481,4 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 
 function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
-}
-
-function getAnalysisTemplateCommandName(template: AnalysisTemplateConfig): string {
-	switch (template.id) {
-		case "work-minutes":
-			return "work minutes";
-		case "study-notes":
-			return "study notes";
-		case "product-requirement-mining":
-			return "product requirement mining";
-		default:
-			return template.name || template.id;
-	}
 }

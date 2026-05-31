@@ -1,12 +1,14 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, PluginSettingTab, Setting } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	COPY_LANGUAGE_LABELS,
+	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
 	createCustomAnalysisTemplate,
+	parseRecognitionKeywordsInput,
 	restoreDefaultAnalysisTemplate,
 	type AnalysisProviderId,
 	type AnalysisTemplateConfig,
@@ -283,32 +285,37 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("转写时选择分析模板")
-			.setDesc("开启后，手动发起转写时会先选择分析模板；也可以选择仅转写。")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.promptForAnalysisTemplateOnTranscription)
+			.setName("默认分析方案")
+			.setDesc("录音链接上下三行未命中任何识别关键字时，使用这个方案生成 AI 纪要。若默认方案被禁用，会自动改用第一个已启用方案。")
+			.addDropdown((dropdown) => {
+				for (const template of this.plugin.settings.analysisTemplates) {
+					const suffix = template.enabled ? "" : "（未启用）";
+					dropdown.addOption(template.id, `${template.name}${suffix}`);
+				}
+				dropdown
+					.setValue(this.plugin.settings.defaultAnalysisTemplateId)
 					.onChange(async (value) => {
-						this.plugin.settings.promptForAnalysisTemplateOnTranscription = value;
+						this.plugin.settings.defaultAnalysisTemplateId = value;
 						await this.plugin.saveSettings();
+						this.display();
 					})
-			);
+			});
 
-		new Setting(containerEl).setName("分析模板提示词").setHeading();
+		new Setting(containerEl).setName("分析方案").setHeading();
 
 		for (const template of this.plugin.settings.analysisTemplates) {
 			this.renderAnalysisTemplateSetting(containerEl, template);
 		}
 
 		new Setting(containerEl)
-			.setName("新增自定义模板")
-			.setDesc("创建后会出现在模板选择窗口，并注册对应的命令，方便绑定快捷键。")
+			.setName("新增自定义方案")
+			.setDesc("创建后可配置方案名称、识别关键字、系统提示词和自定义提示词。启用后会参与录音链接上下文匹配。")
 			.addButton((button) =>
 				button
-					.setButtonText("新增模板")
+					.setButtonText("新增方案")
 					.onClick(async () => {
 						this.plugin.settings.analysisTemplates.push(
-							createCustomAnalysisTemplate("自定义模板", this.plugin.settings.analysisTemplates)
+							createCustomAnalysisTemplate("自定义方案", this.plugin.settings.analysisTemplates)
 						);
 						await this.plugin.saveSettings();
 						this.display();
@@ -317,17 +324,32 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderAnalysisTemplateSetting(containerEl: HTMLElement, template: AnalysisTemplateConfig): void {
-		const label = template.builtin ? `${template.name}（预设）` : template.name;
+		const badges = [
+			template.builtin ? "预设" : "",
+			template.id === this.plugin.settings.defaultAnalysisTemplateId ? "默认" : "",
+			template.enabled ? "" : "未启用"
+		].filter(Boolean);
+		const label = badges.length > 0 ? `${template.name}（${badges.join("，")}）` : template.name;
+		const keywords = template.recognitionKeywords.length > 0 ? template.recognitionKeywords.join("、") : "未设置";
+
 		new Setting(containerEl)
 			.setName(label)
-			.setDesc(template.description || template.id)
+			.setDesc(`识别关键字：${keywords}`)
 			.addToggle((toggle) =>
 				toggle
-					.setTooltip("是否在模板选择窗口中显示此模板")
+					.setTooltip("是否启用此分析方案")
 					.setValue(template.enabled)
 					.onChange(async (value) => {
 						template.enabled = value;
 						await this.plugin.saveSettings();
+						this.display();
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("编辑")
+					.onClick(() => {
+						new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.display()).open();
 					})
 			)
 			.addButton((button) => {
@@ -357,44 +379,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						}
 						await this.plugin.saveSettings();
 						this.display();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("模板名称")
-			.setDesc("命令面板和生成文件中的显示名称。")
-			.addText((text) =>
-				text
-					.setValue(template.name)
-					.onChange(async (value) => {
-						template.name = value.trim() || template.id;
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("模板说明")
-			.setDesc("用于帮助区分模板用途。")
-			.addText((text) =>
-				text
-					.setValue(template.description)
-					.onChange(async (value) => {
-						template.description = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("模板提示词")
-			.setDesc("只填写分析要求和输出结构；系统会自动补充语言、安全和转写稿上下文。")
-			.addTextArea((text) => {
-				text.inputEl.rows = 8;
-				text.inputEl.cols = 60;
-				text
-					.setValue(template.prompt)
-					.onChange(async (value) => {
-						template.prompt = value;
-						await this.plugin.saveSettings();
 					});
 			});
 	}
@@ -443,5 +427,125 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			default:
 				return "该服务商的基础地址。新增服务商默认按 OpenAI-compatible 音频转写接口调用 {Base URL}/audio/transcriptions。";
 		}
+	}
+}
+
+class AnalysisTemplateEditModal extends Modal {
+	private plugin: EchoNotesPlugin;
+	private template: AnalysisTemplateConfig;
+	private onSaved: () => void;
+	private draft: AnalysisTemplateConfig;
+
+	constructor(app: App, plugin: EchoNotesPlugin, template: AnalysisTemplateConfig, onSaved: () => void) {
+		super(app);
+		this.plugin = plugin;
+		this.template = template;
+		this.onSaved = onSaved;
+		this.draft = {
+			...template,
+			recognitionKeywords: [...template.recognitionKeywords]
+		};
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		this.titleEl.setText("编辑分析方案");
+
+		new Setting(contentEl)
+			.setName("方案名称")
+			.setDesc("用于设置页展示、生成分析文档标题和回写链接别名。")
+			.addText((text) =>
+				text
+					.setValue(this.draft.name)
+					.onChange((value) => {
+						this.draft.name = value;
+					})
+			);
+
+		new Setting(contentEl)
+			.setName("启用方案")
+			.setDesc("开启后，此方案会参与录音链接上下三行的关键字识别；关闭后仍保留配置但不会自动使用。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.draft.enabled)
+					.onChange((value) => {
+						this.draft.enabled = value;
+					})
+			);
+
+		new Setting(contentEl)
+			.setName("识别关键字")
+			.setDesc("用于匹配录音链接上下三行文本。支持多个关键字，可用换行、逗号或顿号分隔。")
+			.addTextArea((text) => {
+				text.inputEl.rows = 4;
+				text.inputEl.cols = 60;
+				text
+					.setPlaceholder("学习纪要\n课程笔记")
+					.setValue(this.draft.recognitionKeywords.join("\n"))
+					.onChange((value) => {
+						this.draft.recognitionKeywords = parseRecognitionKeywordsInput(value);
+					});
+			});
+
+		new Setting(contentEl)
+			.setName("系统提示词")
+			.setDesc("定义 AI 的角色、边界、输出原则和通用质量要求。留空保存时会恢复为默认系统提示词。")
+			.addTextArea((text) => {
+				text.inputEl.rows = 12;
+				text.inputEl.cols = 72;
+				text
+					.setValue(this.draft.systemPrompt)
+					.onChange((value) => {
+						this.draft.systemPrompt = value;
+					});
+			});
+
+		new Setting(contentEl)
+			.setName("自定义提示词")
+			.setDesc("定义该方案的分析重点、Markdown 结构和特殊输出要求。")
+			.addTextArea((text) => {
+				text.inputEl.rows = 10;
+				text.inputEl.cols = 72;
+				text
+					.setValue(this.draft.customPrompt)
+					.onChange((value) => {
+						this.draft.customPrompt = value;
+					});
+			});
+
+		new Setting(contentEl)
+			.addButton((button) =>
+				button
+					.setButtonText("保存")
+					.setCta()
+					.onClick(() => {
+						void this.save();
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("取消")
+					.onClick(() => {
+						this.close();
+					})
+			);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+
+	private async save(): Promise<void> {
+		this.template.name = this.draft.name.trim() || this.template.id;
+		this.template.enabled = this.draft.enabled;
+		this.template.systemPrompt = this.draft.systemPrompt.trim() || DEFAULT_ANALYSIS_SYSTEM_PROMPT;
+		this.template.customPrompt = this.draft.customPrompt.trim();
+		this.template.recognitionKeywords =
+			this.draft.recognitionKeywords.length > 0 ? this.draft.recognitionKeywords : [this.template.name];
+
+		await this.plugin.saveSettings();
+		this.onSaved();
+		this.close();
 	}
 }
