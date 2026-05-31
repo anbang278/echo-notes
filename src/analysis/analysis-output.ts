@@ -3,94 +3,92 @@ import type { AnalysisResult } from "./analysis-provider";
 
 export const ANALYSIS_LINKS_START = "<!-- echo-notes-analysis-links:start -->";
 export const ANALYSIS_LINKS_END = "<!-- echo-notes-analysis-links:end -->";
+export const TRANSCRIPT_ANALYSIS_START = "<!-- echo-notes-analysis:start -->";
+export const TRANSCRIPT_ANALYSIS_END = "<!-- echo-notes-analysis:end -->";
 
-export interface RenderAnalysisMarkdownInput {
-	sourceTranscriptLink: string;
-	transcriptBaseName: string;
+export interface RenderTranscriptAnalysisBlockInput {
 	templateId: AnalysisTemplateId;
 	templateName: string;
 	result: AnalysisResult;
 	copyLanguage: CopyLanguage;
 }
 
-export function getAnalysisPathForTranscriptPath(transcriptPath: string, templateId: AnalysisTemplateId): string {
-	const transcriptFolder = getParentPath(transcriptPath);
-	const transcriptBaseName = getBaseName(transcriptPath);
-	return normalizeVaultPath(joinPath(transcriptFolder, `${transcriptBaseName}.analysis.${templateId}.md`));
-}
-
-export function renderAnalysisMarkdown(input: RenderAnalysisMarkdownInput): string {
-	const copy = getLocalizedCopy(input.copyLanguage);
-
-	return [
-		"---",
-		"type: audio-analysis",
-		`source_transcript: "${escapeYaml(input.sourceTranscriptLink)}"`,
-		`analysis_template: "${escapeYaml(input.templateId)}"`,
-		`provider: "${escapeYaml(input.result.provider)}"`,
-		`model: "${escapeYaml(input.result.model)}"`,
-		`generated_at: ${new Date().toISOString()}`,
-		"status: done",
-		`trace_id: "${escapeYaml(input.result.traceId ?? "")}"`,
-		"---",
-		"",
-		`# ${input.transcriptBaseName} ${input.templateName}`,
-		"",
-		`${copy.sourceTranscriptLabel}${input.sourceTranscriptLink}`,
-		"",
-		`## ${copy.analysisHeading}`,
-		"",
-		input.result.text.trim(),
-		""
-	].join("\n");
-}
-
 export function extractTranscriptText(content: string): string {
 	return content
 		.replace(/^---\n[\s\S]*?\n---\n?/, "")
 		.replace(new RegExp(`${escapeRegExp(ANALYSIS_LINKS_START)}[\\s\\S]*?${escapeRegExp(ANALYSIS_LINKS_END)}\\n?`, "g"), "")
+		.replace(new RegExp(`${escapeRegExp(TRANSCRIPT_ANALYSIS_START)}[\\s\\S]*?${escapeRegExp(TRANSCRIPT_ANALYSIS_END)}\\n?`, "g"), "")
 		.trim();
 }
 
-export function insertAnalysisLinkBlock(content: string, analysisLink: string, analysisBaseName: string, heading: string): string {
-	if (content.includes(analysisLink) || content.includes(analysisBaseName)) {
-		return content;
+export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlockInput): string {
+	const copy = getLocalizedCopy(input.copyLanguage);
+	const metadataSeparator = input.copyLanguage === "en" ? "; " : "；";
+	const metadata = [
+		`${copy.analysisGeneratedAtLabel}${new Date().toISOString()}`,
+		`${copy.analysisProviderLabel}${input.result.provider}`,
+		`${copy.analysisModelLabel}${input.result.model}`
+	];
+	if (input.result.traceId) {
+		metadata.push(`${copy.analysisTraceIdLabel}${input.result.traceId}`);
 	}
 
-	const lines = content.split("\n");
-	const startIndex = lines.findIndex((line) => line.trim() === ANALYSIS_LINKS_START);
-	const endIndex = lines.findIndex((line) => line.trim() === ANALYSIS_LINKS_END);
+	return [
+		getTranscriptAnalysisItemStart(input.templateId),
+		`### ${input.templateName}`,
+		"",
+		`_${metadata.join(metadataSeparator)}_`,
+		"",
+		input.result.text.trim(),
+		getTranscriptAnalysisItemEnd(input.templateId)
+	].join("\n");
+}
 
-	if (startIndex !== -1 && endIndex > startIndex) {
-		lines.splice(endIndex, 0, `- ${analysisLink}`);
-		return lines.join("\n");
+export function insertOrReplaceTranscriptAnalysis(
+	content: string,
+	analysisBlock: string,
+	templateId: AnalysisTemplateId,
+	heading: string
+): string {
+	const startIndex = content.indexOf(TRANSCRIPT_ANALYSIS_START);
+	const endIndex = content.indexOf(TRANSCRIPT_ANALYSIS_END);
+	if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+		const fullBlock = [TRANSCRIPT_ANALYSIS_START, `## ${heading}`, "", analysisBlock, TRANSCRIPT_ANALYSIS_END].join("\n");
+		return `${content.trimEnd()}\n\n${fullBlock}\n`;
 	}
 
-	const block = [ANALYSIS_LINKS_START, `## ${heading}`, "", `- ${analysisLink}`, ANALYSIS_LINKS_END].join("\n");
-	return `${content.trimEnd()}\n\n${block}\n`;
+	const before = content.slice(0, startIndex);
+	const existingSection = content.slice(startIndex, endIndex + TRANSCRIPT_ANALYSIS_END.length);
+	const after = content.slice(endIndex + TRANSCRIPT_ANALYSIS_END.length);
+	const updatedSection = insertOrReplaceAnalysisItem(existingSection, analysisBlock, templateId);
+	return `${before}${updatedSection}${after}`;
 }
 
-function getParentPath(path: string): string {
-	const index = path.lastIndexOf("/");
-	return index === -1 ? "" : path.slice(0, index);
+function insertOrReplaceAnalysisItem(section: string, analysisBlock: string, templateId: AnalysisTemplateId): string {
+	const itemStart = getTranscriptAnalysisItemStart(templateId);
+	const itemEnd = getTranscriptAnalysisItemEnd(templateId);
+	const itemStartIndex = section.indexOf(itemStart);
+	const itemEndIndex = section.indexOf(itemEnd);
+	if (itemStartIndex !== -1 && itemEndIndex > itemStartIndex) {
+		return `${section.slice(0, itemStartIndex)}${analysisBlock}${section.slice(itemEndIndex + itemEnd.length)}`;
+	}
+
+	const sectionEndIndex = section.lastIndexOf(TRANSCRIPT_ANALYSIS_END);
+	if (sectionEndIndex === -1) {
+		return section;
+	}
+
+	const prefix = section.slice(0, sectionEndIndex).trimEnd();
+	const suffix = section.slice(sectionEndIndex);
+	return `${prefix}\n\n${analysisBlock}\n${suffix}`;
 }
 
-function getBaseName(path: string): string {
-	const name = path.split("/").pop() ?? path;
-	const dotIndex = name.lastIndexOf(".");
-	return dotIndex === -1 ? name : name.slice(0, dotIndex);
+function getTranscriptAnalysisItemStart(templateId: AnalysisTemplateId): string {
+	return `<!-- echo-notes-analysis-item:start ${templateId} -->`;
 }
 
-function joinPath(...parts: string[]): string {
-	return parts.filter(Boolean).join("/");
-}
-
-function normalizeVaultPath(path: string): string {
-	return path.replace(/^\/+/, "").replace(/^\.\//, "").replace(/\\/g, "/").replace(/\/+/g, "/");
-}
-
-function escapeYaml(value: string): string {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+function getTranscriptAnalysisItemEnd(templateId: AnalysisTemplateId): string {
+	return `<!-- echo-notes-analysis-item:end ${templateId} -->`;
 }
 
 function escapeRegExp(value: string): string {

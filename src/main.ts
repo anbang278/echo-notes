@@ -20,6 +20,11 @@ import { TranscriptService } from "./transcript/transcript-service";
 const API_KEY_SECRET_ID = "echo-notes-api-key";
 const ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
 
+interface ProcessAudioResult {
+	transcriptFile: TFile;
+	analysisEligible: boolean;
+}
+
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = normalizeEchoNotesSettings(undefined);
 
@@ -163,7 +168,16 @@ export default class EchoNotesPlugin extends Plugin {
 					if (file.stat.ctime < this.loadedAt) {
 						return;
 					}
-					void this.processAudioToTranscript(file, undefined);
+					void this.processAudioToTranscript(file, undefined)
+						.then((result) => {
+							if (result?.analysisEligible) {
+								this.startAnalysisTask(result.transcriptFile, this.getDefaultAnalysisTemplateForAnalysis());
+							}
+						})
+						.catch((error) => {
+							new Notice(`自动转写失败：${getErrorMessage(error)}`);
+							this.log("自动转写失败", error);
+						});
 				})
 			);
 		});
@@ -192,19 +206,23 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const absoluteMatch = toAbsoluteMatch(audioMatch, range.lineStart);
 		const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), absoluteMatch);
-		const transcriptFile = await this.processAudioToTranscript(audioFile, sourceNote, analysisTemplate);
-		if (!transcriptFile) {
+		const result = await this.processAudioToTranscript(audioFile, sourceNote);
+		if (!result) {
 			return;
 		}
+		const transcriptFile = result.transcriptFile;
 
 		const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
 		if (this.linkService.hasTranscriptLinkNear(editor.getValue(), absoluteMatch, transcriptLink)) {
 			new Notice("transcript 链接已存在，已跳过插入。");
-			return;
+		} else {
+			this.editorService.insertAfterLine(editor, absoluteMatch.lineEnd, transcriptLink);
+			new Notice("已插入 transcript 链接。");
 		}
 
-		this.editorService.insertAfterLine(editor, absoluteMatch.lineEnd, transcriptLink);
-		new Notice("已插入 transcript 链接。");
+		if (result.analysisEligible) {
+			this.startAnalysisTask(transcriptFile, analysisTemplate);
+		}
 	}
 
 	private async handleTranscribeAllAudioInCurrentNote(editor: Editor, view: MarkdownFileInfo): Promise<void> {
@@ -231,15 +249,19 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), audioMatch);
-			const transcriptFile = await this.processAudioToTranscript(audioFile, sourceNote, analysisTemplate);
-			if (!transcriptFile) {
+			const result = await this.processAudioToTranscript(audioFile, sourceNote);
+			if (!result) {
 				continue;
 			}
+			const transcriptFile = result.transcriptFile;
 
 			const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
 			if (!this.linkService.hasTranscriptLinkNear(editor.getValue(), audioMatch, transcriptLink)) {
 				this.editorService.insertAfterLine(editor, audioMatch.lineEnd, transcriptLink);
 				linked += 1;
+			}
+			if (result.analysisEligible) {
+				this.startAnalysisTask(transcriptFile, analysisTemplate);
 			}
 			completed += 1;
 		}
@@ -249,20 +271,17 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private async processAudioToTranscript(
 		audioFile: TFile,
-		sourceNote: TFile | undefined,
-		analysisTemplate?: AnalysisTemplateConfig | null
-	): Promise<TFile | null> {
-		const selectedAnalysisTemplate = analysisTemplate === undefined ? this.getDefaultAnalysisTemplateForAnalysis() : analysisTemplate;
+		sourceNote: TFile | undefined
+	): Promise<ProcessAudioResult | null> {
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
 		if (existingTranscript && this.settings.skipExistingTranscript) {
 			new Notice("transcript 已存在，已跳过转写。");
-			await this.analyzeTranscriptIfRequested(existingTranscript, selectedAnalysisTemplate);
-			return existingTranscript;
+			return { transcriptFile: existingTranscript, analysisEligible: true };
 		}
 
 		if (this.processingAudio.has(audioFile.path)) {
 			new Notice(`音频正在转写中：${audioFile.name}`);
-			return existingTranscript;
+			return existingTranscript ? { transcriptFile: existingTranscript, analysisEligible: true } : null;
 		}
 
 		this.processingAudio.add(audioFile.path);
@@ -276,8 +295,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			new Notice(`转写完成：${audioFile.name}`);
-			await this.analyzeTranscriptIfRequested(transcriptFile, selectedAnalysisTemplate);
-			return transcriptFile;
+			return { transcriptFile, analysisEligible: true };
 		} catch (error) {
 			const message = getErrorMessage(error);
 			new Notice(`转写失败：${message}`);
@@ -286,7 +304,7 @@ export default class EchoNotesPlugin extends Plugin {
 			if (shouldWriteFailedTranscript(error)) {
 				try {
 					const traceId = error instanceof TranscriptionError ? error.traceId : undefined;
-					return await this.transcriptService.writeFailedTranscript(
+					const transcriptFile = await this.transcriptService.writeFailedTranscript(
 						audioFile,
 						sourceNote,
 						this.settings.provider,
@@ -294,6 +312,7 @@ export default class EchoNotesPlugin extends Plugin {
 						message,
 						traceId
 					);
+					return { transcriptFile, analysisEligible: false };
 				} catch (writeError) {
 					new Notice(`写入失败 transcript 时出错：${getErrorMessage(writeError)}`);
 				}
@@ -313,11 +332,11 @@ export default class EchoNotesPlugin extends Plugin {
 		const contextText = getAnalysisContextAroundAudioMatch(content, audioMatch);
 		const template = selectAnalysisTemplateForContext(this.settings, contextText);
 		if (!template) {
-			new Notice("没有启用的 AI 纪要分析方案，已跳过分析。");
+			new Notice("没有启用的 AI 纪要分析模板，已跳过分析。");
 			return null;
 		}
 
-		this.log(`AI 纪要分析方案：${template.name}`, {
+		this.log(`AI 纪要分析模板：${template.name}`, {
 			audioLink: audioMatch.linkPath,
 			keywords: template.recognitionKeywords
 		});
@@ -331,41 +350,43 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const template = getDefaultAnalysisTemplate(this.settings);
 		if (!template) {
-			new Notice("没有启用的 AI 纪要分析方案，已跳过分析。");
+			new Notice("没有启用的 AI 纪要分析模板，已跳过分析。");
 		}
 		return template;
 	}
 
-	private async analyzeTranscriptIfRequested(transcriptFile: TFile, template: AnalysisTemplateConfig | null | undefined): Promise<void> {
-		if (!template) {
+	private startAnalysisTask(transcriptFile: TFile, template: AnalysisTemplateConfig | null | undefined): void {
+		if (!template || !this.settings.analysisEnabled) {
 			return;
-		}
-
-		await this.analyzeTranscriptFile(transcriptFile, template);
-	}
-
-	private async analyzeTranscriptFile(transcriptFile: TFile, template: AnalysisTemplateConfig): Promise<TFile | null> {
-		if (!this.settings.analysisEnabled) {
-			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
-			return null;
 		}
 
 		const templateTitle = template.name;
 		const processingKey = `${transcriptFile.path}:${template.id}`;
 		if (this.processingAnalyses.has(processingKey)) {
-			new Notice(`正在生成 ${templateTitle}：${transcriptFile.name}`);
-			return null;
+			new Notice(`正在后台生成 ${templateTitle}：${transcriptFile.name}`);
+			return;
 		}
 
 		this.processingAnalyses.add(processingKey);
+		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
+		void this.runAnalysisTask(transcriptFile, template, processingKey);
+	}
+
+	private async runAnalysisTask(transcriptFile: TFile, template: AnalysisTemplateConfig, processingKey: string): Promise<void> {
+		if (!this.settings.analysisEnabled) {
+			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
+			this.processingAnalyses.delete(processingKey);
+			return;
+		}
+
+		const templateTitle = template.name;
 		try {
 			const transcriptText = await this.analysisService.readTranscriptText(transcriptFile);
 			if (!transcriptText.trim()) {
 				new Notice("转写稿内容为空，已跳过 AI 纪要分析。");
-				return null;
+				return;
 			}
 
-			new Notice(`开始生成 ${templateTitle}：${transcriptFile.name}`);
 			const provider = new OpenAICompatibleAnalysisProvider(this.settings, this.getAnalysisApiKey());
 			const result = await provider.analyze({
 				template,
@@ -373,19 +394,16 @@ export default class EchoNotesPlugin extends Plugin {
 				transcriptText,
 				copyLanguage: this.settings.copyLanguage
 			});
-			const analysisFile = await this.analysisService.writeAnalysis(
+			await this.analysisService.writeAnalysisToTranscript(
 				transcriptFile,
 				template,
 				result,
 				this.settings.copyLanguage
 			);
-			await this.analysisService.insertAnalysisLink(transcriptFile, analysisFile, template, this.settings.copyLanguage);
-			new Notice(`${templateTitle} 已生成：${analysisFile.name}`);
-			return analysisFile;
+			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
 		} catch (error) {
 			new Notice(`${templateTitle} 生成失败：${getErrorMessage(error)}`);
 			this.log("AI 纪要分析失败", error);
-			return null;
 		} finally {
 			this.processingAnalyses.delete(processingKey);
 		}
@@ -423,12 +441,16 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(content, audioMatch);
-			const transcriptFile = await this.processAudioToTranscript(audioFile, file, analysisTemplate);
-			if (!transcriptFile) {
+			const result = await this.processAudioToTranscript(audioFile, file);
+			if (!result) {
 				continue;
 			}
+			const transcriptFile = result.transcriptFile;
 
 			await this.insertTranscriptLinkIntoFile(file, audioMatch.linkPath, transcriptFile);
+			if (result.analysisEligible) {
+				this.startAnalysisTask(transcriptFile, analysisTemplate);
+			}
 		}
 	}
 

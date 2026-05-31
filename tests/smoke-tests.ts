@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import {
+	ANALYSIS_LINKS_END,
+	ANALYSIS_LINKS_START,
+	TRANSCRIPT_ANALYSIS_END,
+	TRANSCRIPT_ANALYSIS_START,
 	extractTranscriptText,
-	getAnalysisPathForTranscriptPath,
-	insertAnalysisLinkBlock,
-	renderAnalysisMarkdown
+	insertOrReplaceTranscriptAnalysis,
+	renderTranscriptAnalysisBlock
 } from "../src/analysis/analysis-output";
 import {
 	ANALYSIS_TEMPLATE_ORDER,
@@ -17,6 +20,7 @@ import { LinkService } from "../src/obsidian/link-service";
 import {
 	createAnalysisTemplateId,
 	createCustomAnalysisTemplate,
+	ANALYSIS_PROVIDER_DEFAULTS,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
 	normalizeAnalysisTemplates,
@@ -141,6 +145,7 @@ assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].recognitionKeywords, 
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 需求机会/);
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 验收标准/);
 assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].recognitionKeywords, ["产品需求挖掘纪要"]);
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisModel, "deepseek-v4-pro");
 
 const normalizedSettings = normalizeEchoNotesSettings({
 	autoAnalyzeAfterTranscription: true,
@@ -162,6 +167,7 @@ const normalizedSettings = normalizeEchoNotesSettings({
 	]
 });
 assert.equal(normalizedSettings.analysisEnabled, true);
+assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
 assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].name, "工作纪要");
@@ -180,7 +186,12 @@ assert.equal(migratedDefaultTemplateSettings.defaultAnalysisTemplateId, "study-n
 assert.equal(Object.prototype.hasOwnProperty.call(migratedDefaultTemplateSettings, "autoAnalysisTemplate"), false);
 
 assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
-assert.equal(createCustomAnalysisTemplate("自定义模板", []).id, "custom-template");
+const customTemplate = createCustomAnalysisTemplate("自定义模板", []);
+assert.equal(customTemplate.id, "custom-template");
+assert.equal(customTemplate.name, "自定义模板");
+assert.equal(customTemplate.systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
+assert.match(customTemplate.customPrompt, /结构化纪要/);
+assert.deepEqual(customTemplate.recognitionKeywords, ["自定义模板"]);
 assert.deepEqual(
 	normalizeAnalysisTemplates([{ id: "custom-review", name: "复盘纪要", prompt: "请复盘。", enabled: true }]).map(
 		(template) => template.id
@@ -233,14 +244,7 @@ assert.match(productPrompt.system, /English/);
 assert.match(productPrompt.user, /分析方案：产品需求挖掘纪要/);
 assert.match(productPrompt.user, /P0\/P1\/P2/);
 
-assert.equal(
-	getAnalysisPathForTranscriptPath("Daily/Recording 20260531001942/Recording 20260531001942.transcript.md", "work-minutes"),
-	"Daily/Recording 20260531001942/Recording 20260531001942.transcript.analysis.work-minutes.md"
-);
-
-const analysisMarkdown = renderAnalysisMarkdown({
-	sourceTranscriptLink: "[[Recording 20260531001942.transcript]]",
-	transcriptBaseName: "Recording 20260531001942.transcript",
+const workAnalysisBlock = renderTranscriptAnalysisBlock({
 	templateId: "work-minutes",
 	templateName: "工作纪要",
 	result: {
@@ -251,14 +255,12 @@ const analysisMarkdown = renderAnalysisMarkdown({
 	},
 	copyLanguage: "zh"
 });
-assert.match(analysisMarkdown, /type: audio-analysis/);
-assert.match(analysisMarkdown, /analysis_template: "work-minutes"/);
-assert.match(analysisMarkdown, /provider: "deepseek"/);
-assert.match(analysisMarkdown, /model: "deepseek-chat"/);
-assert.match(analysisMarkdown, /trace_id: "trace-1"/);
-assert.match(analysisMarkdown, /# Recording 20260531001942\.transcript 工作纪要/);
-assert.match(analysisMarkdown, /来源转写稿：\[\[Recording 20260531001942\.transcript\]\]/);
-assert.match(analysisMarkdown, /## 分析结果/);
+assert.match(workAnalysisBlock, /<!-- echo-notes-analysis-item:start work-minutes -->/);
+assert.match(workAnalysisBlock, /### 工作纪要/);
+assert.match(workAnalysisBlock, /Provider：deepseek/);
+assert.match(workAnalysisBlock, /模型：deepseek-chat/);
+assert.match(workAnalysisBlock, /Trace ID：trace-1/);
+assert.match(workAnalysisBlock, /## 摘要/);
 
 const transcriptWithFrontmatter = [
 	"---",
@@ -271,22 +273,68 @@ const transcriptWithFrontmatter = [
 	"",
 	"正文内容",
 	"",
-	"<!-- echo-notes-analysis-links:start -->",
+	ANALYSIS_LINKS_START,
 	"## AI 纪要分析",
 	"",
 	"- [[Analysis|工作纪要]]",
-	"<!-- echo-notes-analysis-links:end -->"
+	ANALYSIS_LINKS_END,
+	"",
+	TRANSCRIPT_ANALYSIS_START,
+	"## AI 纪要分析",
+	"",
+	workAnalysisBlock,
+	TRANSCRIPT_ANALYSIS_END
 ].join("\n");
 assert.equal(extractTranscriptText(transcriptWithFrontmatter), "# Recording 转写稿\n\n## 转写稿\n\n正文内容");
 
-const analysisLink = "[[Recording 20260531001942.transcript.analysis.work-minutes|工作纪要]]";
-const transcriptWithAnalysisLink = insertAnalysisLinkBlock("正文内容", analysisLink, "Recording 20260531001942.transcript.analysis.work-minutes", "AI 纪要分析");
-assert.match(transcriptWithAnalysisLink, /<!-- echo-notes-analysis-links:start -->/);
-assert.match(transcriptWithAnalysisLink, /## AI 纪要分析/);
-assert.match(transcriptWithAnalysisLink, /\[\[Recording 20260531001942\.transcript\.analysis\.work-minutes\|工作纪要\]\]/);
-assert.equal(
-	insertAnalysisLinkBlock(transcriptWithAnalysisLink, analysisLink, "Recording 20260531001942.transcript.analysis.work-minutes", "AI 纪要分析"),
-	transcriptWithAnalysisLink
+const transcriptWithWorkAnalysis = insertOrReplaceTranscriptAnalysis("正文内容", workAnalysisBlock, "work-minutes", "AI 纪要分析");
+assert.match(transcriptWithWorkAnalysis, /<!-- echo-notes-analysis:start -->/);
+assert.match(transcriptWithWorkAnalysis, /## AI 纪要分析/);
+assert.match(transcriptWithWorkAnalysis, /<!-- echo-notes-analysis-item:start work-minutes -->/);
+assert.match(transcriptWithWorkAnalysis, /这是纪要。/);
+
+const updatedWorkAnalysisBlock = renderTranscriptAnalysisBlock({
+	templateId: "work-minutes",
+	templateName: "工作纪要",
+	result: {
+		text: "## 摘要\n\n这是新纪要。",
+		provider: "deepseek",
+		model: "deepseek-chat"
+	},
+	copyLanguage: "zh"
+});
+const transcriptWithUpdatedWorkAnalysis = insertOrReplaceTranscriptAnalysis(
+	transcriptWithWorkAnalysis,
+	updatedWorkAnalysisBlock,
+	"work-minutes",
+	"AI 纪要分析"
 );
+assert.doesNotMatch(transcriptWithUpdatedWorkAnalysis, /这是纪要。/);
+assert.match(transcriptWithUpdatedWorkAnalysis, /这是新纪要。/);
+assert.equal(
+	(transcriptWithUpdatedWorkAnalysis.match(/<!-- echo-notes-analysis-item:start work-minutes -->/g) ?? []).length,
+	1
+);
+assert.equal((transcriptWithUpdatedWorkAnalysis.match(/## AI 纪要分析/g) ?? []).length, 1);
+
+const studyAnalysisBlock = renderTranscriptAnalysisBlock({
+	templateId: "study-notes",
+	templateName: "学习纪要",
+	result: {
+		text: "## 核心概念\n\n概念说明。",
+		provider: "deepseek",
+		model: "deepseek-chat"
+	},
+	copyLanguage: "zh"
+});
+const transcriptWithTwoAnalyses = insertOrReplaceTranscriptAnalysis(
+	transcriptWithUpdatedWorkAnalysis,
+	studyAnalysisBlock,
+	"study-notes",
+	"AI 纪要分析"
+);
+assert.match(transcriptWithTwoAnalyses, /<!-- echo-notes-analysis-item:start work-minutes -->/);
+assert.match(transcriptWithTwoAnalyses, /<!-- echo-notes-analysis-item:start study-notes -->/);
+assert.equal((transcriptWithTwoAnalyses.match(/## AI 纪要分析/g) ?? []).length, 1);
 
 console.log("Smoke tests passed.");

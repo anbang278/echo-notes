@@ -1,3 +1,130 @@
-/*
-Echo Notes MVP 暂无自定义样式。
-*/
+.echo-notes-template-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin: 12px 0 18px;
+}
+
+.echo-notes-template-card {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 14px 16px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.echo-notes-template-card.is-disabled {
+	opacity: 0.72;
+}
+
+.echo-notes-template-card-content {
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.echo-notes-template-card-header {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.echo-notes-template-card-title {
+	font-size: var(--font-ui-medium);
+	font-weight: 600;
+	color: var(--text-normal);
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-template-badges {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.echo-notes-template-badge {
+	display: inline-flex;
+	align-items: center;
+	min-height: 20px;
+	padding: 2px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.2;
+	white-space: nowrap;
+}
+
+.echo-notes-template-badge.is-default {
+	border-color: var(--interactive-accent);
+	color: var(--interactive-accent);
+}
+
+.echo-notes-template-badge.is-disabled {
+	color: var(--text-faint);
+}
+
+.echo-notes-template-keywords {
+	display: flex;
+	align-items: flex-start;
+	gap: 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+}
+
+.echo-notes-template-keywords-label {
+	flex: 0 0 auto;
+	color: var(--text-faint);
+}
+
+.echo-notes-template-keywords-value {
+	min-width: 0;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+.echo-notes-template-card-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+	flex: 0 0 auto;
+}
+
+.echo-notes-template-modal .setting-item {
+	align-items: flex-start;
+}
+
+.echo-notes-template-modal .setting-item-control {
+	min-width: min(100%, 420px);
+}
+
+.echo-notes-template-modal textarea {
+	width: 100%;
+	min-height: 96px;
+	resize: vertical;
+}
+
+@media (max-width: 720px) {
+	.echo-notes-template-card {
+		flex-direction: column;
+	}
+
+	.echo-notes-template-card-actions {
+		width: 100%;
+		justify-content: flex-start;
+	}
+
+	.echo-notes-template-keywords {
+		flex-direction: column;
+	}
+}

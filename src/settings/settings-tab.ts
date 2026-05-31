@@ -215,7 +215,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("启用 AI 纪要分析")
-			.setDesc("开启后显示分析模型配置、模板提示词设置，并允许对转写稿生成 AI 纪要。")
+			.setDesc("开启后显示分析模型配置和分析模板设置，并允许对转写稿生成 AI 纪要。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.analysisEnabled)
@@ -232,7 +232,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Provider")
-			.setDesc("用于对转写稿生成工作纪要、学习纪要、产品需求挖掘纪要或自定义纪要。")
+			.setDesc("用于对转写稿生成工作纪要、学习纪要、产品需求挖掘纪要或自定义纪要的服务商。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
 					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
@@ -285,8 +285,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("默认分析方案")
-			.setDesc("录音链接上下三行未命中任何识别关键字时，使用这个方案生成 AI 纪要。若默认方案被禁用，会自动改用第一个已启用方案。")
+			.setName("默认分析模板")
+			.setDesc("录音链接上下三行未命中任何识别关键字时，使用这个模板生成 AI 纪要。若默认模板被禁用，会自动改用第一个已启用模板。")
 			.addDropdown((dropdown) => {
 				for (const template of this.plugin.settings.analysisTemplates) {
 					const suffix = template.enabled ? "" : "（未启用）";
@@ -301,86 +301,98 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			});
 
-		new Setting(containerEl).setName("分析方案").setHeading();
+		new Setting(containerEl).setName("分析模板").setHeading();
 
+		const templateListEl = containerEl.createDiv({ cls: "echo-notes-template-list" });
 		for (const template of this.plugin.settings.analysisTemplates) {
-			this.renderAnalysisTemplateSetting(containerEl, template);
+			this.renderAnalysisTemplateCard(templateListEl, template);
 		}
 
 		new Setting(containerEl)
-			.setName("新增自定义方案")
-			.setDesc("创建后可配置方案名称、识别关键字、系统提示词和自定义提示词。启用后会参与录音链接上下文匹配。")
+			.setName("新增自定义模板")
+			.setDesc("创建后可配置模板名称、识别关键字、系统提示词和自定义提示词。启用后会参与录音链接上下文匹配。")
 			.addButton((button) =>
 				button
-					.setButtonText("新增方案")
+					.setButtonText("新增模板")
 					.onClick(async () => {
-						this.plugin.settings.analysisTemplates.push(
-							createCustomAnalysisTemplate("自定义方案", this.plugin.settings.analysisTemplates)
-						);
+						const template = createCustomAnalysisTemplate("自定义模板", this.plugin.settings.analysisTemplates);
+						this.plugin.settings.analysisTemplates.push(template);
 						await this.plugin.saveSettings();
+						const savedTemplate = this.plugin.settings.analysisTemplates.find((candidate) => candidate.id === template.id) ?? template;
 						this.display();
+						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => this.display()).open();
 					})
 			);
 	}
 
-	private renderAnalysisTemplateSetting(containerEl: HTMLElement, template: AnalysisTemplateConfig): void {
-		const badges = [
-			template.builtin ? "预设" : "",
-			template.id === this.plugin.settings.defaultAnalysisTemplateId ? "默认" : "",
-			template.enabled ? "" : "未启用"
-		].filter(Boolean);
-		const label = badges.length > 0 ? `${template.name}（${badges.join("，")}）` : template.name;
+	private renderAnalysisTemplateCard(containerEl: HTMLElement, template: AnalysisTemplateConfig): void {
 		const keywords = template.recognitionKeywords.length > 0 ? template.recognitionKeywords.join("、") : "未设置";
+		const cardEl = containerEl.createDiv({ cls: "echo-notes-template-card" });
+		if (!template.enabled) {
+			cardEl.addClass("is-disabled");
+		}
 
-		new Setting(containerEl)
-			.setName(label)
-			.setDesc(`识别关键字：${keywords}`)
-			.addToggle((toggle) =>
-				toggle
-					.setTooltip("是否启用此分析方案")
-					.setValue(template.enabled)
-					.onChange(async (value) => {
-						template.enabled = value;
-						await this.plugin.saveSettings();
-						this.display();
-					})
-			)
-			.addButton((button) =>
-				button
-					.setButtonText("编辑")
-					.onClick(() => {
-						new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.display()).open();
-					})
-			)
-			.addButton((button) => {
-				if (!template.builtin) {
-					button
-						.setButtonText("删除")
-						.onClick(async () => {
-							this.plugin.settings.analysisTemplates = this.plugin.settings.analysisTemplates.filter(
-								(candidate) => candidate.id !== template.id
-							);
-							await this.plugin.saveSettings();
-							this.display();
-						});
-					return;
-				}
+		const contentEl = cardEl.createDiv({ cls: "echo-notes-template-card-content" });
+		const headerEl = contentEl.createDiv({ cls: "echo-notes-template-card-header" });
+		headerEl.createDiv({ cls: "echo-notes-template-card-title", text: template.name || template.id });
 
-				button
-					.setButtonText("恢复默认")
-					.onClick(async () => {
-						const restored = restoreDefaultAnalysisTemplate(template.id);
-						if (!restored) {
-							return;
-						}
-						const index = this.plugin.settings.analysisTemplates.findIndex((candidate) => candidate.id === template.id);
-						if (index !== -1) {
-							this.plugin.settings.analysisTemplates.splice(index, 1, restored);
-						}
-						await this.plugin.saveSettings();
-						this.display();
-					});
-			});
+		const badgesEl = headerEl.createDiv({ cls: "echo-notes-template-badges" });
+		if (template.id === this.plugin.settings.defaultAnalysisTemplateId) {
+			badgesEl.createSpan({ cls: "echo-notes-template-badge is-default", text: "默认" });
+		}
+		if (template.builtin) {
+			badgesEl.createSpan({ cls: "echo-notes-template-badge", text: "预设" });
+		}
+		if (!template.enabled) {
+			badgesEl.createSpan({ cls: "echo-notes-template-badge is-disabled", text: "未启用" });
+		}
+
+		const keywordEl = contentEl.createDiv({ cls: "echo-notes-template-keywords" });
+		keywordEl.createSpan({ cls: "echo-notes-template-keywords-label", text: "识别关键字：" });
+		keywordEl.createSpan({ cls: "echo-notes-template-keywords-value", text: keywords });
+
+		const actionEl = cardEl.createDiv({ cls: "echo-notes-template-card-actions" });
+		const editButton = actionEl.createEl("button", {
+			cls: "mod-cta",
+			text: "编辑"
+		});
+		editButton.type = "button";
+		editButton.addEventListener("click", () => {
+			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.display()).open();
+		});
+
+		const secondaryButton = actionEl.createEl("button", {
+			text: template.builtin ? "恢复默认" : "删除"
+		});
+		secondaryButton.type = "button";
+		secondaryButton.addEventListener("click", () => {
+			if (template.builtin) {
+				void this.restoreBuiltInAnalysisTemplate(template.id);
+				return;
+			}
+			void this.deleteCustomAnalysisTemplate(template.id);
+		});
+	}
+
+	private async restoreBuiltInAnalysisTemplate(templateId: string): Promise<void> {
+		const restored = restoreDefaultAnalysisTemplate(templateId);
+		if (!restored) {
+			return;
+		}
+		const index = this.plugin.settings.analysisTemplates.findIndex((candidate) => candidate.id === templateId);
+		if (index !== -1) {
+			this.plugin.settings.analysisTemplates.splice(index, 1, restored);
+		}
+		await this.plugin.saveSettings();
+		this.display();
+	}
+
+	private async deleteCustomAnalysisTemplate(templateId: string): Promise<void> {
+		this.plugin.settings.analysisTemplates = this.plugin.settings.analysisTemplates.filter(
+			(candidate) => candidate.id !== templateId
+		);
+		await this.plugin.saveSettings();
+		this.display();
 	}
 
 	private applyProviderDefaults(provider: ProviderId): void {
@@ -450,11 +462,12 @@ class AnalysisTemplateEditModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		this.titleEl.setText("编辑分析方案");
+		contentEl.addClass("echo-notes-template-modal");
+		this.titleEl.setText("编辑分析模板");
 
 		new Setting(contentEl)
-			.setName("方案名称")
-			.setDesc("用于设置页展示、生成分析文档标题和回写链接别名。")
+			.setName("模板名称")
+			.setDesc("用于设置页展示，以及转写稿内 AI 纪要分析区块的模板标题。")
 			.addText((text) =>
 				text
 					.setValue(this.draft.name)
@@ -464,8 +477,8 @@ class AnalysisTemplateEditModal extends Modal {
 			);
 
 		new Setting(contentEl)
-			.setName("启用方案")
-			.setDesc("开启后，此方案会参与录音链接上下三行的关键字识别；关闭后仍保留配置但不会自动使用。")
+			.setName("启用模板")
+			.setDesc("开启后，此模板会参与录音链接上下三行的关键字识别；关闭后仍保留配置但不会自动使用。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.draft.enabled)
@@ -503,7 +516,7 @@ class AnalysisTemplateEditModal extends Modal {
 
 		new Setting(contentEl)
 			.setName("自定义提示词")
-			.setDesc("定义该方案的分析重点、Markdown 结构和特殊输出要求。")
+			.setDesc("定义该模板的分析重点、Markdown 结构和特殊输出要求。")
 			.addTextArea((text) => {
 				text.inputEl.rows = 10;
 				text.inputEl.cols = 72;

@@ -221,7 +221,7 @@ export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
 export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNotesSettings, "analysisBaseUrl" | "analysisModel">> = {
 	deepseek: {
 		analysisBaseUrl: "https://api.deepseek.com/v1",
-		analysisModel: "deepseek-chat"
+		analysisModel: "deepseek-v4-pro"
 	},
 	openai: {
 		analysisBaseUrl: "https://api.openai.com/v1",
@@ -381,7 +381,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	copyLanguage: "zh",
 	analysisProvider: "deepseek",
 	analysisBaseUrl: "https://api.deepseek.com/v1",
-	analysisModel: "deepseek-chat",
+	analysisModel: "deepseek-v4-pro",
 	analysisEnabled: false,
 	defaultAnalysisTemplateId: "work-minutes",
 	analysisTemplates: createDefaultAnalysisTemplates(),
@@ -403,6 +403,10 @@ export interface LocalizedCopy {
 	analysisLinksHeading: string;
 	sourceTranscriptLabel: string;
 	analysisHeading: string;
+	analysisGeneratedAtLabel: string;
+	analysisProviderLabel: string;
+	analysisModelLabel: string;
+	analysisTraceIdLabel: string;
 }
 
 export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
@@ -417,7 +421,11 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		errorReasonLabel: "错误原因：",
 		analysisLinksHeading: "AI 纪要分析",
 		sourceTranscriptLabel: "来源转写稿：",
-		analysisHeading: "分析结果"
+		analysisHeading: "分析结果",
+		analysisGeneratedAtLabel: "生成时间：",
+		analysisProviderLabel: "Provider：",
+		analysisModelLabel: "模型：",
+		analysisTraceIdLabel: "Trace ID："
 	},
 	en: {
 		transcriptLinkAlias: "View the transcribed manuscript",
@@ -430,7 +438,11 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		errorReasonLabel: "Error reason:",
 		analysisLinksHeading: "AI Analysis",
 		sourceTranscriptLabel: "Source transcript: ",
-		analysisHeading: "Analysis"
+		analysisHeading: "Analysis",
+		analysisGeneratedAtLabel: "Generated at: ",
+		analysisProviderLabel: "Provider: ",
+		analysisModelLabel: "Model: ",
+		analysisTraceIdLabel: "Trace ID: "
 	}
 };
 
