@@ -1,9 +1,43 @@
 import type { TFile } from "obsidian";
 
+export interface TranscriptionSegmentRange {
+	index: number;
+	total: number;
+	startSeconds: number;
+	endSeconds: number;
+}
+
+export interface TranscriptionSegment extends TranscriptionSegmentRange {
+	text: string;
+	traceId?: string;
+}
+
+export type TranscriptionProgress =
+	| {
+			type: "long-audio-preparing";
+			segments: TranscriptionSegment[];
+	  }
+	| {
+			type: "long-audio-started";
+			totalSegments: number;
+			segments: TranscriptionSegment[];
+	  }
+	| {
+			type: "segment-started";
+			segment: TranscriptionSegmentRange;
+			segments: TranscriptionSegment[];
+	  }
+	| {
+			type: "segment-completed";
+			segment: TranscriptionSegment;
+			segments: TranscriptionSegment[];
+	  };
+
 export interface TranscriptionInput {
 	audioFile: TFile;
 	sourceNote?: TFile;
 	language?: string;
+	onProgress?: (progress: TranscriptionProgress) => Promise<void> | void;
 }
 
 export interface TranscriptionResult {
@@ -11,6 +45,7 @@ export interface TranscriptionResult {
 	provider: string;
 	model: string;
 	traceId?: string;
+	segments?: TranscriptionSegment[];
 	raw?: unknown;
 }
 
@@ -24,6 +59,7 @@ export type TranscriptionErrorCode =
 	| "missing_api_key"
 	| "unsupported_audio"
 	| "file_too_large"
+	| "audio_decode_error"
 	| "api_error"
 	| "invalid_response"
 	| "network_error";
@@ -45,5 +81,10 @@ export function shouldWriteFailedTranscript(error: unknown): boolean {
 		return true;
 	}
 
-	return error.code === "api_error" || error.code === "invalid_response" || error.code === "network_error";
+	return (
+		error.code === "audio_decode_error" ||
+		error.code === "api_error" ||
+		error.code === "invalid_response" ||
+		error.code === "network_error"
+	);
 }

@@ -537,6 +537,10 @@ export interface LocalizedCopy {
 	transcriptHeading: string;
 	failedTitle: string;
 	errorReasonLabel: string;
+	transcribingNotice: string;
+	partialFailureNotice: string;
+	segmentHeadingPrefix: string;
+	emptySegmentText: string;
 	analysisLinksHeading: string;
 	sourceTranscriptLabel: string;
 	analysisHeading: string;
@@ -556,6 +560,10 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		transcriptHeading: "转写稿",
 		failedTitle: "转写失败",
 		errorReasonLabel: "错误原因：",
+		transcribingNotice: "长音频正在逐段转写，已完成的分段会持续写入本文档。",
+		partialFailureNotice: "长音频逐段转写已中断，以下为已完成的分段。",
+		segmentHeadingPrefix: "分段",
+		emptySegmentText: "（本段暂无转写内容）",
 		analysisLinksHeading: "AI 纪要分析",
 		sourceTranscriptLabel: "来源转写稿：",
 		analysisHeading: "分析结果",
@@ -573,6 +581,10 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		transcriptHeading: "Transcribed manuscript",
 		failedTitle: "Transcription failed",
 		errorReasonLabel: "Error reason:",
+		transcribingNotice: "Long audio transcription is running. Completed segments are written here as they finish.",
+		partialFailureNotice: "Long audio transcription stopped. Completed segments are kept below.",
+		segmentHeadingPrefix: "Segment",
+		emptySegmentText: "(No transcript text for this segment yet.)",
 		analysisLinksHeading: "AI Analysis",
 		sourceTranscriptLabel: "Source transcript: ",
 		analysisHeading: "Analysis",

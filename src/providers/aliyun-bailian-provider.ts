@@ -1,11 +1,18 @@
 import { App, requestUrl } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
+import {
+	createWavAudioSegments,
+	estimateBase64DataUrlByteLength,
+	formatSegmentTimeRange,
+	type WavAudioSegment
+} from "../audio/audio-segmenter";
 import type { EchoNotesSettings } from "../settings/settings";
 import {
 	TranscriptionError,
 	type TranscriptionInput,
 	type TranscriptionProvider,
-	type TranscriptionResult
+	type TranscriptionResult,
+	type TranscriptionSegment
 } from "./transcription-provider";
 
 const BAILIAN_MAX_BASE64_BYTES = 10 * 1024 * 1024;
@@ -21,6 +28,12 @@ interface BailianChatCompletionResponse {
 		message?: string;
 		code?: string;
 	};
+}
+
+interface BailianTranscriptionResponse {
+	text: string;
+	traceId?: string;
+	raw: BailianChatCompletionResponse;
 }
 
 export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
@@ -48,9 +61,101 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 		}
 
 		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
-		const base64 = arrayBufferToBase64(audioBuffer);
-		const dataUrl = `data:${getAudioMimeType(input.audioFile)};base64,${base64}`;
+		const mimeType = getAudioMimeType(input.audioFile);
 
+		if (estimateBase64DataUrlByteLength(audioBuffer.byteLength, mimeType) > BAILIAN_MAX_BASE64_BYTES) {
+			return this.transcribeLongAudio(audioBuffer, input);
+		}
+
+		const result = await this.transcribeAudioBuffer(audioBuffer, mimeType);
+
+		return {
+			text: result.text,
+			provider: this.id,
+			model: this.settings.model,
+			traceId: result.traceId,
+			raw: result.raw
+		};
+	}
+
+	private async transcribeLongAudio(audioBuffer: ArrayBuffer, input: TranscriptionInput): Promise<TranscriptionResult> {
+		await input.onProgress?.({
+			type: "long-audio-preparing",
+			segments: []
+		});
+
+		const chunks = await this.createLongAudioChunks(audioBuffer);
+		const completedSegments: TranscriptionSegment[] = [];
+		const rawResponses: BailianChatCompletionResponse[] = [];
+
+		await input.onProgress?.({
+			type: "long-audio-started",
+			totalSegments: chunks.length,
+			segments: []
+		});
+
+		for (const chunk of chunks) {
+			await input.onProgress?.({
+				type: "segment-started",
+				segment: chunk,
+				segments: [...completedSegments]
+			});
+
+			const encodedByteLength = estimateBase64DataUrlByteLength(chunk.audioBuffer.byteLength, chunk.mimeType);
+			if (encodedByteLength > BAILIAN_MAX_BASE64_BYTES) {
+				throw new TranscriptionError(
+					"file_too_large",
+					`长音频分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）编码后仍超过阿里百炼 qwen3-asr-flash 10MB Base64 输入限制。`
+				);
+			}
+
+			const result = await this.transcribeAudioBuffer(chunk.audioBuffer, chunk.mimeType);
+			const segment: TranscriptionSegment = {
+				index: chunk.index,
+				total: chunk.total,
+				startSeconds: chunk.startSeconds,
+				endSeconds: chunk.endSeconds,
+				text: result.text,
+				traceId: result.traceId
+			};
+			completedSegments.push(segment);
+			rawResponses.push(result.raw);
+
+			await input.onProgress?.({
+				type: "segment-completed",
+				segment,
+				segments: [...completedSegments]
+			});
+		}
+
+		const traceId = completedSegments
+			.map((segment) => segment.traceId)
+			.filter((segmentTraceId): segmentTraceId is string => Boolean(segmentTraceId))
+			.join(", ");
+
+		return {
+			text: completedSegments.map((segment) => segment.text.trim()).filter(Boolean).join("\n\n"),
+			provider: this.id,
+			model: this.settings.model,
+			traceId: traceId || undefined,
+			segments: completedSegments,
+			raw: {
+				segments: rawResponses
+			}
+		};
+	}
+
+	private async createLongAudioChunks(audioBuffer: ArrayBuffer): Promise<WavAudioSegment[]> {
+		try {
+			return await createWavAudioSegments(audioBuffer);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new TranscriptionError("audio_decode_error", `音频解码失败，无法进行长音频分段转写：${message}`);
+		}
+	}
+
+	private async transcribeAudioBuffer(audioBuffer: ArrayBuffer, mimeType: string): Promise<BailianTranscriptionResponse> {
+		const dataUrl = `data:${mimeType};base64,${arrayBufferToBase64(audioBuffer)}`;
 		if (new TextEncoder().encode(dataUrl).byteLength > BAILIAN_MAX_BASE64_BYTES) {
 			throw new TranscriptionError(
 				"file_too_large",
@@ -58,33 +163,39 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 			);
 		}
 
-		const response = await requestUrl({
-			url: buildChatCompletionsUrl(this.settings.baseUrl),
-			method: "POST",
-			throw: false,
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				"Content-Type": "application/json"
-			},
-			body: JSON.stringify({
-				model: this.settings.model,
-				messages: [
-					{
-						role: "user",
-						content: [
-							{
-								type: "input_audio",
-								input_audio: {
-									data: dataUrl
+		let response;
+		try {
+			response = await requestUrl({
+				url: buildChatCompletionsUrl(this.settings.baseUrl),
+				method: "POST",
+				throw: false,
+				headers: {
+					Authorization: `Bearer ${this.apiKey.trim()}`,
+					"Content-Type": "application/json"
+				},
+				body: JSON.stringify({
+					model: this.settings.model,
+					messages: [
+						{
+							role: "user",
+							content: [
+								{
+									type: "input_audio",
+									input_audio: {
+										data: dataUrl
+									}
 								}
-							}
-						]
-					}
-				],
-				stream: false,
-				asr_options: buildAsrOptions(this.settings.language)
-			})
-		});
+							]
+						}
+					],
+					stream: false,
+					asr_options: buildAsrOptions(this.settings.language)
+				})
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new TranscriptionError("network_error", `阿里百炼 API 调用失败：${message}`);
+		}
 
 		const traceId = readTraceId(response.headers);
 		const data = response.json as BailianChatCompletionResponse;
@@ -100,8 +211,6 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 
 		return {
 			text,
-			provider: this.id,
-			model: this.settings.model,
 			traceId: traceId ?? data.id,
 			raw: data
 		};

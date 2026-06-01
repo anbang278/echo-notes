@@ -1,5 +1,6 @@
 import type { App, TFile } from "obsidian";
-import type { TranscriptionResult } from "../providers/transcription-provider";
+import { formatSegmentTimeRange } from "../audio/audio-segmenter";
+import type { TranscriptionResult, TranscriptionSegment } from "../providers/transcription-provider";
 import { getLocalizedCopy, type CopyLanguage } from "../settings/settings";
 
 export interface TranscriptTemplateInput {
@@ -20,6 +21,18 @@ export interface FailedTranscriptTemplateInput {
 	model: string;
 	error: string;
 	traceId?: string;
+	segments?: TranscriptionSegment[];
+	copyLanguage: CopyLanguage;
+}
+
+export interface ProgressTranscriptTemplateInput {
+	app: App;
+	audioFile: TFile;
+	transcriptPath: string;
+	sourceNote?: TFile;
+	provider: string;
+	model: string;
+	segments: TranscriptionSegment[];
 	copyLanguage: CopyLanguage;
 }
 
@@ -49,12 +62,16 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
 		`## ${copy.transcriptHeading}`,
 		"",
-		input.result.text.trim(),
+		renderTranscriptionBody(input.result, input.copyLanguage),
 		""
 	].join("\n");
 }
 
 export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateInput): string {
+	if (input.segments && input.segments.length > 0) {
+		return renderInterruptedTranscriptTemplate(input);
+	}
+
 	const copy = getLocalizedCopy(input.copyLanguage);
 	const sourceAudioLink = input.app.fileManager.generateMarkdownLink(input.audioFile, input.transcriptPath);
 	const sourceNoteLink = input.sourceNote
@@ -83,6 +100,130 @@ export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateIn
 	].join("\n");
 }
 
+export function renderProgressTranscriptTemplate(input: ProgressTranscriptTemplateInput): string {
+	const copy = getLocalizedCopy(input.copyLanguage);
+	const sourceAudioLink = input.app.fileManager.generateMarkdownLink(input.audioFile, input.transcriptPath);
+	const sourceNoteLink = input.sourceNote
+		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
+		: "";
+	const title = input.audioFile.basename;
+
+	return [
+		...renderTranscriptFrontmatter({
+			sourceAudioLink,
+			sourceNoteLink,
+			provider: input.provider,
+			model: input.model,
+			status: "transcribing"
+		}),
+		"",
+		`# ${title} ${copy.transcriptTitleSuffix}`,
+		"",
+		`${copy.sourceAudioLabel}!${sourceAudioLink}`,
+		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
+		`> ${copy.transcribingNotice}`,
+		"",
+		`## ${copy.transcriptHeading}`,
+		"",
+		renderSegmentsOrEmpty(input.segments, input.copyLanguage),
+		""
+	].join("\n");
+}
+
+export function renderTranscriptionSegments(segments: TranscriptionSegment[], copyLanguage: CopyLanguage): string {
+	const copy = getLocalizedCopy(copyLanguage);
+	return segments
+		.map((segment) =>
+			[
+				`### ${copy.segmentHeadingPrefix} ${segment.index.toString().padStart(2, "0")}（${formatSegmentTimeRange(segment)}）`,
+				...(segment.traceId ? [`<!-- trace_id: ${escapeHtmlComment(segment.traceId)} -->`] : []),
+				"",
+				segment.text.trim() || copy.emptySegmentText
+			].join("\n")
+		)
+		.join("\n\n");
+}
+
+function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInput): string {
+	const copy = getLocalizedCopy(input.copyLanguage);
+	const sourceAudioLink = input.app.fileManager.generateMarkdownLink(input.audioFile, input.transcriptPath);
+	const sourceNoteLink = input.sourceNote
+		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
+		: "";
+	const title = input.audioFile.basename;
+
+	return [
+		...renderTranscriptFrontmatter({
+			sourceAudioLink,
+			sourceNoteLink,
+			provider: input.provider,
+			model: input.model,
+			status: "failed",
+			error: input.error,
+			traceId: input.traceId
+		}),
+		"",
+		`# ${title} ${copy.transcriptTitleSuffix}`,
+		"",
+		`${copy.sourceAudioLabel}!${sourceAudioLink}`,
+		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
+		`> ${copy.partialFailureNotice}`,
+		"",
+		copy.errorReasonLabel,
+		"",
+		input.error,
+		"",
+		`## ${copy.transcriptHeading}`,
+		"",
+		renderSegmentsOrEmpty(input.segments ?? [], input.copyLanguage),
+		""
+	].join("\n");
+}
+
+function renderTranscriptFrontmatter(input: {
+	sourceAudioLink: string;
+	sourceNoteLink: string;
+	provider: string;
+	model: string;
+	status: "transcribing" | "failed";
+	error?: string;
+	traceId?: string;
+}): string[] {
+	return [
+		"---",
+		"type: audio-transcript",
+		`source_audio: "${escapeYaml(input.sourceAudioLink)}"`,
+		`source_note: "${escapeYaml(input.sourceNoteLink)}"`,
+		`provider: "${escapeYaml(input.provider)}"`,
+		`model: "${escapeYaml(input.model)}"`,
+		`transcribed_at: ${new Date().toISOString()}`,
+		`status: ${input.status}`,
+		...(input.error ? [`error: "${escapeYaml(input.error)}"`] : []),
+		`trace_id: "${escapeYaml(input.traceId ?? "")}"`,
+		"---"
+	];
+}
+
+function renderTranscriptionBody(result: TranscriptionResult, copyLanguage: CopyLanguage): string {
+	if (result.segments && result.segments.length > 0) {
+		return renderTranscriptionSegments(result.segments, copyLanguage);
+	}
+
+	return result.text.trim();
+}
+
+function renderSegmentsOrEmpty(segments: TranscriptionSegment[], copyLanguage: CopyLanguage): string {
+	if (segments.length > 0) {
+		return renderTranscriptionSegments(segments, copyLanguage);
+	}
+
+	return getLocalizedCopy(copyLanguage).emptySegmentText;
+}
+
 function escapeYaml(value: string): string {
 	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+}
+
+function escapeHtmlComment(value: string): string {
+	return value.replace(/--/g, "- -").replace(/>/g, "&gt;");
 }

@@ -16,6 +16,11 @@ import {
 	selectAnalysisTemplateForContext
 } from "../src/analysis/analysis-templates";
 import { parseAudioLinks } from "../src/audio/audio-link-parser";
+import {
+	createAudioSegmentRanges,
+	estimateBase64DataUrlByteLength,
+	formatSegmentTimeRange
+} from "../src/audio/audio-segmenter";
 import { LinkService } from "../src/obsidian/link-service";
 import {
 	createAnalysisTemplateId,
@@ -31,7 +36,12 @@ import {
 	parseHotkeyInput,
 	PROVIDER_LABELS
 } from "../src/settings/settings";
-import { renderFailedTranscriptTemplate, renderTranscriptTemplate } from "../src/transcript/transcript-template";
+import {
+	renderFailedTranscriptTemplate,
+	renderProgressTranscriptTemplate,
+	renderTranscriptTemplate,
+	renderTranscriptionSegments
+} from "../src/transcript/transcript-template";
 
 const sample = [
 	"![[Recording 20260531001942.m4a]]",
@@ -138,6 +148,101 @@ const englishFailedTranscript = renderFailedTranscriptTemplate({
 
 assert.match(englishFailedTranscript, /# Transcription failed/);
 assert.match(englishFailedTranscript, /Error reason:/);
+
+assert.equal(estimateBase64DataUrlByteLength(3, "audio/wav"), "data:audio/wav;base64,".length + 4);
+assert.equal(estimateBase64DataUrlByteLength(4, "audio/wav"), "data:audio/wav;base64,".length + 8);
+assert.equal(formatSegmentTimeRange({ startSeconds: 0, endSeconds: 180 }), "00:00-03:00");
+assert.equal(formatSegmentTimeRange({ startSeconds: 3661, endSeconds: 3725 }), "01:01:01-01:02:05");
+
+const plannedRanges = createAudioSegmentRanges(
+	560,
+	{ targetSegmentSeconds: 180, minSegmentSeconds: 30 },
+	(targetSeconds) => targetSeconds + 5
+);
+assert.deepEqual(
+	plannedRanges.map((range) => [range.index, range.total, range.startSeconds, range.endSeconds]),
+	[
+		[1, 3, 0, 185],
+		[2, 3, 185, 370],
+		[3, 3, 370, 560]
+	]
+);
+const fallbackRanges = createAudioSegmentRanges(
+	390,
+	{ targetSegmentSeconds: 180, minSegmentSeconds: 30 },
+	() => 10
+);
+assert.deepEqual(
+	fallbackRanges.map((range) => [range.index, range.total, range.startSeconds, range.endSeconds]),
+	[
+		[1, 2, 0, 180],
+		[2, 2, 180, 390]
+	]
+);
+
+const transcriptSegments = [
+	{
+		index: 1,
+		total: 2,
+		startSeconds: 0,
+		endSeconds: 180,
+		text: "第一段内容。",
+		traceId: "trace-1"
+	},
+	{
+		index: 2,
+		total: 2,
+		startSeconds: 180,
+		endSeconds: 321.4,
+		text: "第二段内容。"
+	}
+];
+const renderedSegments = renderTranscriptionSegments(transcriptSegments, "zh");
+assert.match(renderedSegments, /### 分段 01（00:00-03:00）/);
+assert.match(renderedSegments, /<!-- trace_id: trace-1 -->/);
+assert.match(renderedSegments, /### 分段 02（03:00-05:21）/);
+
+const segmentedTranscript = renderTranscriptTemplate({
+	app: templateApp as never,
+	audioFile: audioFile as never,
+	transcriptPath: "Recording 20260531001942.transcript.md",
+	result: {
+		text: "第一段内容。\n\n第二段内容。",
+		provider: "aliyun-bailian",
+		model: "qwen3-asr-flash",
+		segments: transcriptSegments
+	},
+	copyLanguage: "zh"
+});
+assert.match(segmentedTranscript, /status: done/);
+assert.match(segmentedTranscript, /### 分段 01（00:00-03:00）/);
+
+const progressTranscript = renderProgressTranscriptTemplate({
+	app: templateApp as never,
+	audioFile: audioFile as never,
+	transcriptPath: "Recording 20260531001942.transcript.md",
+	provider: "aliyun-bailian",
+	model: "qwen3-asr-flash",
+	segments: [transcriptSegments[0]],
+	copyLanguage: "zh"
+});
+assert.match(progressTranscript, /status: transcribing/);
+assert.match(progressTranscript, /长音频正在逐段转写/);
+assert.match(progressTranscript, /第一段内容。/);
+
+const partialFailedTranscript = renderFailedTranscriptTemplate({
+	app: templateApp as never,
+	audioFile: audioFile as never,
+	transcriptPath: "Recording 20260531001942.transcript.md",
+	provider: "aliyun-bailian",
+	model: "qwen3-asr-flash",
+	error: "第 2 段请求失败。",
+	segments: [transcriptSegments[0]],
+	copyLanguage: "zh"
+});
+assert.match(partialFailedTranscript, /status: failed/);
+assert.match(partialFailedTranscript, /长音频逐段转写已中断/);
+assert.match(partialFailedTranscript, /第一段内容。/);
 
 assert.deepEqual(ANALYSIS_TEMPLATE_ORDER, ["work-minutes", "study-notes", "product-requirement-mining"]);
 assert.match(DEFAULT_ANALYSIS_SYSTEM_PROMPT, /专业的录音文本分析助手/);

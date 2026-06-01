@@ -94,8 +94,10 @@ Transcription uploads the selected audio file to the configured transcription pr
 Provider limits:
 
 - SiliconFlow: files over 50 MB are blocked before upload.
-- Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs, and payloads over 10 MB are blocked before upload.
+- Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
 - OpenAI-compatible providers: files over 25 MB are blocked before upload.
+
+Long-audio chunking currently applies only to Alibaba Bailian `qwen3-asr-flash`. Chunked transcripts include segment headings such as `### Segment 01（00:00-03:00）` so you can match text back to the original recording. If local browser audio decoding fails, Echo Notes writes a failed transcript with the reason.
 
 ## Configure a Transcription Provider
 

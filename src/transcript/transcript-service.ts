@@ -1,8 +1,12 @@
 import { App, normalizePath, TFile } from "obsidian";
-import type { TranscriptionResult } from "../providers/transcription-provider";
+import type { TranscriptionResult, TranscriptionSegment } from "../providers/transcription-provider";
 import type { EchoNotesSettings } from "../settings/settings";
 import { FileService, getBaseName, getParentPath } from "../obsidian/file-service";
-import { renderFailedTranscriptTemplate, renderTranscriptTemplate } from "./transcript-template";
+import {
+	renderFailedTranscriptTemplate,
+	renderProgressTranscriptTemplate,
+	renderTranscriptTemplate
+} from "./transcript-template";
 
 export class TranscriptService {
 	private app: App;
@@ -50,13 +54,35 @@ export class TranscriptService {
 		return this.writeTranscript(transcriptPath, content);
 	}
 
+	async writeTranscribingTranscript(
+		audioFile: TFile,
+		sourceNote: TFile | undefined,
+		provider: string,
+		model: string,
+		segments: TranscriptionSegment[]
+	): Promise<TFile> {
+		const transcriptPath = this.getTranscriptPath(audioFile);
+		const content = renderProgressTranscriptTemplate({
+			app: this.app,
+			audioFile,
+			transcriptPath,
+			sourceNote,
+			provider,
+			model,
+			segments,
+			copyLanguage: this.settings.copyLanguage
+		});
+		return this.writeTranscript(transcriptPath, content);
+	}
+
 	async writeFailedTranscript(
 		audioFile: TFile,
 		sourceNote: TFile | undefined,
 		provider: string,
 		model: string,
 		error: string,
-		traceId?: string
+		traceId?: string,
+		segments?: TranscriptionSegment[]
 	): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
 		const content = renderFailedTranscriptTemplate({
@@ -68,6 +94,7 @@ export class TranscriptService {
 			model,
 			error,
 			traceId,
+			segments,
 			copyLanguage: this.settings.copyLanguage
 		});
 		return this.writeTranscript(transcriptPath, content);

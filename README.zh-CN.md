@@ -94,8 +94,10 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 服务商限制：
 
 - 硅基流动：超过 50 MB 的文件会在上传前被阻止。
-- 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL，编码后超过 10 MB 会被阻止。
+- 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
 - OpenAI-compatible 服务商：超过 25 MB 的文件会在上传前被阻止。
+
+长音频分段目前只适用于阿里百炼 `qwen3-asr-flash`。分段 transcript 会保留类似 `### 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。如果本地浏览器音频解码失败，Echo Notes 会写入带失败原因的 transcript。
 
 ## 配置转写服务商
 
