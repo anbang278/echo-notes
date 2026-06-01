@@ -45,7 +45,7 @@ Echo Notes 的思路是让原始录音、完整转写稿和 AI 分析结果都�
 - 生成带 source metadata 的 Markdown 转写稿。
 - 在原始音频引用下方插入转写稿链接。
 - 跳过已存在的转写稿，并补充缺失链接。
-- 在设置页控制 Obsidian 官方录音机开关，并为官方录音机代理命令配置默认快捷键。
+- 在设置页控制 Obsidian 核心插件录音机开关，并为其代理命令配置默认快捷键。
 - 使用独立 AI 分析模型，将转写稿生成工作纪要、学习纪要或产品需求挖掘纪要。
 - AI 纪要分析在后台异步执行，完成后直接写回对应转写稿。
 - AI 纪要分析会根据录音链接上下三行的识别关键字自动选择分析模板，未命中时使用默认模板。
@@ -117,19 +117,19 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 | Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` |
 | 自定义兼容接口（Custom OpenAI-compatible） | 你的接口地址 | `whisper-1` |
 
-## 配置官方录音机
+## 配置 Obsidian 核心插件录音机
 
-Echo Notes 依赖 Obsidian 官方 `Audio recorder` Core plugin 生成录音文件。你可以在 Echo Notes 设置页的“官方录音机”区域开启或关闭该 Core plugin。
+Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你可以在 Echo Notes 设置页顶部的“Obsidian 核心插件录音机”区域开启或关闭该 Core plugin。
 
 该区域还会注册 Echo Notes 代理命令，并为代理命令设置默认快捷键：
 
 | 动作 | 命令 | 默认快捷键 |
 | --- | --- | --- |
-| 开始官方录音机录音 | `Echo Notes: Start official audio recorder` | `Ctrl+L` |
-| 停止官方录音机录音 | `Echo Notes: Stop official audio recorder` | `Ctrl+S` |
+| 开始 Obsidian 核心插件录音机录音 | `Echo Notes: Start Obsidian core plugin audio recorder` | `Ctrl+L` |
+| 停止 Obsidian 核心插件录音机录音 | `Echo Notes: Stop Obsidian core plugin audio recorder` | `Ctrl+S` |
 | 转写当前笔记全部音频 | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
 
-这些快捷键属于 Echo Notes 命令，不会直接改写 Obsidian 官方 `audio-recorder:start`、`audio-recorder:stop` 命令的用户热键配置。如果你已经在 Obsidian Hotkeys 中手动设置过同名 Echo Notes 命令，Obsidian 会优先使用你的手动配置。
+这些快捷键属于 Echo Notes 命令，不会直接改写 Obsidian 核心插件 `audio-recorder:start`、`audio-recorder:stop` 命令的用户热键配置。如果你已经在 Obsidian Hotkeys 中手动设置过同名 Echo Notes 命令，Obsidian 会优先使用你的手动配置。
 
 ## 配置 AI 纪要分析
 

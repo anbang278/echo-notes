@@ -33,6 +33,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
+		this.renderOfficialRecorderSettings(containerEl);
+
 		new Setting(containerEl).setName("Provider").setHeading();
 
 		new Setting(containerEl)
@@ -102,7 +104,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
-		this.renderOfficialRecorderSettings(containerEl);
 		this.renderAnalysisSettings(containerEl);
 
 		new Setting(containerEl).setName("输出与插入").setHeading();
@@ -223,10 +224,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					? "已开启"
 					: "未开启";
 
-		new Setting(containerEl).setName("官方录音机").setHeading();
+		new Setting(containerEl).setName("Obsidian 核心插件录音机").setHeading();
 
 		new Setting(containerEl)
-			.setName("启用 Obsidian 官方录音机")
+			.setName("启用 Obsidian 核心插件录音机")
 			.setDesc(`控制 Obsidian Core plugin：Audio recorder。当前状态：${status}。`)
 			.addToggle((toggle) =>
 				toggle
@@ -239,8 +240,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		this.renderHotkeySetting(
 			containerEl,
-			"录音机开启快捷键",
-			"触发 Echo Notes: Start official audio recorder，再调用官方 audio-recorder:start 命令。",
+			"Obsidian 核心插件录音机开启快捷键",
+			"触发 Echo Notes: Start Obsidian core plugin audio recorder，再调用 audio-recorder:start 命令。",
 			"Ctrl+L",
 			this.plugin.settings.officialRecorderStartHotkey,
 			async (hotkey) => {
@@ -250,8 +251,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		this.renderHotkeySetting(
 			containerEl,
-			"录音机关闭快捷键",
-			"触发 Echo Notes: Stop official audio recorder，再调用官方 audio-recorder:stop 命令。",
+			"Obsidian 核心插件录音机关闭快捷键",
+			"触发 Echo Notes: Stop Obsidian core plugin audio recorder，再调用 audio-recorder:stop 命令。",
 			"Ctrl+S",
 			this.plugin.settings.officialRecorderStopHotkey,
 			async (hotkey) => {

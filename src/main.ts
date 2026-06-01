@@ -135,7 +135,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const internalPlugins = this.getInternalPlugins();
 		const internalPlugin = this.getInternalPlugin(AUDIO_RECORDER_PLUGIN_ID);
 		if (!internalPlugins || !internalPlugin) {
-			new Notice("当前 Obsidian 版本未暴露官方录音机内部 API，请到 Core plugins 手动开启 Audio recorder。");
+			new Notice("当前 Obsidian 版本未暴露核心插件录音机内部 API，请到 Core plugins 手动开启 Audio recorder。");
 			return false;
 		}
 
@@ -151,16 +151,16 @@ export default class EchoNotesPlugin extends Plugin {
 			} else if (!enabled && typeof internalPlugins.disablePlugin === "function") {
 				await internalPlugins.disablePlugin(AUDIO_RECORDER_PLUGIN_ID);
 			} else {
-				new Notice("无法切换官方录音机，请到 Core plugins 手动调整 Audio recorder。");
+				new Notice("无法切换 Obsidian 核心插件录音机，请到 Core plugins 手动调整 Audio recorder。");
 				return false;
 			}
 		} catch (error) {
-			new Notice(`切换官方录音机失败：${getErrorMessage(error)}`);
-			this.log("切换官方录音机失败", error);
+			new Notice(`切换 Obsidian 核心插件录音机失败：${getErrorMessage(error)}`);
+			this.log("切换 Obsidian 核心插件录音机失败", error);
 			return false;
 		}
 
-		new Notice(enabled ? "已开启 Obsidian 官方录音机。" : "已关闭 Obsidian 官方录音机。");
+		new Notice(enabled ? "已开启 Obsidian 核心插件录音机。" : "已关闭 Obsidian 核心插件录音机。");
 		return true;
 	}
 
@@ -200,7 +200,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "start-official-audio-recorder",
-			name: "Start official audio recorder",
+			name: "Start Obsidian core plugin audio recorder",
 			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStartHotkey),
 			callback: () => {
 				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_START_COMMAND_ID, "开始录音");
@@ -209,7 +209,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "stop-official-audio-recorder",
-			name: "Stop official audio recorder",
+			name: "Stop Obsidian core plugin audio recorder",
 			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStopHotkey),
 			callback: () => {
 				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_STOP_COMMAND_ID, "停止录音");
@@ -256,24 +256,24 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private executeOfficialAudioRecorderCommand(commandId: string, actionLabel: string): void {
 		if (this.isOfficialAudioRecorderEnabled() === false) {
-			new Notice("Obsidian 官方录音机未开启，请先在 Echo Notes 设置中打开官方录音机。");
+			new Notice("Obsidian 核心插件录音机未开启，请先在 Echo Notes 设置中打开。");
 			return;
 		}
 
 		const commandManager = this.getCommandManager();
 		if (commandManager?.commands && !commandManager.commands[commandId]) {
-			new Notice(`找不到官方录音机命令：${commandId}`);
+			new Notice(`找不到 Obsidian 核心插件录音机命令：${commandId}`);
 			return;
 		}
 
 		try {
 			const executed = commandManager?.executeCommandById?.(commandId);
 			if (executed === false || !commandManager?.executeCommandById) {
-				new Notice(`无法执行官方录音机命令：${actionLabel}`);
+				new Notice(`无法执行 Obsidian 核心插件录音机命令：${actionLabel}`);
 			}
 		} catch (error) {
-			new Notice(`官方录音机命令执行失败：${getErrorMessage(error)}`);
-			this.log("官方录音机命令执行失败", error);
+			new Notice(`Obsidian 核心插件录音机命令执行失败：${getErrorMessage(error)}`);
+			this.log("Obsidian 核心插件录音机命令执行失败", error);
 		}
 	}
 
