@@ -1,3 +1,5 @@
+import type { Hotkey, Modifier } from "obsidian";
+
 export type ProviderId =
 	| "siliconflow"
 	| "aliyun-bailian"
@@ -30,6 +32,8 @@ export type InsertStyle = "linkOnly" | "callout";
 export type CopyLanguage = "zh" | "en";
 
 export type AnalysisProviderId = ProviderId;
+
+export type EchoNotesHotkeySetting = Hotkey | null;
 
 export type BuiltInAnalysisTemplateId = "work-minutes" | "study-notes" | "product-requirement-mining";
 
@@ -66,6 +70,9 @@ export interface EchoNotesSettings {
 	skipExistingTranscript: boolean;
 	autoTranscribeOnAudioLink: boolean;
 	autoTranscribeOnAudioCreated: boolean;
+	officialRecorderStartHotkey: EchoNotesHotkeySetting;
+	officialRecorderStopHotkey: EchoNotesHotkeySetting;
+	transcribeAllAudioHotkey: EchoNotesHotkeySetting;
 	verboseLog: boolean;
 }
 
@@ -464,7 +471,61 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	skipExistingTranscript: true,
 	autoTranscribeOnAudioLink: false,
 	autoTranscribeOnAudioCreated: false,
+	officialRecorderStartHotkey: {
+		modifiers: ["Ctrl"],
+		key: "L"
+	},
+	officialRecorderStopHotkey: {
+		modifiers: ["Ctrl"],
+		key: "S"
+	},
+	transcribeAllAudioHotkey: {
+		modifiers: ["Ctrl"],
+		key: "Z"
+	},
 	verboseLog: false
+};
+
+const MODIFIER_ORDER: Modifier[] = ["Mod", "Ctrl", "Meta", "Shift", "Alt"];
+
+const MODIFIER_ALIASES: Record<string, Modifier> = {
+	mod: "Mod",
+	ctrl: "Ctrl",
+	control: "Ctrl",
+	meta: "Meta",
+	cmd: "Meta",
+	command: "Meta",
+	shift: "Shift",
+	alt: "Alt",
+	option: "Alt"
+};
+
+const KEY_ALIASES: Record<string, string> = {
+	space: "Space",
+	spacebar: "Space",
+	enter: "Enter",
+	return: "Enter",
+	escape: "Escape",
+	esc: "Escape",
+	tab: "Tab",
+	backspace: "Backspace",
+	delete: "Delete",
+	del: "Delete",
+	up: "ArrowUp",
+	arrowup: "ArrowUp",
+	down: "ArrowDown",
+	arrowdown: "ArrowDown",
+	left: "ArrowLeft",
+	arrowleft: "ArrowLeft",
+	right: "ArrowRight",
+	arrowright: "ArrowRight",
+	plus: "+",
+	comma: ",",
+	period: ".",
+	dot: ".",
+	minus: "-",
+	dash: "-",
+	equal: "="
 };
 
 export interface LocalizedCopy {
@@ -564,6 +625,18 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
 	settings.defaultAnalysisTemplateId = normalizeDefaultAnalysisTemplateId(rawDefaultAnalysisTemplateId, settings.analysisTemplates);
+	settings.officialRecorderStartHotkey = normalizeHotkeySetting(
+		raw.officialRecorderStartHotkey,
+		DEFAULT_SETTINGS.officialRecorderStartHotkey
+	);
+	settings.officialRecorderStopHotkey = normalizeHotkeySetting(
+		raw.officialRecorderStopHotkey,
+		DEFAULT_SETTINGS.officialRecorderStopHotkey
+	);
+	settings.transcribeAllAudioHotkey = normalizeHotkeySetting(
+		raw.transcribeAllAudioHotkey,
+		DEFAULT_SETTINGS.transcribeAllAudioHotkey
+	);
 
 	const mutableSettings = settings as EchoNotesSettings & Record<string, unknown>;
 	delete mutableSettings.autoAnalyzeAfterTranscription;
@@ -739,6 +812,130 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
 	return result;
 }
 
+export function parseHotkeyInput(value: string): EchoNotesHotkeySetting | undefined {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	const rawParts = trimmed.split("+").map((part) => part.trim()).filter(Boolean);
+	if (rawParts.length === 0) {
+		return null;
+	}
+
+	const modifiers: Modifier[] = [];
+	let key = "";
+
+	for (const part of rawParts) {
+		const normalizedPart = part.toLowerCase();
+		const modifier = MODIFIER_ALIASES[normalizedPart];
+		if (modifier) {
+			if (!modifiers.includes(modifier)) {
+				modifiers.push(modifier);
+			}
+			continue;
+		}
+
+		const normalizedKey = normalizeHotkeyKey(part);
+		if (!normalizedKey || key) {
+			return undefined;
+		}
+		key = normalizedKey;
+	}
+
+	if (!key) {
+		return undefined;
+	}
+
+	return {
+		modifiers: sortModifiers(modifiers),
+		key
+	};
+}
+
+export function formatHotkey(hotkey: EchoNotesHotkeySetting): string {
+	if (!hotkey) {
+		return "";
+	}
+	return [...hotkey.modifiers, hotkey.key].join("+");
+}
+
+export function cloneHotkey(hotkey: EchoNotesHotkeySetting): EchoNotesHotkeySetting {
+	if (!hotkey) {
+		return null;
+	}
+	return {
+		modifiers: [...hotkey.modifiers],
+		key: hotkey.key
+	};
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function normalizeHotkeySetting(value: unknown, fallback: EchoNotesHotkeySetting): EchoNotesHotkeySetting {
+	if (value === null) {
+		return null;
+	}
+
+	if (typeof value === "string") {
+		return parseHotkeyInput(value) ?? cloneHotkey(fallback);
+	}
+
+	if (isHotkeyLike(value)) {
+		if (!value.modifiers.every(isModifier)) {
+			return cloneHotkey(fallback);
+		}
+		const normalizedModifiers = sortModifiers(value.modifiers);
+		const normalizedKey = normalizeHotkeyKey(value.key);
+		if (normalizedKey) {
+			return {
+				modifiers: normalizedModifiers,
+				key: normalizedKey
+			};
+		}
+	}
+
+	return cloneHotkey(fallback);
+}
+
+function isHotkeyLike(value: unknown): value is { modifiers: unknown[]; key: string } {
+	return isRecord(value) && Array.isArray(value.modifiers) && typeof value.key === "string";
+}
+
+function isModifier(value: unknown): value is Modifier {
+	return typeof value === "string" && MODIFIER_ORDER.includes(value as Modifier);
+}
+
+function sortModifiers(modifiers: Modifier[]): Modifier[] {
+	const unique = new Set(modifiers);
+	return MODIFIER_ORDER.filter((modifier) => unique.has(modifier));
+}
+
+function normalizeHotkeyKey(value: string): string {
+	const trimmed = value.trim();
+	if (!trimmed || /\s/.test(trimmed)) {
+		return "";
+	}
+
+	const lower = trimmed.toLowerCase();
+	const alias = KEY_ALIASES[lower];
+	if (alias) {
+		return alias;
+	}
+
+	if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(trimmed)) {
+		return trimmed.toUpperCase();
+	}
+
+	if (trimmed.length === 1) {
+		return /[a-z]/i.test(trimmed) ? trimmed.toUpperCase() : trimmed;
+	}
+
+	if (/^arrow(up|down|left|right)$/i.test(trimmed)) {
+		return `Arrow${trimmed.slice(5, 6).toUpperCase()}${trimmed.slice(6).toLowerCase()}`;
+	}
+
+	return "";
 }

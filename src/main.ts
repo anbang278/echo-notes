@@ -1,4 +1,4 @@
-import { Editor, Notice, Plugin, TFile, type MarkdownFileInfo } from "obsidian";
+import { Editor, Notice, Plugin, TFile, type Hotkey, type MarkdownFileInfo } from "obsidian";
 import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
 import { AnalysisService } from "./analysis/analysis-service";
 import {
@@ -13,16 +13,57 @@ import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { shouldWriteFailedTranscript, TranscriptionError } from "./providers/transcription-provider";
-import { normalizeEchoNotesSettings, type AnalysisTemplateConfig, type EchoNotesSettings } from "./settings/settings";
+import {
+	cloneHotkey,
+	normalizeEchoNotesSettings,
+	type AnalysisTemplateConfig,
+	type EchoNotesHotkeySetting,
+	type EchoNotesSettings
+} from "./settings/settings";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { TranscriptService } from "./transcript/transcript-service";
 
 const API_KEY_SECRET_ID = "echo-notes-api-key";
 const ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
+const AUDIO_RECORDER_PLUGIN_ID = "audio-recorder";
+const AUDIO_RECORDER_START_COMMAND_ID = "audio-recorder:start";
+const AUDIO_RECORDER_STOP_COMMAND_ID = "audio-recorder:stop";
+
+const ECHO_NOTES_COMMAND_IDS = [
+	"start-official-audio-recorder",
+	"stop-official-audio-recorder",
+	"transcribe-selected-audio",
+	"transcribe-all-audio-files-in-current-note"
+];
 
 interface ProcessAudioResult {
 	transcriptFile: TFile;
 	analysisEligible: boolean;
+}
+
+interface ObsidianCommandManager {
+	executeCommandById?: (id: string) => boolean | void;
+	commands?: Record<string, unknown>;
+}
+
+interface InternalPlugin {
+	enabled?: boolean;
+	enable?: (save?: boolean) => Promise<void> | void;
+	disable?: (save?: boolean) => Promise<void> | void;
+}
+
+interface InternalPlugins {
+	plugins?: Record<string, InternalPlugin>;
+	getPluginById?: (id: string) => InternalPlugin | null | undefined;
+	getEnabledPluginById?: (id: string) => InternalPlugin | null | undefined;
+	enablePlugin?: (id: string) => Promise<void> | void;
+	disablePlugin?: (id: string) => Promise<void> | void;
+	setEnable?: (id: string, enabled: boolean) => Promise<void> | void;
+}
+
+interface AppWithInternals {
+	commands?: ObsidianCommandManager;
+	internalPlugins?: InternalPlugins;
 }
 
 export default class EchoNotesPlugin extends Plugin {
@@ -68,6 +109,61 @@ export default class EchoNotesPlugin extends Plugin {
 		this.refreshServices();
 	}
 
+	refreshRegisteredCommands(): void {
+		this.registerCommands();
+	}
+
+	isOfficialAudioRecorderEnabled(): boolean | null {
+		const internalPlugins = this.getInternalPlugins();
+		const internalPlugin = this.getInternalPlugin(AUDIO_RECORDER_PLUGIN_ID);
+		if (!internalPlugins || !internalPlugin) {
+			return null;
+		}
+
+		if (typeof internalPlugin.enabled === "boolean") {
+			return internalPlugin.enabled;
+		}
+
+		if (typeof internalPlugins.getEnabledPluginById === "function") {
+			return Boolean(internalPlugins.getEnabledPluginById(AUDIO_RECORDER_PLUGIN_ID));
+		}
+
+		return null;
+	}
+
+	async setOfficialAudioRecorderEnabled(enabled: boolean): Promise<boolean> {
+		const internalPlugins = this.getInternalPlugins();
+		const internalPlugin = this.getInternalPlugin(AUDIO_RECORDER_PLUGIN_ID);
+		if (!internalPlugins || !internalPlugin) {
+			new Notice("当前 Obsidian 版本未暴露官方录音机内部 API，请到 Core plugins 手动开启 Audio recorder。");
+			return false;
+		}
+
+		try {
+			if (typeof internalPlugins.setEnable === "function") {
+				await internalPlugins.setEnable(AUDIO_RECORDER_PLUGIN_ID, enabled);
+			} else if (enabled && typeof internalPlugin.enable === "function") {
+				await internalPlugin.enable(true);
+			} else if (!enabled && typeof internalPlugin.disable === "function") {
+				await internalPlugin.disable(true);
+			} else if (enabled && typeof internalPlugins.enablePlugin === "function") {
+				await internalPlugins.enablePlugin(AUDIO_RECORDER_PLUGIN_ID);
+			} else if (!enabled && typeof internalPlugins.disablePlugin === "function") {
+				await internalPlugins.disablePlugin(AUDIO_RECORDER_PLUGIN_ID);
+			} else {
+				new Notice("无法切换官方录音机，请到 Core plugins 手动调整 Audio recorder。");
+				return false;
+			}
+		} catch (error) {
+			new Notice(`切换官方录音机失败：${getErrorMessage(error)}`);
+			this.log("切换官方录音机失败", error);
+			return false;
+		}
+
+		new Notice(enabled ? "已开启 Obsidian 官方录音机。" : "已关闭 Obsidian 官方录音机。");
+		return true;
+	}
+
 	getApiKey(): string {
 		return this.app.secretStorage.getSecret(API_KEY_SECRET_ID) ?? this.settings.apiKey ?? "";
 	}
@@ -100,6 +196,26 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private registerCommands(): void {
+		this.removeRegisteredCommands();
+
+		this.addCommand({
+			id: "start-official-audio-recorder",
+			name: "Start official audio recorder",
+			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStartHotkey),
+			callback: () => {
+				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_START_COMMAND_ID, "开始录音");
+			}
+		});
+
+		this.addCommand({
+			id: "stop-official-audio-recorder",
+			name: "Stop official audio recorder",
+			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStopHotkey),
+			callback: () => {
+				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_STOP_COMMAND_ID, "停止录音");
+			}
+		});
+
 		this.addCommand({
 			id: "transcribe-selected-audio",
 			name: "Transcribe selected audio",
@@ -111,10 +227,76 @@ export default class EchoNotesPlugin extends Plugin {
 		this.addCommand({
 			id: "transcribe-all-audio-files-in-current-note",
 			name: "Transcribe all audio files in current note",
+			hotkeys: this.getCommandHotkeys(this.settings.transcribeAllAudioHotkey),
 			editorCallback: (editor, view) => {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
 			}
 		});
+	}
+
+	private removeRegisteredCommands(): void {
+		for (const commandId of ECHO_NOTES_COMMAND_IDS) {
+			this.removeCommandIfRegistered(commandId);
+			this.removeCommandIfRegistered(`${this.manifest.id}:${commandId}`);
+		}
+	}
+
+	private removeCommandIfRegistered(commandId: string): void {
+		try {
+			this.removeCommand(commandId);
+		} catch {
+			// 命令尚未注册时，部分 Obsidian 版本会抛错。
+		}
+	}
+
+	private getCommandHotkeys(hotkey: EchoNotesHotkeySetting): Hotkey[] {
+		const cloned = cloneHotkey(hotkey);
+		return cloned ? [cloned] : [];
+	}
+
+	private executeOfficialAudioRecorderCommand(commandId: string, actionLabel: string): void {
+		if (this.isOfficialAudioRecorderEnabled() === false) {
+			new Notice("Obsidian 官方录音机未开启，请先在 Echo Notes 设置中打开官方录音机。");
+			return;
+		}
+
+		const commandManager = this.getCommandManager();
+		if (commandManager?.commands && !commandManager.commands[commandId]) {
+			new Notice(`找不到官方录音机命令：${commandId}`);
+			return;
+		}
+
+		try {
+			const executed = commandManager?.executeCommandById?.(commandId);
+			if (executed === false || !commandManager?.executeCommandById) {
+				new Notice(`无法执行官方录音机命令：${actionLabel}`);
+			}
+		} catch (error) {
+			new Notice(`官方录音机命令执行失败：${getErrorMessage(error)}`);
+			this.log("官方录音机命令执行失败", error);
+		}
+	}
+
+	private getCommandManager(): ObsidianCommandManager | undefined {
+		return (this.app as unknown as AppWithInternals).commands;
+	}
+
+	private getInternalPlugins(): InternalPlugins | undefined {
+		return (this.app as unknown as AppWithInternals).internalPlugins;
+	}
+
+	private getInternalPlugin(pluginId: string): InternalPlugin | null {
+		const internalPlugins = this.getInternalPlugins();
+		if (!internalPlugins) {
+			return null;
+		}
+
+		return (
+			internalPlugins.getPluginById?.(pluginId) ??
+			internalPlugins.plugins?.[pluginId] ??
+			internalPlugins.getEnabledPluginById?.(pluginId) ??
+			null
+		);
 	}
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {

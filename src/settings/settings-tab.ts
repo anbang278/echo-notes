@@ -1,4 +1,4 @@
-import { App, Modal, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
@@ -8,11 +8,14 @@ import {
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
 	createCustomAnalysisTemplate,
+	formatHotkey,
+	parseHotkeyInput,
 	parseRecognitionKeywordsInput,
 	restoreDefaultAnalysisTemplate,
 	type AnalysisProviderId,
 	type AnalysisTemplateConfig,
 	type CopyLanguage,
+	type EchoNotesHotkeySetting,
 	type InsertStyle,
 	type OutputStrategy,
 	type ProviderId
@@ -99,6 +102,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
+		this.renderOfficialRecorderSettings(containerEl);
 		this.renderAnalysisSettings(containerEl);
 
 		new Setting(containerEl).setName("输出与插入").setHeading();
@@ -206,6 +210,101 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.verboseLog = value;
 						await this.plugin.saveSettings();
+					})
+			);
+	}
+
+	private renderOfficialRecorderSettings(containerEl: HTMLElement): void {
+		const recorderEnabled = this.plugin.isOfficialAudioRecorderEnabled();
+		const status =
+			recorderEnabled === null
+				? "无法读取状态"
+				: recorderEnabled
+					? "已开启"
+					: "未开启";
+
+		new Setting(containerEl).setName("官方录音机").setHeading();
+
+		new Setting(containerEl)
+			.setName("启用 Obsidian 官方录音机")
+			.setDesc(`控制 Obsidian Core plugin：Audio recorder。当前状态：${status}。`)
+			.addToggle((toggle) =>
+				toggle
+					.setValue(recorderEnabled === true)
+					.onChange(async (value) => {
+						await this.plugin.setOfficialAudioRecorderEnabled(value);
+						this.display();
+					})
+			);
+
+		this.renderHotkeySetting(
+			containerEl,
+			"录音机开启快捷键",
+			"触发 Echo Notes: Start official audio recorder，再调用官方 audio-recorder:start 命令。",
+			"Ctrl+L",
+			this.plugin.settings.officialRecorderStartHotkey,
+			async (hotkey) => {
+				this.plugin.settings.officialRecorderStartHotkey = hotkey;
+			}
+		);
+
+		this.renderHotkeySetting(
+			containerEl,
+			"录音机关闭快捷键",
+			"触发 Echo Notes: Stop official audio recorder，再调用官方 audio-recorder:stop 命令。",
+			"Ctrl+S",
+			this.plugin.settings.officialRecorderStopHotkey,
+			async (hotkey) => {
+				this.plugin.settings.officialRecorderStopHotkey = hotkey;
+			}
+		);
+
+		this.renderHotkeySetting(
+			containerEl,
+			"转写当前笔记全部音频快捷键",
+			"触发 Echo Notes: Transcribe all audio files in current note。清空输入可不设置默认快捷键。",
+			"Ctrl+Z",
+			this.plugin.settings.transcribeAllAudioHotkey,
+			async (hotkey) => {
+				this.plugin.settings.transcribeAllAudioHotkey = hotkey;
+			}
+		);
+	}
+
+	private renderHotkeySetting(
+		containerEl: HTMLElement,
+		name: string,
+		description: string,
+		placeholder: string,
+		currentHotkey: EchoNotesHotkeySetting,
+		applyHotkey: (hotkey: EchoNotesHotkeySetting) => Promise<void>
+	): void {
+		let draftValue = formatHotkey(currentHotkey);
+		new Setting(containerEl)
+			.setName(name)
+			.setDesc(`${description} 支持 Ctrl+L、Control + L、Cmd+Shift+P 等写法；无效输入不会保存。`)
+			.addText((text) =>
+				text
+					.setPlaceholder(placeholder)
+					.setValue(draftValue)
+					.onChange((value) => {
+						draftValue = value;
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("保存")
+					.onClick(async () => {
+						const hotkey = parseHotkeyInput(draftValue);
+						if (hotkey === undefined) {
+							new Notice(`快捷键格式无效：${draftValue}`);
+							return;
+						}
+
+						await applyHotkey(hotkey);
+						await this.plugin.saveSettings();
+						this.plugin.refreshRegisteredCommands();
+						this.display();
 					})
 			);
 	}

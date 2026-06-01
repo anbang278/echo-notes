@@ -18,6 +18,7 @@ The workflow is simple: insert or link an audio file in a Markdown note, run a t
 - Generate a Markdown transcript file with source metadata.
 - Insert a transcript link below the source audio reference.
 - Skip existing transcripts and insert missing transcript links.
+- Enable or disable Obsidian's built-in Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using work minutes, study notes, or product requirement mining templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
 - Automatically choose an AI analysis template from keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
@@ -88,6 +89,20 @@ Recommended defaults:
 | OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` |
 | Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` |
 | 自定义兼容接口（Custom OpenAI-compatible） | your endpoint | `whisper-1` |
+
+## Configure the Built-in Audio Recorder
+
+Echo Notes relies on Obsidian's built-in `Audio recorder` core plugin to create recording files. You can enable or disable that core plugin from the "Official recorder" section in Echo Notes settings.
+
+That section also registers Echo Notes proxy commands with configurable default hotkeys:
+
+| Action | Command | Default hotkey |
+| --- | --- | --- |
+| Start the built-in recorder | `Echo Notes: Start official audio recorder` | `Ctrl+L` |
+| Stop the built-in recorder | `Echo Notes: Stop official audio recorder` | `Ctrl+S` |
+| Transcribe all audio files in the current note | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
+
+These hotkeys belong to Echo Notes commands. Echo Notes does not directly rewrite user hotkeys for Obsidian's built-in `audio-recorder:start` or `audio-recorder:stop` commands. If you manually override the matching Echo Notes commands in Obsidian Hotkeys, Obsidian uses your manual hotkey settings first.
 
 ## Configure AI Analysis
 

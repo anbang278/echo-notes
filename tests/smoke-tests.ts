@@ -25,8 +25,10 @@ import {
 	DEFAULT_SETTINGS,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
+	formatHotkey,
 	normalizeAnalysisTemplates,
 	normalizeEchoNotesSettings,
+	parseHotkeyInput,
 	PROVIDER_LABELS
 } from "../src/settings/settings";
 import { renderFailedTranscriptTemplate, renderTranscriptTemplate } from "../src/transcript/transcript-template";
@@ -160,6 +162,12 @@ assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "deepseek-ai/
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "qwen-plus");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.openai.analysisModel, "gpt-4o-mini");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.groq.analysisModel, "llama-3.3-70b-versatile");
+assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
+assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "Ctrl+S");
+assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "Ctrl+Z");
+assert.deepEqual(parseHotkeyInput("Control + L"), { modifiers: ["Ctrl"], key: "L" });
+assert.deepEqual(parseHotkeyInput("Cmd+Shift+P"), { modifiers: ["Meta", "Shift"], key: "P" });
+assert.equal(parseHotkeyInput("not a hotkey"), undefined);
 
 const normalizedSettings = normalizeEchoNotesSettings({
 	autoAnalyzeAfterTranscription: true,
@@ -196,6 +204,25 @@ assert.equal(normalizedSettings.analysisTemplates[3].customPrompt, "请输出访
 assert.deepEqual(normalizedSettings.analysisTemplates[3].recognitionKeywords, ["访谈纪要"]);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "autoAnalyzeAfterTranscription"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "promptForAnalysisTemplateOnTranscription"), false);
+assert.equal(formatHotkey(normalizedSettings.officialRecorderStartHotkey), "Ctrl+L");
+assert.equal(formatHotkey(normalizedSettings.officialRecorderStopHotkey), "Ctrl+S");
+assert.equal(formatHotkey(normalizedSettings.transcribeAllAudioHotkey), "Ctrl+Z");
+const customHotkeySettings = normalizeEchoNotesSettings({
+	officialRecorderStartHotkey: "Control + L",
+	officialRecorderStopHotkey: "Cmd+Shift+P",
+	transcribeAllAudioHotkey: null
+});
+assert.equal(formatHotkey(customHotkeySettings.officialRecorderStartHotkey), "Ctrl+L");
+assert.equal(formatHotkey(customHotkeySettings.officialRecorderStopHotkey), "Meta+Shift+P");
+assert.equal(formatHotkey(customHotkeySettings.transcribeAllAudioHotkey), "");
+const invalidHotkeySettings = normalizeEchoNotesSettings({
+	officialRecorderStartHotkey: "not a hotkey",
+	officialRecorderStopHotkey: { modifiers: ["Ctrl", "Bad"], key: "S" },
+	transcribeAllAudioHotkey: { modifiers: ["Ctrl"], key: "has space" }
+});
+assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStartHotkey), "Ctrl+L");
+assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStopHotkey), "Ctrl+S");
+assert.equal(formatHotkey(invalidHotkeySettings.transcribeAllAudioHotkey), "Ctrl+Z");
 const migratedDefaultTemplateSettings = normalizeEchoNotesSettings({ autoAnalysisTemplate: "study-notes" });
 assert.equal(migratedDefaultTemplateSettings.defaultAnalysisTemplateId, "study-notes");
 assert.equal(Object.prototype.hasOwnProperty.call(migratedDefaultTemplateSettings, "autoAnalysisTemplate"), false);
