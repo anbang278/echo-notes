@@ -29,8 +29,8 @@ jobs:
       - name: Test
         run: npm test
 
-      - name: Build
-        run: npm run build
+      - name: Build and package
+        run: npm run package
 
       - name: Verify release version
         run: node scripts/verify-release-version.mjs
@@ -39,7 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css \
+          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css "dist/echo-notes-$GITHUB_REF_NAME.zip" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --generate-notes

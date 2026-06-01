@@ -1,11 +1,12 @@
 {
 	"name": "echo-notes",
-	"version": "0.2.4",
+	"version": "0.2.5",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+		"package": "npm run build && node scripts/package-release.mjs",
 		"test": "node scripts/run-tests.mjs"
 	},
 	"keywords": [

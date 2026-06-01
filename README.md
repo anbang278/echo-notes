@@ -4,11 +4,38 @@
 
 # Echo Notes
 
-Echo Notes is an Obsidian plugin that turns audio files referenced in your vault into readable, searchable, and linkable Markdown transcripts.
+Echo Notes is an Obsidian plugin for audio transcription and knowledge capture. It extends the natural recording workflow in Obsidian by turning audio files in your vault into Markdown transcripts, then using configurable prompt templates to generate scenario-specific AI analysis inside the same vault.
 
-The workflow is simple: insert or link an audio file in a Markdown note, run a transcription command, and Echo Notes creates a transcript file and inserts a link back into the original note.
+The goal is not just to turn speech into text. Echo Notes is designed to help recordings enter your personal knowledge management workflow. Meeting recordings, voice memos, study notes, and user interviews can become readable, searchable, linkable, reviewable, and reusable Markdown knowledge assets.
 
-> Privacy notice: Echo Notes uploads the selected audio file to the transcription provider you configure. Do not transcribe audio that you do not want to send to that external service.
+The workflow is simple: insert or link an audio file in a Markdown note, run a transcription command, and Echo Notes creates a `.transcript.md` file and inserts a "view transcript" link back into the source note. If AI analysis is enabled, Echo Notes can choose an analysis template from nearby keywords and write structured analysis back into the matching transcript.
+
+> Privacy notice: Echo Notes makes network requests only when transcription or AI analysis is triggered. Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Do not process content that should not be sent to external services.
+
+## Why Echo Notes
+
+### Different recordings need different analysis structures
+
+Most transcription tools produce one generic text output, but different recording scenarios require different reading lenses.
+
+- Work meetings care about decisions, action items, owners, due dates, risks, and open questions.
+- Study notes care about core concepts, explanations, structured summaries, examples, and review checklists.
+- Product requirement mining cares about user quotes, pain points, motivation, context, feature opportunities, and acceptance criteria.
+
+Echo Notes uses configurable prompt templates so the same transcription workflow can produce documents that fit the actual scenario. You can use the built-in work minutes, study notes, and product requirement mining templates, or define your own templates, recognition keywords, and prompts.
+
+### Meeting notes and transcripts should not live outside your knowledge base
+
+Many meeting-minutes and transcription products can generate useful content, but the result often stays in a separate platform instead of becoming part of the Obsidian system you already use every day.
+
+That creates several problems:
+
+- Audio files, transcripts, and meeting notes are scattered across tools, making later lookup expensive.
+- Transcripts are not automatically connected to daily notes, project notes, or related topic notes, so context is lost.
+- Action items, decisions, and product signals from meetings do not naturally enter the existing knowledge workflow.
+- During review, it is hard to move from one note back to the original recording, full transcript, and structured AI analysis.
+
+Echo Notes keeps the original recording, full transcript, and AI analysis inside the current vault, with Markdown links back to the source note. Audio can then connect naturally with daily notes, projects, meetings, learning records, and requirement management.
 
 ## Features
 
@@ -28,7 +55,7 @@ The workflow is simple: insert or link an audio file in a Markdown note, run a t
 
 ## Providers
 
-Implemented providers:
+Implemented transcription providers:
 
 - 硅基流动（SiliconFlow） with `TeleAI/TeleSpeechASR`
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
@@ -70,11 +97,11 @@ Provider limits:
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs, and payloads over 10 MB are blocked before upload.
 - OpenAI-compatible providers: files over 25 MB are blocked before upload.
 
-## Configure a Provider
+## Configure a Transcription Provider
 
 1. Open Obsidian settings.
 2. Open the Echo Notes settings tab.
-3. Choose a provider.
+3. Choose a transcription provider.
 4. Confirm or edit Base URL and Model.
 5. Enter the provider API key.
 6. Keep Language as `auto`, or set a provider-supported language code.
