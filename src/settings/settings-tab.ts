@@ -232,7 +232,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Provider")
-			.setDesc("用于对转写稿生成工作纪要、学习纪要、产品需求挖掘纪要或自定义纪要的服务商。")
+			.setDesc("用于对转写稿生成纪要的服务商。列表与转写 Provider 保持一致，默认使用 DeepSeek。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
 					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
@@ -260,7 +260,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Base URL")
-			.setDesc("OpenAI-compatible Chat Completions 基础地址，插件会调用 {Base URL}/chat/completions。")
+			.setDesc("OpenAI-compatible Chat Completions 基础地址。请确认所选 Provider 支持 {Base URL}/chat/completions。")
 			.addText((text) =>
 				text
 					.setPlaceholder(this.getAnalysisProviderDefaults().analysisBaseUrl)
@@ -403,7 +403,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private applyAnalysisProviderDefaults(provider: AnalysisProviderId): void {
-		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider];
+		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS.deepseek;
 		this.plugin.settings.analysisBaseUrl = defaults.analysisBaseUrl;
 		this.plugin.settings.analysisModel = defaults.analysisModel;
 	}

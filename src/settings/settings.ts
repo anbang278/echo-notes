@@ -29,7 +29,7 @@ export type InsertStyle = "linkOnly" | "callout";
 
 export type CopyLanguage = "zh" | "en";
 
-export type AnalysisProviderId = "deepseek" | "openai" | "custom-openai-compatible";
+export type AnalysisProviderId = ProviderId;
 
 export type BuiltInAnalysisTemplateId = "work-minutes" | "study-notes" | "product-requirement-mining";
 
@@ -219,13 +219,93 @@ export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
 };
 
 export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNotesSettings, "analysisBaseUrl" | "analysisModel">> = {
-	deepseek: {
-		analysisBaseUrl: "https://api.deepseek.com/v1",
-		analysisModel: "deepseek-v4-pro"
+	siliconflow: {
+		analysisBaseUrl: "https://api.siliconflow.cn/v1",
+		analysisModel: "deepseek-ai/DeepSeek-V3"
+	},
+	"aliyun-bailian": {
+		analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		analysisModel: "qwen-plus"
 	},
 	openai: {
 		analysisBaseUrl: "https://api.openai.com/v1",
 		analysisModel: "gpt-4o-mini"
+	},
+	ollama: {
+		analysisBaseUrl: "http://localhost:11434/v1",
+		analysisModel: "llama3.1"
+	},
+	"ollama-open-webui": {
+		analysisBaseUrl: "http://localhost:3000/api",
+		analysisModel: "llama3.1"
+	},
+	"google-gemini": {
+		analysisBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+		analysisModel: "gemini-2.0-flash"
+	},
+	openrouter: {
+		analysisBaseUrl: "https://openrouter.ai/api/v1",
+		analysisModel: "openai/gpt-4o-mini"
+	},
+	"lm-studio": {
+		analysisBaseUrl: "http://localhost:1234/v1",
+		analysisModel: "local-model"
+	},
+	groq: {
+		analysisBaseUrl: "https://api.groq.com/openai/v1",
+		analysisModel: "llama-3.3-70b-versatile"
+	},
+	"302-ai": {
+		analysisBaseUrl: "https://api.302.ai/v1",
+		analysisModel: "gpt-4o-mini"
+	},
+	anthropic: {
+		analysisBaseUrl: "https://api.anthropic.com/v1",
+		analysisModel: "claude-3-5-haiku-latest"
+	},
+	"mistral-ai": {
+		analysisBaseUrl: "https://api.mistral.ai/v1",
+		analysisModel: "mistral-small-latest"
+	},
+	"together-ai": {
+		analysisBaseUrl: "https://api.together.xyz/v1",
+		analysisModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+	},
+	"fireworks-ai": {
+		analysisBaseUrl: "https://api.fireworks.ai/inference/v1",
+		analysisModel: "accounts/fireworks/models/llama-v3p3-70b-instruct"
+	},
+	"perplexity-ai": {
+		analysisBaseUrl: "https://api.perplexity.ai",
+		analysisModel: "sonar-pro"
+	},
+	deepseek: {
+		analysisBaseUrl: "https://api.deepseek.com/v1",
+		analysisModel: "deepseek-v4-pro"
+	},
+	xai: {
+		analysisBaseUrl: "https://api.x.ai/v1",
+		analysisModel: "grok-3-mini"
+	},
+	"novita-ai": {
+		analysisBaseUrl: "https://api.novita.ai/v3/openai",
+		analysisModel: "deepseek/deepseek-v3-0324"
+	},
+	deepinfra: {
+		analysisBaseUrl: "https://api.deepinfra.com/v1/openai",
+		analysisModel: "meta-llama/Meta-Llama-3.1-8B-Instruct"
+	},
+	sambanova: {
+		analysisBaseUrl: "https://api.sambanova.ai/v1",
+		analysisModel: "Meta-Llama-3.1-8B-Instruct"
+	},
+	cerebras: {
+		analysisBaseUrl: "https://api.cerebras.ai/v1",
+		analysisModel: "llama3.1-8b"
+	},
+	"z-ai": {
+		analysisBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
+		analysisModel: "glm-4-flash"
 	},
 	"custom-openai-compatible": {
 		analysisBaseUrl: "https://example.com/v1",
@@ -233,11 +313,7 @@ export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNot
 	}
 };
 
-export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
-	deepseek: "DeepSeek",
-	openai: "OpenAI",
-	"custom-openai-compatible": "自定义兼容接口（Custom OpenAI-compatible）"
-};
+export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = PROVIDER_LABELS;
 
 export const BUILTIN_ANALYSIS_TEMPLATE_IDS: BuiltInAnalysisTemplateId[] = [
 	"work-minutes",
@@ -454,6 +530,10 @@ export function isProviderId(value: string): value is ProviderId {
 	return value in PROVIDER_LABELS;
 }
 
+export function isAnalysisProviderId(value: string): value is AnalysisProviderId {
+	return isProviderId(value);
+}
+
 export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
 	return BUILTIN_ANALYSIS_TEMPLATE_IDS.map((id) => cloneAnalysisTemplate(DEFAULT_ANALYSIS_TEMPLATES[id]));
 }
@@ -468,7 +548,19 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			: typeof raw.autoAnalysisTemplate === "string"
 				? raw.autoAnalysisTemplate
 				: undefined;
+	const rawAnalysisProvider = typeof raw.analysisProvider === "string" ? raw.analysisProvider : "";
+	const hasValidAnalysisProvider = isAnalysisProviderId(rawAnalysisProvider);
 
+	settings.analysisProvider = hasValidAnalysisProvider ? rawAnalysisProvider : DEFAULT_SETTINGS.analysisProvider;
+	const analysisDefaults = ANALYSIS_PROVIDER_DEFAULTS[settings.analysisProvider] ?? ANALYSIS_PROVIDER_DEFAULTS.deepseek;
+	settings.analysisBaseUrl =
+		hasValidAnalysisProvider && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
+			? raw.analysisBaseUrl.trim()
+			: analysisDefaults.analysisBaseUrl;
+	settings.analysisModel =
+		hasValidAnalysisProvider && typeof raw.analysisModel === "string" && raw.analysisModel.trim()
+			? raw.analysisModel.trim()
+			: analysisDefaults.analysisModel;
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
 	settings.defaultAnalysisTemplateId = normalizeDefaultAnalysisTemplateId(rawDefaultAnalysisTemplateId, settings.analysisTemplates);

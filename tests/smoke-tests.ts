@@ -21,10 +21,13 @@ import {
 	createAnalysisTemplateId,
 	createCustomAnalysisTemplate,
 	ANALYSIS_PROVIDER_DEFAULTS,
+	ANALYSIS_PROVIDER_LABELS,
+	DEFAULT_SETTINGS,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
 	normalizeAnalysisTemplates,
-	normalizeEchoNotesSettings
+	normalizeEchoNotesSettings,
+	PROVIDER_LABELS
 } from "../src/settings/settings";
 import { renderFailedTranscriptTemplate, renderTranscriptTemplate } from "../src/transcript/transcript-template";
 
@@ -145,7 +148,18 @@ assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].recognitionKeywords, 
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 需求机会/);
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 验收标准/);
 assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].recognitionKeywords, ["产品需求挖掘纪要"]);
+assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), Object.keys(PROVIDER_LABELS));
+assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(PROVIDER_LABELS));
+assert.equal(DEFAULT_SETTINGS.analysisProvider, "deepseek");
+assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://api.deepseek.com/v1");
+assert.equal(DEFAULT_SETTINGS.analysisModel, "deepseek-v4-pro");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisBaseUrl, "https://api.deepseek.com/v1");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisModel, "deepseek-v4-pro");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisBaseUrl, "https://api.siliconflow.cn/v1");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "deepseek-ai/DeepSeek-V3");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "qwen-plus");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.openai.analysisModel, "gpt-4o-mini");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.groq.analysisModel, "llama-3.3-70b-versatile");
 
 const normalizedSettings = normalizeEchoNotesSettings({
 	autoAnalyzeAfterTranscription: true,
@@ -167,6 +181,7 @@ const normalizedSettings = normalizeEchoNotesSettings({
 	]
 });
 assert.equal(normalizedSettings.analysisEnabled, true);
+assert.equal(normalizedSettings.analysisProvider, "deepseek");
 assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
 assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
@@ -184,6 +199,33 @@ assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "promptFor
 const migratedDefaultTemplateSettings = normalizeEchoNotesSettings({ autoAnalysisTemplate: "study-notes" });
 assert.equal(migratedDefaultTemplateSettings.defaultAnalysisTemplateId, "study-notes");
 assert.equal(Object.prototype.hasOwnProperty.call(migratedDefaultTemplateSettings, "autoAnalysisTemplate"), false);
+const siliconFlowAnalysisSettings = normalizeEchoNotesSettings({ analysisProvider: "siliconflow" });
+assert.equal(siliconFlowAnalysisSettings.analysisProvider, "siliconflow");
+assert.equal(siliconFlowAnalysisSettings.analysisBaseUrl, "https://api.siliconflow.cn/v1");
+assert.equal(siliconFlowAnalysisSettings.analysisModel, "deepseek-ai/DeepSeek-V3");
+const customOpenAIAnalysisSettings = normalizeEchoNotesSettings({
+	analysisProvider: "openai",
+	analysisBaseUrl: "https://proxy.example.com/v1",
+	analysisModel: "my-chat-model"
+});
+assert.equal(customOpenAIAnalysisSettings.analysisProvider, "openai");
+assert.equal(customOpenAIAnalysisSettings.analysisBaseUrl, "https://proxy.example.com/v1");
+assert.equal(customOpenAIAnalysisSettings.analysisModel, "my-chat-model");
+const invalidAnalysisProviderSettings = normalizeEchoNotesSettings({
+	analysisProvider: "unknown-provider",
+	analysisBaseUrl: "https://example.invalid/v1",
+	analysisModel: "wrong-model"
+});
+assert.equal(invalidAnalysisProviderSettings.analysisProvider, "deepseek");
+assert.equal(invalidAnalysisProviderSettings.analysisBaseUrl, "https://api.deepseek.com/v1");
+assert.equal(invalidAnalysisProviderSettings.analysisModel, "deepseek-v4-pro");
+const missingAnalysisProviderSettings = normalizeEchoNotesSettings({
+	analysisBaseUrl: "https://example.invalid/v1",
+	analysisModel: "wrong-model"
+});
+assert.equal(missingAnalysisProviderSettings.analysisProvider, "deepseek");
+assert.equal(missingAnalysisProviderSettings.analysisBaseUrl, "https://api.deepseek.com/v1");
+assert.equal(missingAnalysisProviderSettings.analysisModel, "deepseek-v4-pro");
 
 assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
 const customTemplate = createCustomAnalysisTemplate("自定义模板", []);

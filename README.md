@@ -38,7 +38,7 @@ Implemented providers:
 
 Provider defaults can be changed in settings.
 
-AI analysis uses a separate provider configuration. The default is DeepSeek `deepseek-v4-pro` through an OpenAI-compatible `/chat/completions` endpoint.
+AI analysis uses a separate provider configuration. The default is DeepSeek `deepseek-v4-pro` through an OpenAI-compatible `/chat/completions` endpoint. The analysis provider list mirrors the transcription provider list; providers other than DeepSeek are optional chat presets and must support `{Base URL}/chat/completions`.
 
 ## Network and Data Use
 
@@ -93,8 +93,8 @@ Recommended defaults:
 
 1. Open the Echo Notes settings tab.
 2. Enable AI analysis.
-3. Keep the default provider as `DeepSeek`, or choose another OpenAI-compatible chat endpoint.
-4. Keep Base URL as `https://api.deepseek.com/v1` and Model as `deepseek-v4-pro`, or edit them.
+3. Keep the default provider as `DeepSeek`, or choose another provider that supports OpenAI-compatible Chat Completions.
+4. Keep Base URL as `https://api.deepseek.com/v1` and Model as `deepseek-v4-pro`, or edit them. Switching providers fills that provider's editable default Base URL and model.
 5. Enter the separate analysis API key.
 6. Choose the default analysis template used when no keyword is found near the audio link.
 7. Edit, enable, disable, restore, or add templates in the analysis template settings.

@@ -1,11 +1,11 @@
 import { Editor, Notice, Plugin, TFile, type MarkdownFileInfo } from "obsidian";
+import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
 import { AnalysisService } from "./analysis/analysis-service";
 import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
 	selectAnalysisTemplateForContext
 } from "./analysis/analysis-templates";
-import { OpenAICompatibleAnalysisProvider } from "./analysis/openai-compatible-analysis-provider";
 import { AudioFileService } from "./audio/audio-file-service";
 import { isSupportedAudioFile } from "./audio/audio-detector";
 import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
@@ -387,7 +387,7 @@ export default class EchoNotesPlugin extends Plugin {
 				return;
 			}
 
-			const provider = new OpenAICompatibleAnalysisProvider(this.settings, this.getAnalysisApiKey());
+			const provider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
 			const result = await provider.analyze({
 				template,
 				transcriptTitle: transcriptFile.basename,

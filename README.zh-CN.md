@@ -38,7 +38,7 @@ Echo Notes 是一个 Obsidian 音频转写与知识沉淀插件。它可以把 V
 
 服务商的默认 Base URL 和模型都可以在设置页修改。
 
-AI 纪要分析使用独立配置，默认是 DeepSeek `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。
+AI 纪要分析使用独立配置，默认是 DeepSeek `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 列表与转写 Provider 列表保持一致；DeepSeek 以外的服务商是可选聊天模型预设，需要确认支持 `{Base URL}/chat/completions`。
 
 ## 网络与数据使用
 
@@ -94,7 +94,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 1. 在 Echo Notes 设置页打开“启用 AI 纪要分析”。
 2. 分析 Provider 默认使用 `DeepSeek`。
 3. 分析 Base URL 默认是 `https://api.deepseek.com/v1`。
-4. 分析模型默认是 `deepseek-v4-pro`。
+4. 分析模型默认是 `deepseek-v4-pro`。切换分析 Provider 时，会自动填入该服务商可编辑的默认 Base URL 和模型。
 5. 输入独立的分析 API Key。
 6. 设置默认分析模板。录音链接上下三行未命中关键字时，会使用该模板。
 7. 在“分析模板”中编辑、启用、禁用、恢复或新增模板。
