@@ -4,9 +4,9 @@
 
 # Echo Notes
 
-Echo Notes is an Obsidian plugin for audio transcription and knowledge capture. It extends the natural recording workflow in Obsidian by turning audio files in your vault into Markdown transcripts, then using configurable prompt templates to generate scenario-specific AI analysis inside the same vault.
+Echo Notes is a personal action capture and AI memory-building plugin for Obsidian. Starting from audio transcription, it turns meetings, ideas, study notes, interviews, and everyday thinking into Markdown text, then uses configurable AI analysis templates to turn raw voice into searchable, linkable, reviewable, and reusable personal knowledge assets.
 
-The goal is not just to turn speech into text. Echo Notes is designed to help recordings enter your personal knowledge management workflow. Meeting recordings, voice memos, study notes, and user interviews can become readable, searchable, linkable, reviewable, and reusable Markdown knowledge assets.
+The goal is not just to turn speech into text. Echo Notes is designed to help your actions, thoughts, and decisions continuously enter your personal knowledge system, so they can eventually become long-term context for a Personal Agent. Every recording captures a real moment of action; every transcript becomes a memory that AI can understand; every structured analysis adds experience to a future AI version of yourself.
 
 The workflow is simple: insert or link an audio file in a Markdown note, run a transcription command, and Echo Notes creates a `.transcript.md` file and inserts a "view transcript" link back into the source note. If AI analysis is enabled, Echo Notes can choose an analysis template from nearby keywords and write structured analysis back into the matching transcript.
 
@@ -36,6 +36,20 @@ That creates several problems:
 - During review, it is hard to move from one note back to the original recording, full transcript, and structured AI analysis.
 
 Echo Notes keeps the original recording, full transcript, and AI analysis inside the current vault, with Markdown links back to the source note. Audio can then connect naturally with daily notes, projects, meetings, learning records, and requirement management.
+
+## Long-Term Vision: Capture Actions and Build an AI Version of Yourself
+
+Echo Notes is not only an audio transcription plugin, and not only a meeting-minutes tool. Its deeper idea is that human thinking, actions, judgment, and reflection should be captured with as little friction as possible, then turned into personal context that AI can understand and use.
+
+Traditional knowledge management usually records conclusions: a note, a document, a meeting summary, or a task list. But what truly shapes a person's ability is often not the isolated conclusion. It is the process behind it: why a judgment was made, what information was available, how people discussed the issue, which assumptions were raised, which actions were taken or abandoned, and whether the final result validated the original thinking.
+
+These processes used to be difficult to preserve because they are scattered across meetings, voice memos, chats, temporary ideas, tasks, project execution, and retrospectives. Echo Notes starts from the most natural input: record the voice, transcribe it into text, structure the text, and let the result become Memory and Context that a personal AI can use over time.
+
+From this perspective, each recording is more than a file. It is evidence of action. Each transcript is more than text. It is a captured thinking scene. Each AI analysis is more than a summary. It compresses human experience into reusable cognitive assets for the future.
+
+Long term, Echo Notes aims to help users build a more complete AI version of themselves: one that knows which projects you worked on, which meetings you attended, and who you discussed problems with; one that understands how you judged requirements, decomposed problems, and made tradeoffs; one that learns your expression style, decision preferences, knowledge structure, and working methods. When a similar problem appears in the future, a Personal Agent can give advice based on your real history, not only generic knowledge.
+
+The real goal is not to help you write a few fewer meeting notes. It is to continuously capture your real-world action trail and turn it into personal context infrastructure that future AI can understand, retrieve, reason over, and collaborate with. This direction should respect user control over data: personal memory should stay in your Obsidian vault whenever possible, and external providers should only be called when you explicitly configure and trigger them.
 
 ## Features
 
@@ -240,10 +254,14 @@ All automation options are disabled by default.
 
 ## Future Directions
 
-- Batch analysis across multiple transcripts.
-- Structured extraction for tasks, requirements, risks, and acceptance criteria.
-- Long-transcript chunking, merge, and review workflows.
-- Broader local model support.
+Echo Notes' long-term goal is to evolve from an audio transcription tool into a personal AI Memory Layer. Future work will explore:
+
+- Structured extraction from notes, including tasks, requirements, risks, decisions, action items, acceptance criteria, and retrospective results.
+- Batch analysis across multiple transcripts to produce project-level, topic-level, and timeline-level summaries.
+- A searchable personal action database built from meetings, study sessions, interviews, ideas, and work communication.
+- Long-term context for Personal Agents, so AI can assist decisions based on the user's real history.
+- Broader local model support, so personal memory can stay inside the user's own vault whenever possible.
+- Long-transcript chunking, merging, review, and multi-pass analysis workflows.
 
 ## Build
 
