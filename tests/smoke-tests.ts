@@ -34,6 +34,7 @@ import {
 	normalizeAnalysisTemplates,
 	normalizeEchoNotesSettings,
 	parseHotkeyInput,
+	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS
 } from "../src/settings/settings";
 import {
@@ -244,7 +245,20 @@ assert.match(partialFailedTranscript, /status: failed/);
 assert.match(partialFailedTranscript, /长音频逐段转写已中断/);
 assert.match(partialFailedTranscript, /第一段内容。/);
 
-assert.deepEqual(ANALYSIS_TEMPLATE_ORDER, ["work-minutes", "study-notes", "product-requirement-mining"]);
+const expectedAnalysisTemplateOrder = [
+	"work-minutes",
+	"study-notes",
+	"product-requirement-mining",
+	"manager-sync-minutes",
+	"product-manager-minutes",
+	"project-manager-minutes",
+	"engineering-minutes",
+	"sales-minutes",
+	"customer-success-minutes",
+	"operations-minutes",
+	"hr-minutes"
+];
+assert.deepEqual(ANALYSIS_TEMPLATE_ORDER, expectedAnalysisTemplateOrder);
 assert.match(DEFAULT_ANALYSIS_SYSTEM_PROMPT, /专业的录音文本分析助手/);
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].customPrompt, /## 摘要/);
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["work-minutes"].customPrompt, /## 行动项/);
@@ -255,16 +269,39 @@ assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["study-notes"].recognitionKeywords, 
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 需求机会/);
 assert.match(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].customPrompt, /## 验收标准/);
 assert.deepEqual(DEFAULT_ANALYSIS_TEMPLATES["product-requirement-mining"].recognitionKeywords, ["产品需求挖掘纪要"]);
+const roleTemplateExpectations = [
+	["manager-sync-minutes", "管理者纪要", /## 管理摘要/, /## 汇报口径/, /行动项.*知识沉淀.*汇报口径/s],
+	["product-manager-minutes", "产品经理纪要", /## 背景与目标/, /## 对外同步摘要/, /行动项.*知识沉淀.*对外同步摘要/s],
+	["project-manager-minutes", "项目经理纪要", /## 项目进展/, /## 下次检查点/, /行动项.*知识沉淀.*下次检查点/s],
+	["engineering-minutes", "研发/技术纪要", /## 技术背景/, /## 沉淀要点/, /行动项.*知识沉淀.*汇报内容/s],
+	["sales-minutes", "销售纪要", /## 客户背景/, /## 汇报摘要/, /下一步行动.*知识沉淀.*汇报摘要/s],
+	["customer-success-minutes", "客户成功纪要", /## 客户现状/, /## 客户同步口径/, /行动项.*知识沉淀.*客户同步口径/s],
+	["operations-minutes", "运营纪要", /## 目标与指标/, /## 复盘沉淀/, /优化动作.*知识沉淀.*汇报内容/s],
+	["hr-minutes", "HR/人力纪要", /## 组织\/岗位背景/, /## 管理同步摘要/, /行动项.*知识沉淀.*管理同步摘要/s]
+] as const;
+for (const [templateId, keyword, firstHeading, finalHeading, guidance] of roleTemplateExpectations) {
+	const template = DEFAULT_ANALYSIS_TEMPLATES[templateId];
+	assert.equal(template.builtin, true);
+	assert.equal(template.enabled, false);
+	assert.ok(template.recognitionKeywords.includes(keyword));
+	assert.match(template.customPrompt, firstHeading);
+	assert.match(template.customPrompt, finalHeading);
+	assert.match(template.customPrompt, guidance);
+}
 assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), Object.keys(PROVIDER_LABELS));
 assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(PROVIDER_LABELS));
-assert.equal(DEFAULT_SETTINGS.analysisProvider, "deepseek");
-assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://api.deepseek.com/v1");
+assert.equal(DEFAULT_SETTINGS.provider, "aliyun-bailian");
+assert.equal(DEFAULT_SETTINGS.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+assert.equal(DEFAULT_SETTINGS.model, "qwen3-asr-flash");
+assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
+assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
+assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisBaseUrl, "https://api.deepseek.com/v1");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisBaseUrl, "https://api.siliconflow.cn/v1");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "deepseek-ai/DeepSeek-V3");
-assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "qwen-plus");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.openai.analysisModel, "gpt-4o-mini");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.groq.analysisModel, "llama-3.3-70b-versatile");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
@@ -294,7 +331,11 @@ const normalizedSettings = normalizeEchoNotesSettings({
 	]
 });
 assert.equal(normalizedSettings.analysisEnabled, true);
-assert.equal(normalizedSettings.analysisProvider, "deepseek");
+assert.equal(normalizedSettings.provider, "aliyun-bailian");
+assert.equal(normalizedSettings.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+assert.equal(normalizedSettings.model, "qwen3-asr-flash");
+assert.equal(normalizedSettings.analysisProvider, "aliyun-bailian");
+assert.equal(normalizedSettings.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
 assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
@@ -302,11 +343,18 @@ assert.equal(normalizedSettings.analysisTemplates[0].name, "工作纪要");
 assert.equal(normalizedSettings.analysisTemplates[0].enabled, false);
 assert.equal(normalizedSettings.analysisTemplates[0].builtin, true);
 assert.equal(normalizedSettings.analysisTemplates[0].systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
-assert.equal(normalizedSettings.analysisTemplates[3].id, "custom-template");
-assert.equal(normalizedSettings.analysisTemplates[3].name, "访谈纪要");
-assert.equal(normalizedSettings.analysisTemplates[3].systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
-assert.equal(normalizedSettings.analysisTemplates[3].customPrompt, "请输出访谈纪要。");
-assert.deepEqual(normalizedSettings.analysisTemplates[3].recognitionKeywords, ["访谈纪要"]);
+assert.deepEqual(
+	normalizedSettings.analysisTemplates.slice(0, expectedAnalysisTemplateOrder.length).map((template) => template.id),
+	expectedAnalysisTemplateOrder
+);
+for (const templateId of expectedAnalysisTemplateOrder.slice(3)) {
+	assert.equal(normalizedSettings.analysisTemplates.find((template) => template.id === templateId)?.enabled, false);
+}
+const normalizedCustomTemplate = normalizedSettings.analysisTemplates.find((template) => template.id === "custom-template");
+assert.equal(normalizedCustomTemplate?.name, "访谈纪要");
+assert.equal(normalizedCustomTemplate?.systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
+assert.equal(normalizedCustomTemplate?.customPrompt, "请输出访谈纪要。");
+assert.deepEqual(normalizedCustomTemplate?.recognitionKeywords, ["访谈纪要"]);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "autoAnalyzeAfterTranscription"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "promptForAnalysisTemplateOnTranscription"), false);
 assert.equal(formatHotkey(normalizedSettings.officialRecorderStartHotkey), "Ctrl+L");
@@ -348,16 +396,26 @@ const invalidAnalysisProviderSettings = normalizeEchoNotesSettings({
 	analysisBaseUrl: "https://example.invalid/v1",
 	analysisModel: "wrong-model"
 });
-assert.equal(invalidAnalysisProviderSettings.analysisProvider, "deepseek");
-assert.equal(invalidAnalysisProviderSettings.analysisBaseUrl, "https://api.deepseek.com/v1");
+assert.equal(invalidAnalysisProviderSettings.analysisProvider, "aliyun-bailian");
+assert.equal(invalidAnalysisProviderSettings.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(invalidAnalysisProviderSettings.analysisModel, "deepseek-v4-pro");
 const missingAnalysisProviderSettings = normalizeEchoNotesSettings({
 	analysisBaseUrl: "https://example.invalid/v1",
 	analysisModel: "wrong-model"
 });
-assert.equal(missingAnalysisProviderSettings.analysisProvider, "deepseek");
-assert.equal(missingAnalysisProviderSettings.analysisBaseUrl, "https://api.deepseek.com/v1");
+assert.equal(missingAnalysisProviderSettings.analysisProvider, "aliyun-bailian");
+assert.equal(missingAnalysisProviderSettings.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(missingAnalysisProviderSettings.analysisModel, "deepseek-v4-pro");
+const invalidTranscriptionProviderSettings = normalizeEchoNotesSettings({
+	provider: "unknown-provider",
+	baseUrl: "https://example.invalid/v1",
+	model: "wrong-model",
+	language: "en"
+});
+assert.equal(invalidTranscriptionProviderSettings.provider, "aliyun-bailian");
+assert.equal(invalidTranscriptionProviderSettings.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+assert.equal(invalidTranscriptionProviderSettings.model, "qwen3-asr-flash");
+assert.equal(invalidTranscriptionProviderSettings.language, "auto");
 
 assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
 const customTemplate = createCustomAnalysisTemplate("自定义模板", []);
@@ -370,12 +428,18 @@ assert.deepEqual(
 	normalizeAnalysisTemplates([{ id: "custom-review", name: "复盘纪要", prompt: "请复盘。", enabled: true }]).map(
 		(template) => template.id
 	),
-	["work-minutes", "study-notes", "product-requirement-mining", "custom-review"]
+	[...expectedAnalysisTemplateOrder, "custom-review"]
 );
-assert.equal(normalizeAnalysisTemplates([{ id: "custom-review", name: "复盘纪要", prompt: "请复盘。", enabled: true }])[3].customPrompt, "请复盘。");
+assert.equal(
+	normalizeAnalysisTemplates([{ id: "custom-review", name: "复盘纪要", prompt: "请复盘。", enabled: true }])[
+		expectedAnalysisTemplateOrder.length
+	].customPrompt,
+	"请复盘。"
+);
 assert.equal(getDefaultAnalysisTemplate(normalizedSettings)?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为访谈纪要。")?.id, "custom-template");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为学习纪要。")?.id, "study-notes");
+assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为管理者纪要。")?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里没有任何关键字。")?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "学习纪要和产品需求挖掘纪要同时出现。")?.id, "study-notes");
 
@@ -461,11 +525,28 @@ const transcriptWithFrontmatter = [
 ].join("\n");
 assert.equal(extractTranscriptText(transcriptWithFrontmatter), "# Recording 转写稿\n\n## 转写稿\n\n正文内容");
 
-const transcriptWithWorkAnalysis = insertOrReplaceTranscriptAnalysis("正文内容", workAnalysisBlock, "work-minutes", "AI 纪要分析");
+const baseTranscriptForAnalysis = [
+	"# Recording 转写稿",
+	"",
+	"原始录音：![[Recording]]",
+	"来源笔记：[[Daily]]",
+	"",
+	"## 转写稿",
+	"",
+	"正文内容"
+].join("\n");
+const transcriptWithWorkAnalysis = insertOrReplaceTranscriptAnalysis(
+	baseTranscriptForAnalysis,
+	workAnalysisBlock,
+	"work-minutes",
+	"AI 纪要分析",
+	"转写稿"
+);
 assert.match(transcriptWithWorkAnalysis, /<!-- echo-notes-analysis:start -->/);
 assert.match(transcriptWithWorkAnalysis, /## AI 纪要分析/);
 assert.match(transcriptWithWorkAnalysis, /<!-- echo-notes-analysis-item:start work-minutes -->/);
 assert.match(transcriptWithWorkAnalysis, /这是纪要。/);
+assert.ok(transcriptWithWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithWorkAnalysis.indexOf("## 转写稿"));
 
 const updatedWorkAnalysisBlock = renderTranscriptAnalysisBlock({
 	templateId: "work-minutes",
@@ -477,11 +558,21 @@ const updatedWorkAnalysisBlock = renderTranscriptAnalysisBlock({
 	},
 	copyLanguage: "zh"
 });
+const legacyBottomAnalysisTranscript = [
+	baseTranscriptForAnalysis,
+	"",
+	TRANSCRIPT_ANALYSIS_START,
+	"## AI 纪要分析",
+	"",
+	workAnalysisBlock,
+	TRANSCRIPT_ANALYSIS_END
+].join("\n");
 const transcriptWithUpdatedWorkAnalysis = insertOrReplaceTranscriptAnalysis(
-	transcriptWithWorkAnalysis,
+	legacyBottomAnalysisTranscript,
 	updatedWorkAnalysisBlock,
 	"work-minutes",
-	"AI 纪要分析"
+	"AI 纪要分析",
+	"转写稿"
 );
 assert.doesNotMatch(transcriptWithUpdatedWorkAnalysis, /这是纪要。/);
 assert.match(transcriptWithUpdatedWorkAnalysis, /这是新纪要。/);
@@ -490,6 +581,10 @@ assert.equal(
 	1
 );
 assert.equal((transcriptWithUpdatedWorkAnalysis.match(/## AI 纪要分析/g) ?? []).length, 1);
+assert.ok(
+	transcriptWithUpdatedWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) <
+		transcriptWithUpdatedWorkAnalysis.indexOf("## 转写稿")
+);
 
 const studyAnalysisBlock = renderTranscriptAnalysisBlock({
 	templateId: "study-notes",
@@ -505,10 +600,12 @@ const transcriptWithTwoAnalyses = insertOrReplaceTranscriptAnalysis(
 	transcriptWithUpdatedWorkAnalysis,
 	studyAnalysisBlock,
 	"study-notes",
-	"AI 纪要分析"
+	"AI 纪要分析",
+	"转写稿"
 );
 assert.match(transcriptWithTwoAnalyses, /<!-- echo-notes-analysis-item:start work-minutes -->/);
 assert.match(transcriptWithTwoAnalyses, /<!-- echo-notes-analysis-item:start study-notes -->/);
 assert.equal((transcriptWithTwoAnalyses.match(/## AI 纪要分析/g) ?? []).length, 1);
+assert.ok(transcriptWithTwoAnalyses.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithTwoAnalyses.indexOf("## 转写稿"));
 
 console.log("Smoke tests passed.");

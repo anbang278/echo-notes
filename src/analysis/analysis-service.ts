@@ -34,7 +34,13 @@ export class AnalysisService {
 		});
 
 		await this.app.vault.process(transcriptFile, (content) =>
-			insertOrReplaceTranscriptAnalysis(content, analysisBlock, template.id, copy.analysisLinksHeading)
+			insertOrReplaceTranscriptAnalysis(
+				content,
+				analysisBlock,
+				template.id,
+				copy.analysisLinksHeading,
+				copy.transcriptHeading
+			)
 		);
 	}
 }

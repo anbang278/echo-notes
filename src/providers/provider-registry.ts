@@ -33,6 +33,6 @@ export function createTranscriptionProvider(app: App, settings: EchoNotesSetting
 					PROVIDER_LABELS[settings.provider]
 				);
 			}
-			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
+			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
 	}
 }

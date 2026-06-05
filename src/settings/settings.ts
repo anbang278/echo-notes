@@ -35,7 +35,18 @@ export type AnalysisProviderId = ProviderId;
 
 export type EchoNotesHotkeySetting = Hotkey | null;
 
-export type BuiltInAnalysisTemplateId = "work-minutes" | "study-notes" | "product-requirement-mining";
+export type BuiltInAnalysisTemplateId =
+	| "work-minutes"
+	| "study-notes"
+	| "product-requirement-mining"
+	| "manager-sync-minutes"
+	| "product-manager-minutes"
+	| "project-manager-minutes"
+	| "engineering-minutes"
+	| "sales-minutes"
+	| "customer-success-minutes"
+	| "operations-minutes"
+	| "hr-minutes";
 
 export type AnalysisTemplateId = string;
 
@@ -232,7 +243,7 @@ export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNot
 	},
 	"aliyun-bailian": {
 		analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		analysisModel: "qwen-plus"
+		analysisModel: "deepseek-v4-pro"
 	},
 	openai: {
 		analysisBaseUrl: "https://api.openai.com/v1",
@@ -325,7 +336,15 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = PROV
 export const BUILTIN_ANALYSIS_TEMPLATE_IDS: BuiltInAnalysisTemplateId[] = [
 	"work-minutes",
 	"study-notes",
-	"product-requirement-mining"
+	"product-requirement-mining",
+	"manager-sync-minutes",
+	"product-manager-minutes",
+	"project-manager-minutes",
+	"engineering-minutes",
+	"sales-minutes",
+	"customer-success-minutes",
+	"operations-minutes",
+	"hr-minutes"
 ];
 
 export const DEFAULT_ANALYSIS_SYSTEM_PROMPT = [
@@ -450,20 +469,188 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 		recognitionKeywords: ["产品需求挖掘纪要"],
 		enabled: true,
 		builtin: true
+	},
+	"manager-sync-minutes": {
+		id: "manager-sync-minutes",
+		name: "管理者纪要",
+		description: "适合管理者处理团队同步、业务判断、决策授权和跨团队协调。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以管理者视角生成管理者纪要，固定包含以下 Markdown 二级标题：",
+			"## 管理摘要",
+			"## 关键判断",
+			"## 团队/业务状态",
+			"## 决策与授权",
+			"## 行动项",
+			"## 风险与待协调",
+			"## 汇报口径",
+			"",
+			"行动项要包含负责人、事项、截止时间和检查方式；知识沉淀要提炼可复用的管理判断、组织模式或协作经验；汇报口径要能直接用于向上级或相关团队同步。"
+		].join("\n"),
+		recognitionKeywords: ["管理者纪要", "管理纪要", "团队管理", "管理同步"],
+		enabled: false,
+		builtin: true
+	},
+	"product-manager-minutes": {
+		id: "product-manager-minutes",
+		name: "产品经理纪要",
+		description: "适合产品经理沉淀需求讨论、方案判断、优先级取舍和对外同步。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以产品经理视角生成产品经理纪要，固定包含以下 Markdown 二级标题：",
+			"## 背景与目标",
+			"## 用户/业务问题",
+			"## 需求与方案判断",
+			"## 优先级与取舍",
+			"## 行动项",
+			"## 风险与待确认",
+			"## 对外同步摘要",
+			"",
+			"行动项要明确负责人、交付物和下一步验证；知识沉淀要保留需求判断依据、用户洞察和产品原则；对外同步摘要要适合发给研发、业务或管理层。"
+		].join("\n"),
+		recognitionKeywords: ["产品经理纪要", "产品纪要", "需求讨论", "产品方案"],
+		enabled: false,
+		builtin: true
+	},
+	"project-manager-minutes": {
+		id: "project-manager-minutes",
+		name: "项目经理纪要",
+		description: "适合项目经理跟踪项目进展、里程碑、依赖阻塞和风险闭环。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以项目经理视角生成项目经理纪要，固定包含以下 Markdown 二级标题：",
+			"## 项目进展",
+			"## 里程碑",
+			"## 依赖与阻塞",
+			"## 风险清单",
+			"## 决策记录",
+			"## 行动项",
+			"## 下次检查点",
+			"",
+			"行动项要可跟踪并包含负责人、截止时间和验收信号；知识沉淀要总结项目节奏、协作模式和风险模式；下次检查点要能直接转成项目例会跟进项。"
+		].join("\n"),
+		recognitionKeywords: ["项目经理纪要", "项目纪要", "项目同步", "项目复盘"],
+		enabled: false,
+		builtin: true
+	},
+	"engineering-minutes": {
+		id: "engineering-minutes",
+		name: "研发/技术纪要",
+		description: "适合研发和技术负责人整理技术方案、架构判断、风险和发布验证。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以研发/技术视角生成研发/技术纪要，固定包含以下 Markdown 二级标题：",
+			"## 技术背景",
+			"## 方案与架构判断",
+			"## 关键决策",
+			"## 风险/技术债",
+			"## 验证与发布",
+			"## 行动项",
+			"## 沉淀要点",
+			"",
+			"行动项要明确实现、验证、评审和发布责任；知识沉淀要提炼技术取舍、架构原则和可复用经验；汇报内容要能让非技术干系人理解风险、影响和下一步。"
+		].join("\n"),
+		recognitionKeywords: ["研发/技术纪要", "研发纪要", "技术纪要", "技术方案"],
+		enabled: false,
+		builtin: true
+	},
+	"sales-minutes": {
+		id: "sales-minutes",
+		name: "销售纪要",
+		description: "适合销售整理客户沟通、需求痛点、决策链、异议和商机推进。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以销售视角生成销售纪要，固定包含以下 Markdown 二级标题：",
+			"## 客户背景",
+			"## 需求与痛点",
+			"## 决策链与预算",
+			"## 异议/竞品",
+			"## 商机阶段",
+			"## 下一步行动",
+			"## 汇报摘要",
+			"",
+			"下一步行动要明确客户侧和我方责任人、触达方式和时间点；知识沉淀要提炼可复用销售线索、客户画像和异议处理经验；汇报摘要要适合更新商机记录或同步上级。"
+		].join("\n"),
+		recognitionKeywords: ["销售纪要", "客户拜访", "商机推进", "销售沟通"],
+		enabled: false,
+		builtin: true
+	},
+	"customer-success-minutes": {
+		id: "customer-success-minutes",
+		name: "客户成功纪要",
+		description: "适合客户成功整理客户健康度、使用问题、续约风险和价值机会。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以客户成功视角生成客户成功纪要，固定包含以下 Markdown 二级标题：",
+			"## 客户现状",
+			"## 使用问题",
+			"## 健康度与风险",
+			"## 价值机会",
+			"## 升级/续约信号",
+			"## 行动项",
+			"## 客户同步口径",
+			"",
+			"行动项要区分客户侧、我方和跨团队协同事项；知识沉淀要总结客户成功打法、风险信号和价值证明；客户同步口径要清晰、克制、可直接用于会后跟进。"
+		].join("\n"),
+		recognitionKeywords: ["客户成功纪要", "客户成功", "续约沟通", "客户健康度"],
+		enabled: false,
+		builtin: true
+	},
+	"operations-minutes": {
+		id: "operations-minutes",
+		name: "运营纪要",
+		description: "适合运营整理目标指标、活动流程、数据反馈、问题归因和复盘沉淀。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以运营视角生成运营纪要，固定包含以下 Markdown 二级标题：",
+			"## 目标与指标",
+			"## 活动/流程现状",
+			"## 数据与反馈信号",
+			"## 问题归因",
+			"## 优化动作",
+			"## 风险与资源需求",
+			"## 复盘沉淀",
+			"",
+			"优化动作要明确负责人、执行节奏和验证指标；知识沉淀要提炼运营方法、实验结论和可复用 SOP；汇报内容要能用于周报、复盘或跨团队同步。"
+		].join("\n"),
+		recognitionKeywords: ["运营纪要", "运营复盘", "活动复盘", "运营同步"],
+		enabled: false,
+		builtin: true
+	},
+	"hr-minutes": {
+		id: "hr-minutes",
+		name: "HR/人力纪要",
+		description: "适合 HR 和管理协作者整理组织、岗位、反馈、诉求和合规风险。",
+		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+		customPrompt: [
+			"请以 HR/人力视角生成 HR/人力纪要，固定包含以下 Markdown 二级标题：",
+			"## 组织/岗位背景",
+			"## 关键事实",
+			"## 反馈与诉求",
+			"## 风险与合规提醒",
+			"## 行动项",
+			"## 待确认问题",
+			"## 管理同步摘要",
+			"",
+			"行动项要注意责任人、时间点和沟通边界；知识沉淀要提炼组织信号、岗位要求和协作经验；管理同步摘要要客观克制，避免超出原文进行判断或贴标签。"
+		].join("\n"),
+		recognitionKeywords: ["HR/人力纪要", "HR纪要", "人力纪要", "组织沟通", "面谈纪要"],
+		enabled: false,
+		builtin: true
 	}
 };
 
 export const DEFAULT_SETTINGS: EchoNotesSettings = {
-	provider: "siliconflow",
-	baseUrl: "https://api.siliconflow.cn",
-	model: "TeleAI/TeleSpeechASR",
+	provider: "aliyun-bailian",
+	baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	model: "qwen3-asr-flash",
 	language: "auto",
 	outputStrategy: "same-name-subfolder",
 	customOutputFolder: "Transcripts",
 	insertStyle: "linkOnly",
 	copyLanguage: "zh",
-	analysisProvider: "deepseek",
-	analysisBaseUrl: "https://api.deepseek.com/v1",
+	analysisProvider: "aliyun-bailian",
+	analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 	analysisModel: "deepseek-v4-pro",
 	analysisEnabled: false,
 	defaultAnalysisTemplateId: "work-minutes",
@@ -614,6 +801,22 @@ export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
 export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings {
 	const raw = isRecord(rawData) ? rawData : {};
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
+	const rawProvider = typeof raw.provider === "string" ? raw.provider : "";
+	const hasValidProvider = isProviderId(rawProvider);
+	settings.provider = hasValidProvider ? rawProvider : DEFAULT_SETTINGS.provider;
+	const providerDefaults = PROVIDER_DEFAULTS[settings.provider as ProviderId] ?? PROVIDER_DEFAULTS[DEFAULT_SETTINGS.provider as ProviderId];
+	settings.baseUrl =
+		hasValidProvider && typeof raw.baseUrl === "string" && raw.baseUrl.trim()
+			? raw.baseUrl.trim()
+			: providerDefaults.baseUrl;
+	settings.model =
+		hasValidProvider && typeof raw.model === "string" && raw.model.trim()
+			? raw.model.trim()
+			: providerDefaults.model;
+	settings.language =
+		hasValidProvider && typeof raw.language === "string" && raw.language.trim()
+			? raw.language.trim()
+			: providerDefaults.language;
 	const oldAutoAnalyze = raw.autoAnalyzeAfterTranscription === true;
 	const rawDefaultAnalysisTemplateId =
 		typeof raw.defaultAnalysisTemplateId === "string"
@@ -625,7 +828,9 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	const hasValidAnalysisProvider = isAnalysisProviderId(rawAnalysisProvider);
 
 	settings.analysisProvider = hasValidAnalysisProvider ? rawAnalysisProvider : DEFAULT_SETTINGS.analysisProvider;
-	const analysisDefaults = ANALYSIS_PROVIDER_DEFAULTS[settings.analysisProvider] ?? ANALYSIS_PROVIDER_DEFAULTS.deepseek;
+	const analysisDefaults =
+		ANALYSIS_PROVIDER_DEFAULTS[settings.analysisProvider] ??
+		ANALYSIS_PROVIDER_DEFAULTS[DEFAULT_SETTINGS.analysisProvider];
 	settings.analysisBaseUrl =
 		hasValidAnalysisProvider && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
 			? raw.analysisBaseUrl.trim()

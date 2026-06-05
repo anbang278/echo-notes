@@ -48,20 +48,20 @@ export function insertOrReplaceTranscriptAnalysis(
 	content: string,
 	analysisBlock: string,
 	templateId: AnalysisTemplateId,
-	heading: string
+	heading: string,
+	insertBeforeHeading?: string
 ): string {
 	const startIndex = content.indexOf(TRANSCRIPT_ANALYSIS_START);
 	const endIndex = content.indexOf(TRANSCRIPT_ANALYSIS_END);
 	if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
 		const fullBlock = [TRANSCRIPT_ANALYSIS_START, `## ${heading}`, "", analysisBlock, TRANSCRIPT_ANALYSIS_END].join("\n");
-		return `${content.trimEnd()}\n\n${fullBlock}\n`;
+		return insertAnalysisSection(content, fullBlock, insertBeforeHeading);
 	}
 
-	const before = content.slice(0, startIndex);
 	const existingSection = content.slice(startIndex, endIndex + TRANSCRIPT_ANALYSIS_END.length);
-	const after = content.slice(endIndex + TRANSCRIPT_ANALYSIS_END.length);
 	const updatedSection = insertOrReplaceAnalysisItem(existingSection, analysisBlock, templateId);
-	return `${before}${updatedSection}${after}`;
+	const contentWithoutSection = `${content.slice(0, startIndex)}${content.slice(endIndex + TRANSCRIPT_ANALYSIS_END.length)}`;
+	return insertAnalysisSection(contentWithoutSection, updatedSection, insertBeforeHeading);
 }
 
 function insertOrReplaceAnalysisItem(section: string, analysisBlock: string, templateId: AnalysisTemplateId): string {
@@ -89,6 +89,26 @@ function getTranscriptAnalysisItemStart(templateId: AnalysisTemplateId): string 
 
 function getTranscriptAnalysisItemEnd(templateId: AnalysisTemplateId): string {
 	return `<!-- echo-notes-analysis-item:end ${templateId} -->`;
+}
+
+function insertAnalysisSection(content: string, section: string, insertBeforeHeading?: string): string {
+	const trimmedSection = section.trim();
+	const insertionIndex = insertBeforeHeading ? findHeadingIndex(content, insertBeforeHeading) : -1;
+	if (insertionIndex === -1) {
+		const trimmedContent = content.trimEnd();
+		return trimmedContent ? `${trimmedContent}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;
+	}
+
+	const before = content.slice(0, insertionIndex).trimEnd();
+	const after = content.slice(insertionIndex).replace(/^\n+/, "");
+	const prefix = before ? `${before}\n\n` : "";
+	return `${prefix}${trimmedSection}\n\n${after}`;
+}
+
+function findHeadingIndex(content: string, heading: string): number {
+	const pattern = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`, "m");
+	const match = pattern.exec(content);
+	return match?.index ?? -1;
 }
 
 function escapeRegExp(value: string): string {

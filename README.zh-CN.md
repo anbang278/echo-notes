@@ -22,7 +22,7 @@ Echo Notes 是一个基于 Obsidian 录音能力扩展的音频转写与知识�
 - 学习记录更关注：知识点提炼、概念释义、结构化总结、例子和复习清单。
 - 产品需求挖掘更关注：用户原话、痛点、需求动机、场景上下文、功能机会和验收标准。
 
-Echo Notes 通过可配置的提示词模板，让同一类录音可以按具体场景生成更贴合需求的分析文档。你可以使用内置的工作纪要、学习纪要、产品需求挖掘模板，也可以配置自己的模板、识别关键词和提示词。
+Echo Notes 通过可配置的提示词模板，让同一类录音可以按具体场景生成更贴合需求的分析文档。你可以使用内置的工作纪要、学习纪要、产品需求挖掘和角色化工作模板，也可以配置自己的模板、识别关键词和提示词。
 
 ### 会议纪要和转写结果不应该散落在笔记库之外
 
@@ -46,7 +46,7 @@ Echo Notes 的思路是让原始录音、完整转写稿和 AI 分析结果都�
 - 在原始音频引用下方插入转写稿链接。
 - 跳过已存在的转写稿，并补充缺失链接。
 - 在设置页控制 Obsidian 核心插件录音机开关，并为其代理命令配置默认快捷键。
-- 使用独立 AI 分析模型，将转写稿生成工作纪要、学习纪要或产品需求挖掘纪要。
+- 使用独立 AI 分析模型，将转写稿生成通用、学习、产品或角色化工作场景纪要。
 - AI 纪要分析在后台异步执行，完成后直接写回对应转写稿。
 - AI 纪要分析会根据录音链接上下三行的识别关键字自动选择分析模板，未命中时使用默认模板。
 - 支持配置分析模板名称、识别关键字、系统提示词和自定义提示词。
@@ -66,7 +66,7 @@ Echo Notes 的思路是让原始录音、完整转写稿和 AI 分析结果都�
 
 服务商的默认 Base URL 和模型都可以在设置页修改。
 
-AI 纪要分析使用独立配置，默认是 DeepSeek `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 列表与转写 Provider 列表保持一致；DeepSeek 以外的服务商是可选聊天模型预设，需要确认支持 `{Base URL}/chat/completions`。
+AI 纪要分析使用独立配置，默认是阿里百炼 `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 列表与转写 Provider 列表保持一致；可选聊天模型预设需要确认支持 `{Base URL}/chat/completions`。
 
 ## 网络与数据使用
 
@@ -76,7 +76,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 - 阿里百炼默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - OpenAI 默认地址：`https://api.openai.com/v1`
 - Groq 默认地址：`https://api.groq.com/openai/v1`
-- AI 分析默认地址：`https://api.deepseek.com/v1`
+- AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - 自定义兼容接口：由用户自行配置
 
 转写会把所选音频上传到你配置的转写服务商。AI 纪要分析会把转写稿文本上传到你配置的分析服务商。转写 API Key 和分析 API Key 都使用 Obsidian `SecretStorage` 独立保存。转写稿和写回的 AI 纪要内容会保存在你的 Obsidian Vault。
@@ -136,8 +136,8 @@ Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你
 ## 配置 AI 纪要分析
 
 1. 在 Echo Notes 设置页打开“启用 AI 纪要分析”。
-2. 分析 Provider 默认使用 `DeepSeek`。
-3. 分析 Base URL 默认是 `https://api.deepseek.com/v1`。
+2. 分析 Provider 默认使用 `阿里百炼`。
+3. 分析 Base URL 默认是 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
 4. 分析模型默认是 `deepseek-v4-pro`。切换分析 Provider 时，会自动填入该服务商可编辑的默认 Base URL 和模型。
 5. 输入独立的分析 API Key。
 6. 设置默认分析模板。录音链接上下三行未命中关键字时，会使用该模板。
@@ -148,6 +148,7 @@ Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你
 - 工作纪要：摘要、关键结论、行动项、风险/阻塞、待确认问题。
 - 学习纪要：核心概念、知识要点、案例/例子、易混淆点、复习清单。
 - 产品需求挖掘纪要：用户/场景、痛点、需求机会、功能建议、优先级、验收标准、开放问题。
+- 角色化工作模板：管理者、产品经理、项目经理、研发/技术、销售、客户成功、运营、HR/人力。角色模板默认禁用，可在设置页按需启用，并根据自己的工作流调整识别关键词。
 
 自定义模板支持名称、识别关键字、系统提示词、自定义提示词和启用开关。已启用模板会参与录音链接上下三行的关键字匹配；禁用模板会保留配置但不会自动使用。
 
@@ -165,7 +166,7 @@ Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你
 
 Echo Notes 会解析音频文件、调用配置的服务商、创建转写稿，并在音频引用下方插入转写稿链接。
 
-如果已启用 AI 纪要分析，Echo Notes 会读取该录音链接上下三行文本，根据已启用模板的识别关键字自动选择模板。转写稿链接插入后，AI 纪要会在后台生成；模型返回后，结果会写入同一个 `.transcript.md` 文件底部。未识别到关键字时，会使用默认分析模板。
+如果已启用 AI 纪要分析，Echo Notes 会读取该录音链接上下三行文本，根据已启用模板的识别关键字自动选择模板。转写稿链接插入后，AI 纪要会在后台生成；模型返回后，结果会写入同一个 `.transcript.md` 文件内的转写段落前面。未识别到关键字时，会使用默认分析模板。
 
 ### 转写当前笔记中的全部音频
 
@@ -184,7 +185,7 @@ Echo Notes 会解析音频文件、调用配置的服务商、创建转写稿，
 
 AI 纪要分析在转写稿创建或复用后自动触发；转写稿链接会先写回原笔记，不会等待大模型返回。如果转写稿已存在且开启“跳过已存在 transcript”，再次执行转写命令也会复用转写稿并在后台生成或更新 AI 纪要。
 
-Echo Notes 会把 AI 纪要写入转写稿底部的受控区块。相同模板再次生成时会覆盖该模板已有结果，不会重复堆叠；不同模板会追加到同一个 AI 纪要分析区块中。
+Echo Notes 会把 AI 纪要写入转写段落前面的受控区块。相同模板再次生成时会覆盖该模板已有结果，不会重复堆叠；不同模板会追加到同一个 AI 纪要分析区块中。
 
 关键字只匹配来源笔记中录音链接上下三行，不匹配转写稿正文。若同一上下文命中多个模板，会按设置页中的模板顺序使用第一个已启用模板。
 
@@ -218,7 +219,7 @@ Recording 20260531001942/Recording 20260531001942.transcript.md
 <!-- echo-notes-analysis-item:start work-minutes -->
 ### 工作纪要
 
-_生成时间：2026-06-01T10:00:00.000Z；Provider：deepseek；模型：deepseek-v4-pro_
+_生成时间：2026-06-01T10:00:00.000Z；Provider：aliyun-bailian；模型：deepseek-v4-pro_
 
 ## 摘要
 

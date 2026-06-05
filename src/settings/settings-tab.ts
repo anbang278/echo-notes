@@ -42,7 +42,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc("选择用于音频转写的服务商。切换后会自动填入该 Provider 的默认 Base URL 和模型。")
 			.addDropdown((dropdown) =>
 				Object.entries(PROVIDER_LABELS)
-					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
+					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 					.setValue(this.plugin.settings.provider)
 					.onChange(async (value) => {
 						this.plugin.settings.provider = value;
@@ -332,10 +332,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Provider")
-			.setDesc("用于对转写稿生成纪要的服务商。列表与转写 Provider 保持一致，默认使用 DeepSeek。")
+			.setDesc("用于对转写稿生成纪要的服务商。列表与转写 Provider 保持一致，默认使用阿里百炼。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
-					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
+					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 					.setValue(this.plugin.settings.analysisProvider)
 					.onChange(async (value) => {
 						this.plugin.settings.analysisProvider = value as AnalysisProviderId;
@@ -503,19 +503,19 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private applyAnalysisProviderDefaults(provider: AnalysisProviderId): void {
-		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS.deepseek;
+		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
 		this.plugin.settings.analysisBaseUrl = defaults.analysisBaseUrl;
 		this.plugin.settings.analysisModel = defaults.analysisModel;
 	}
 
 	private getProviderDefaults(): Pick<EchoNotesPlugin["settings"], "baseUrl" | "model" | "language"> {
 		const provider = this.plugin.settings.provider as ProviderId;
-		return PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.siliconflow;
+		return PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS["aliyun-bailian"];
 	}
 
 	private getAnalysisProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
 		const provider = this.plugin.settings.analysisProvider as AnalysisProviderId;
-		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS.deepseek;
+		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
 	}
 
 	private getBaseUrlDescription(): string {
@@ -540,6 +540,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return "该服务商的基础地址。新增服务商默认按 OpenAI-compatible 音频转写接口调用 {Base URL}/audio/transcriptions。";
 		}
 	}
+}
+
+function getProviderOptionLabel(value: string, label: string): string {
+	return value === "aliyun-bailian" ? `【推荐】${label}` : label;
 }
 
 class AnalysisTemplateEditModal extends Modal {

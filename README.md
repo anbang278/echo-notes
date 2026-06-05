@@ -22,7 +22,7 @@ Most transcription tools produce one generic text output, but different recordin
 - Study notes care about core concepts, explanations, structured summaries, examples, and review checklists.
 - Product requirement mining cares about user quotes, pain points, motivation, context, feature opportunities, and acceptance criteria.
 
-Echo Notes uses configurable prompt templates so the same transcription workflow can produce documents that fit the actual scenario. You can use the built-in work minutes, study notes, and product requirement mining templates, or define your own templates, recognition keywords, and prompts.
+Echo Notes uses configurable prompt templates so the same transcription workflow can produce documents that fit the actual scenario. You can use the built-in work minutes, study notes, product requirement mining, and role-based work templates, or define your own templates, recognition keywords, and prompts.
 
 ### Meeting notes and transcripts should not live outside your knowledge base
 
@@ -46,7 +46,7 @@ Echo Notes keeps the original recording, full transcript, and AI analysis inside
 - Insert a transcript link below the source audio reference.
 - Skip existing transcripts and insert missing transcript links.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
-- Analyze transcript Markdown files with a separate AI model using work minutes, study notes, or product requirement mining templates.
+- Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
 - Automatically choose an AI analysis template from keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a name, recognition keywords, system prompt, and custom prompt.
@@ -66,7 +66,7 @@ Implemented transcription providers:
 
 Provider defaults can be changed in settings.
 
-AI analysis uses a separate provider configuration. The default is DeepSeek `deepseek-v4-pro` through an OpenAI-compatible `/chat/completions` endpoint. The analysis provider list mirrors the transcription provider list; providers other than DeepSeek are optional chat presets and must support `{Base URL}/chat/completions`.
+AI analysis uses a separate provider configuration. The default is Alibaba Bailian `deepseek-v4-pro` through an OpenAI-compatible `/chat/completions` endpoint. The analysis provider list mirrors the transcription provider list; optional chat presets must support `{Base URL}/chat/completions`.
 
 ## Network and Data Use
 
@@ -76,7 +76,7 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 - Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - OpenAI default endpoint: `https://api.openai.com/v1`
 - Groq default endpoint: `https://api.groq.com/openai/v1`
-- AI analysis default endpoint: `https://api.deepseek.com/v1`
+- AI analysis default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - Custom OpenAI-compatible endpoint: user configured
 
 Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript files and inline AI analysis results are written inside your Obsidian vault.
@@ -137,8 +137,8 @@ These hotkeys belong to Echo Notes commands. Echo Notes does not directly rewrit
 
 1. Open the Echo Notes settings tab.
 2. Enable AI analysis.
-3. Keep the default provider as `DeepSeek`, or choose another provider that supports OpenAI-compatible Chat Completions.
-4. Keep Base URL as `https://api.deepseek.com/v1` and Model as `deepseek-v4-pro`, or edit them. Switching providers fills that provider's editable default Base URL and model.
+3. Keep the default provider as `Alibaba Bailian`, or choose another provider that supports OpenAI-compatible Chat Completions.
+4. Keep Base URL as `https://dashscope.aliyuncs.com/compatible-mode/v1` and Model as `deepseek-v4-pro`, or edit them. Switching providers fills that provider's editable default Base URL and model.
 5. Enter the separate analysis API key.
 6. Choose the default analysis template used when no keyword is found near the audio link.
 7. Edit, enable, disable, restore, or add templates in the analysis template settings.
@@ -148,6 +148,7 @@ Built-in templates:
 - Work minutes: Summary, Key decisions, Action items, Risks/Blockers, Open questions.
 - Study notes: Core concepts, Key points, Examples, Common confusions, Review checklist.
 - Product requirement mining: Users/Scenarios, Pain points, Requirement opportunities, Feature suggestions, Priority, Acceptance criteria, Open questions.
+- Role-based work templates are included for managers, product managers, project managers, engineering/technical roles, sales, customer success, operations, and HR. They are disabled by default; enable the ones you need in settings and adjust recognition keywords for your workflow.
 
 Custom templates are supported. Each template has a name, recognition keywords, system prompt, custom prompt, and enabled switch. Enabled templates participate in keyword matching; disabled templates keep their configuration but are not used automatically.
 
@@ -165,7 +166,7 @@ Run the command `Echo Notes: Transcribe selected audio`.
 
 Echo Notes resolves the audio file, calls the configured provider, creates a transcript, and inserts a transcript link below the audio reference.
 
-If AI analysis is enabled, Echo Notes reads the three lines above and below the audio link and chooses an enabled template by recognition keyword. After the transcript link is inserted, AI analysis runs in the background; when the model returns, the result is written to the bottom of the same `.transcript.md` file. If no keyword is found, Echo Notes uses the configured default template.
+If AI analysis is enabled, Echo Notes reads the three lines above and below the audio link and chooses an enabled template by recognition keyword. After the transcript link is inserted, AI analysis runs in the background; when the model returns, the result is written before the transcript section in the same `.transcript.md` file. If no keyword is found, Echo Notes uses the configured default template.
 
 ### Transcribe all audio files in the current note
 
@@ -184,7 +185,7 @@ If AI analysis is enabled, each audio link is matched independently. Different r
 
 AI analysis runs automatically after a transcript is created or reused. Echo Notes inserts the transcript link first and does not wait for the model response. If a transcript already exists and "skip existing transcript" is enabled, running the transcription command again reuses the transcript and generates or updates AI analysis in the background.
 
-Echo Notes writes AI analysis into a controlled block at the bottom of the transcript. Running the same template again replaces that template's existing result instead of stacking duplicates; different templates are appended inside the same AI analysis block.
+Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different templates are appended inside the same AI analysis block.
 
 Keywords are matched only against the source note lines around the audio link, not against the transcript body. If multiple templates match the same context, Echo Notes uses the first enabled template in settings order.
 
@@ -218,7 +219,7 @@ Inline AI analysis example:
 <!-- echo-notes-analysis-item:start work-minutes -->
 ### Work minutes
 
-_Generated at: 2026-06-01T10:00:00.000Z; Provider: deepseek; Model: deepseek-v4-pro_
+_Generated at: 2026-06-01T10:00:00.000Z; Provider: aliyun-bailian; Model: deepseek-v4-pro_
 
 ## Summary
 
