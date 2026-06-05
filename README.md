@@ -227,19 +227,26 @@ Recording 20260531001942/Recording 20260531001942.transcript.md
 Inline AI analysis example:
 
 ```markdown
+Original recording: ![[Recording 20260531001942.m4a]]
+Source note: [[2026-06-05]]
+
 <!-- echo-notes-analysis:start -->
-## AI Analysis
+# Analysis Recording 20260531001942
 
 <!-- echo-notes-analysis-item:start work-minutes -->
-### Work minutes
+## Work minutes
 
 _Generated at: 2026-06-01T10:00:00.000Z; Provider: aliyun-bailian; Model: deepseek-v4-pro_
 
-## Summary
+### Summary
 
 This is the generated analysis content.
 <!-- echo-notes-analysis-item:end work-minutes -->
 <!-- echo-notes-analysis:end -->
+
+# Transcribed manuscript Recording 20260531001942
+
+This is the full transcript text.
 ```
 
 ## Automation

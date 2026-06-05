@@ -26,6 +26,7 @@ export class AnalysisService {
 		copyLanguage: CopyLanguage
 	): Promise<void> {
 		const copy = getLocalizedCopy(copyLanguage);
+		const transcriptTitle = getTranscriptTitle(transcriptFile);
 		const analysisBlock = renderTranscriptAnalysisBlock({
 			templateId: template.id,
 			templateName: template.name,
@@ -38,9 +39,17 @@ export class AnalysisService {
 				content,
 				analysisBlock,
 				template.id,
-				copy.analysisLinksHeading,
-				copy.transcriptHeading
+				formatSectionHeading(copy.analysisLinksHeading, transcriptTitle),
+				[formatSectionHeading(copy.transcriptHeading, transcriptTitle), copy.transcriptHeading]
 			)
 		);
 	}
+}
+
+function getTranscriptTitle(transcriptFile: TFile): string {
+	return transcriptFile.basename.replace(/\.transcript$/, "");
+}
+
+function formatSectionHeading(label: string, title: string): string {
+	return `${label} ${title}`.trim();
 }

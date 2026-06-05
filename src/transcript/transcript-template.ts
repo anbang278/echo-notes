@@ -56,11 +56,8 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 		`trace_id: "${escapeYaml(input.result.traceId ?? "")}"`,
 		"---",
 		"",
-		`# ${title} ${copy.transcriptTitleSuffix}`,
-		"",
-		`${copy.sourceAudioLabel}!${sourceAudioLink}`,
-		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
-		`## ${copy.transcriptHeading}`,
+		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
+		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderTranscriptionBody(input.result, input.copyLanguage),
 		""
@@ -117,13 +114,10 @@ export function renderProgressTranscriptTemplate(input: ProgressTranscriptTempla
 			status: "transcribing"
 		}),
 		"",
-		`# ${title} ${copy.transcriptTitleSuffix}`,
-		"",
-		`${copy.sourceAudioLabel}!${sourceAudioLink}`,
-		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
+		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
 		`> ${copy.transcribingNotice}`,
 		"",
-		`## ${copy.transcriptHeading}`,
+		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderSegmentsOrEmpty(input.segments, input.copyLanguage),
 		""
@@ -135,7 +129,7 @@ export function renderTranscriptionSegments(segments: TranscriptionSegment[], co
 	return segments
 		.map((segment) =>
 			[
-				`### ${copy.segmentHeadingPrefix} ${segment.index.toString().padStart(2, "0")}（${formatSegmentTimeRange(segment)}）`,
+				`## ${copy.segmentHeadingPrefix} ${segment.index.toString().padStart(2, "0")}（${formatSegmentTimeRange(segment)}）`,
 				...(segment.traceId ? [`<!-- trace_id: ${escapeHtmlComment(segment.traceId)} -->`] : []),
 				"",
 				segment.text.trim() || copy.emptySegmentText
@@ -163,21 +157,30 @@ function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInpu
 			traceId: input.traceId
 		}),
 		"",
-		`# ${title} ${copy.transcriptTitleSuffix}`,
-		"",
-		`${copy.sourceAudioLabel}!${sourceAudioLink}`,
-		...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`, ""] : [""]),
+		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
 		`> ${copy.partialFailureNotice}`,
 		"",
 		copy.errorReasonLabel,
 		"",
 		input.error,
 		"",
-		`## ${copy.transcriptHeading}`,
+		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderSegmentsOrEmpty(input.segments ?? [], input.copyLanguage),
 		""
 	].join("\n");
+}
+
+function renderSourceInfo(
+	copy: ReturnType<typeof getLocalizedCopy>,
+	sourceAudioLink: string,
+	sourceNoteLink: string
+): string[] {
+	return [`${copy.sourceAudioLabel}!${sourceAudioLink}`, ...(sourceNoteLink ? [`${copy.sourceNoteLabel}${sourceNoteLink}`] : []), ""];
+}
+
+function formatTranscriptTitle(copy: ReturnType<typeof getLocalizedCopy>, title: string): string {
+	return `${copy.transcriptHeading} ${title}`.trim();
 }
 
 function renderTranscriptFrontmatter(input: {

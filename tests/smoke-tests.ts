@@ -114,10 +114,11 @@ const chineseTranscript = renderTranscriptTemplate({
 	copyLanguage: "zh"
 });
 
-assert.match(chineseTranscript, /# Recording 20260531001942 转写稿/);
+assert.match(chineseTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(chineseTranscript, /原始录音：!\[\[Recording 20260531001942\]\]/);
 assert.match(chineseTranscript, /来源笔记：\[\[Daily\]\]/);
-assert.match(chineseTranscript, /## 转写稿/);
+assert.doesNotMatch(chineseTranscript, /# Recording 20260531001942 转写稿/);
+assert.ok(chineseTranscript.indexOf("来源笔记：[[Daily]]") < chineseTranscript.indexOf("# 转写稿 Recording 20260531001942"));
 
 const englishTranscript = renderTranscriptTemplate({
 	app: templateApp as never,
@@ -132,10 +133,10 @@ const englishTranscript = renderTranscriptTemplate({
 	copyLanguage: "en"
 });
 
-assert.match(englishTranscript, /# Recording 20260531001942 Transcribed manuscript/);
+assert.match(englishTranscript, /# Transcribed manuscript Recording 20260531001942/);
 assert.match(englishTranscript, /Original recording: !\[\[Recording 20260531001942\]\]/);
 assert.match(englishTranscript, /Source note: \[\[Daily\]\]/);
-assert.match(englishTranscript, /## Transcribed manuscript/);
+assert.doesNotMatch(englishTranscript, /# Recording 20260531001942 Transcribed manuscript/);
 
 const englishFailedTranscript = renderFailedTranscriptTemplate({
 	app: templateApp as never,
@@ -199,9 +200,9 @@ const transcriptSegments = [
 	}
 ];
 const renderedSegments = renderTranscriptionSegments(transcriptSegments, "zh");
-assert.match(renderedSegments, /### 分段 01（00:00-03:00）/);
+assert.match(renderedSegments, /## 分段 01（00:00-03:00）/);
 assert.match(renderedSegments, /<!-- trace_id: trace-1 -->/);
-assert.match(renderedSegments, /### 分段 02（03:00-05:21）/);
+assert.match(renderedSegments, /## 分段 02（03:00-05:21）/);
 
 const segmentedTranscript = renderTranscriptTemplate({
 	app: templateApp as never,
@@ -216,7 +217,8 @@ const segmentedTranscript = renderTranscriptTemplate({
 	copyLanguage: "zh"
 });
 assert.match(segmentedTranscript, /status: done/);
-assert.match(segmentedTranscript, /### 分段 01（00:00-03:00）/);
+assert.match(segmentedTranscript, /# 转写稿 Recording 20260531001942/);
+assert.match(segmentedTranscript, /## 分段 01（00:00-03:00）/);
 
 const progressTranscript = renderProgressTranscriptTemplate({
 	app: templateApp as never,
@@ -229,6 +231,7 @@ const progressTranscript = renderProgressTranscriptTemplate({
 });
 assert.match(progressTranscript, /status: transcribing/);
 assert.match(progressTranscript, /长音频正在逐段转写/);
+assert.match(progressTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(progressTranscript, /第一段内容。/);
 
 const partialFailedTranscript = renderFailedTranscriptTemplate({
@@ -243,6 +246,7 @@ const partialFailedTranscript = renderFailedTranscriptTemplate({
 });
 assert.match(partialFailedTranscript, /status: failed/);
 assert.match(partialFailedTranscript, /长音频逐段转写已中断/);
+assert.match(partialFailedTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(partialFailedTranscript, /第一段内容。/);
 
 const expectedAnalysisTemplateOrder = [
@@ -486,7 +490,7 @@ const workAnalysisBlock = renderTranscriptAnalysisBlock({
 	templateId: "work-minutes",
 	templateName: "工作纪要",
 	result: {
-		text: "## 摘要\n\n这是纪要。",
+		text: "# 工作纪要\n\n## 摘要\n\n### 细节\n\n```mermaid\n# code fence heading should stay unchanged\n```\n\n这是纪要。",
 		provider: "deepseek",
 		model: "deepseek-chat",
 		traceId: "trace-1"
@@ -494,13 +498,44 @@ const workAnalysisBlock = renderTranscriptAnalysisBlock({
 	copyLanguage: "zh"
 });
 assert.match(workAnalysisBlock, /<!-- echo-notes-analysis-item:start work-minutes -->/);
-assert.match(workAnalysisBlock, /### 工作纪要/);
+assert.match(workAnalysisBlock, /^## 工作纪要$/m);
 assert.match(workAnalysisBlock, /Provider：deepseek/);
 assert.match(workAnalysisBlock, /模型：deepseek-chat/);
 assert.match(workAnalysisBlock, /Trace ID：trace-1/);
-assert.match(workAnalysisBlock, /## 摘要/);
+assert.match(workAnalysisBlock, /^### 工作纪要$/m);
+assert.match(workAnalysisBlock, /^### 摘要$/m);
+assert.match(workAnalysisBlock, /^#### 细节$/m);
+assert.match(workAnalysisBlock, /```mermaid\n# code fence heading should stay unchanged\n```/);
+assert.doesNotMatch(workAnalysisBlock, /^# 工作纪要$/m);
+assert.doesNotMatch(workAnalysisBlock, /^## 摘要$/m);
 
 const transcriptWithFrontmatter = [
+	"---",
+	"type: audio-transcript",
+	"---",
+	"",
+	"原始录音：![[Recording]]",
+	"来源笔记：[[Daily]]",
+	"",
+	TRANSCRIPT_ANALYSIS_START,
+	"# 纪要分析 Recording",
+	"",
+	workAnalysisBlock,
+	TRANSCRIPT_ANALYSIS_END,
+	"",
+	ANALYSIS_LINKS_START,
+	"## AI 纪要分析",
+	"",
+	"- [[Analysis|工作纪要]]",
+	ANALYSIS_LINKS_END,
+	"",
+	"# 转写稿 Recording",
+	"",
+	"正文内容"
+].join("\n");
+assert.equal(extractTranscriptText(transcriptWithFrontmatter), "正文内容");
+
+const legacyTranscriptWithFrontmatter = [
 	"---",
 	"type: audio-transcript",
 	"---",
@@ -511,27 +546,19 @@ const transcriptWithFrontmatter = [
 	"",
 	"正文内容",
 	"",
-	ANALYSIS_LINKS_START,
-	"## AI 纪要分析",
-	"",
-	"- [[Analysis|工作纪要]]",
-	ANALYSIS_LINKS_END,
-	"",
 	TRANSCRIPT_ANALYSIS_START,
 	"## AI 纪要分析",
 	"",
 	workAnalysisBlock,
 	TRANSCRIPT_ANALYSIS_END
 ].join("\n");
-assert.equal(extractTranscriptText(transcriptWithFrontmatter), "# Recording 转写稿\n\n## 转写稿\n\n正文内容");
+assert.equal(extractTranscriptText(legacyTranscriptWithFrontmatter), "正文内容");
 
 const baseTranscriptForAnalysis = [
-	"# Recording 转写稿",
-	"",
 	"原始录音：![[Recording]]",
 	"来源笔记：[[Daily]]",
 	"",
-	"## 转写稿",
+	"# 转写稿 Recording",
 	"",
 	"正文内容"
 ].join("\n");
@@ -539,14 +566,14 @@ const transcriptWithWorkAnalysis = insertOrReplaceTranscriptAnalysis(
 	baseTranscriptForAnalysis,
 	workAnalysisBlock,
 	"work-minutes",
-	"AI 纪要分析",
-	"转写稿"
+	"纪要分析 Recording",
+	"转写稿 Recording"
 );
 assert.match(transcriptWithWorkAnalysis, /<!-- echo-notes-analysis:start -->/);
-assert.match(transcriptWithWorkAnalysis, /## AI 纪要分析/);
+assert.match(transcriptWithWorkAnalysis, /^# 纪要分析 Recording$/m);
 assert.match(transcriptWithWorkAnalysis, /<!-- echo-notes-analysis-item:start work-minutes -->/);
 assert.match(transcriptWithWorkAnalysis, /这是纪要。/);
-assert.ok(transcriptWithWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithWorkAnalysis.indexOf("## 转写稿"));
+assert.ok(transcriptWithWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithWorkAnalysis.indexOf("# 转写稿 Recording"));
 
 const updatedWorkAnalysisBlock = renderTranscriptAnalysisBlock({
 	templateId: "work-minutes",
@@ -558,21 +585,12 @@ const updatedWorkAnalysisBlock = renderTranscriptAnalysisBlock({
 	},
 	copyLanguage: "zh"
 });
-const legacyBottomAnalysisTranscript = [
-	baseTranscriptForAnalysis,
-	"",
-	TRANSCRIPT_ANALYSIS_START,
-	"## AI 纪要分析",
-	"",
-	workAnalysisBlock,
-	TRANSCRIPT_ANALYSIS_END
-].join("\n");
 const transcriptWithUpdatedWorkAnalysis = insertOrReplaceTranscriptAnalysis(
-	legacyBottomAnalysisTranscript,
+	transcriptWithWorkAnalysis,
 	updatedWorkAnalysisBlock,
 	"work-minutes",
-	"AI 纪要分析",
-	"转写稿"
+	"纪要分析 Recording",
+	"转写稿 Recording"
 );
 assert.doesNotMatch(transcriptWithUpdatedWorkAnalysis, /这是纪要。/);
 assert.match(transcriptWithUpdatedWorkAnalysis, /这是新纪要。/);
@@ -580,10 +598,10 @@ assert.equal(
 	(transcriptWithUpdatedWorkAnalysis.match(/<!-- echo-notes-analysis-item:start work-minutes -->/g) ?? []).length,
 	1
 );
-assert.equal((transcriptWithUpdatedWorkAnalysis.match(/## AI 纪要分析/g) ?? []).length, 1);
+assert.equal((transcriptWithUpdatedWorkAnalysis.match(/^# 纪要分析 Recording$/gm) ?? []).length, 1);
 assert.ok(
 	transcriptWithUpdatedWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) <
-		transcriptWithUpdatedWorkAnalysis.indexOf("## 转写稿")
+		transcriptWithUpdatedWorkAnalysis.indexOf("# 转写稿 Recording")
 );
 
 const studyAnalysisBlock = renderTranscriptAnalysisBlock({
@@ -600,12 +618,44 @@ const transcriptWithTwoAnalyses = insertOrReplaceTranscriptAnalysis(
 	transcriptWithUpdatedWorkAnalysis,
 	studyAnalysisBlock,
 	"study-notes",
-	"AI 纪要分析",
-	"转写稿"
+	"纪要分析 Recording",
+	"转写稿 Recording"
 );
 assert.match(transcriptWithTwoAnalyses, /<!-- echo-notes-analysis-item:start work-minutes -->/);
 assert.match(transcriptWithTwoAnalyses, /<!-- echo-notes-analysis-item:start study-notes -->/);
-assert.equal((transcriptWithTwoAnalyses.match(/## AI 纪要分析/g) ?? []).length, 1);
-assert.ok(transcriptWithTwoAnalyses.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithTwoAnalyses.indexOf("## 转写稿"));
+assert.equal((transcriptWithTwoAnalyses.match(/^# 纪要分析 Recording$/gm) ?? []).length, 1);
+assert.ok(transcriptWithTwoAnalyses.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithTwoAnalyses.indexOf("# 转写稿 Recording"));
+
+const legacyBaseTranscriptForAnalysis = [
+	"# Recording 转写稿",
+	"",
+	"原始录音：![[Recording]]",
+	"来源笔记：[[Daily]]",
+	"",
+	"## 转写稿",
+	"",
+	"正文内容"
+].join("\n");
+const legacyBottomAnalysisTranscript = [
+	legacyBaseTranscriptForAnalysis,
+	"",
+	TRANSCRIPT_ANALYSIS_START,
+	"## AI 纪要分析",
+	"",
+	workAnalysisBlock,
+	TRANSCRIPT_ANALYSIS_END
+].join("\n");
+const transcriptWithLegacyUpdatedWorkAnalysis = insertOrReplaceTranscriptAnalysis(
+	legacyBottomAnalysisTranscript,
+	updatedWorkAnalysisBlock,
+	"work-minutes",
+	"纪要分析 Recording",
+	["转写稿 Recording", "转写稿"]
+);
+assert.equal((transcriptWithLegacyUpdatedWorkAnalysis.match(/## AI 纪要分析/g) ?? []).length, 1);
+assert.ok(
+	transcriptWithLegacyUpdatedWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) <
+		transcriptWithLegacyUpdatedWorkAnalysis.indexOf("## 转写稿")
+);
 
 console.log("Smoke tests passed.");

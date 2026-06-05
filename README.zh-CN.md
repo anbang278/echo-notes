@@ -227,19 +227,26 @@ Recording 20260531001942/Recording 20260531001942.transcript.md
 转写稿内 AI 纪要示例：
 
 ```markdown
+原始录音：![[Recording 20260531001942.m4a]]
+来源笔记：[[2026-06-05]]
+
 <!-- echo-notes-analysis:start -->
-## AI 纪要分析
+# 纪要分析 Recording 20260531001942
 
 <!-- echo-notes-analysis-item:start work-minutes -->
-### 工作纪要
+## 工作纪要
 
 _生成时间：2026-06-01T10:00:00.000Z；Provider：aliyun-bailian；模型：deepseek-v4-pro_
 
-## 摘要
+### 摘要
 
 这里是模型生成的纪要内容。
 <!-- echo-notes-analysis-item:end work-minutes -->
 <!-- echo-notes-analysis:end -->
+
+# 转写稿 Recording 20260531001942
+
+这里是完整转写文本。
 ```
 
 ## 自动化

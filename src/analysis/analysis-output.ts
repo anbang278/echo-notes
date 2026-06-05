@@ -14,11 +14,13 @@ export interface RenderTranscriptAnalysisBlockInput {
 }
 
 export function extractTranscriptText(content: string): string {
-	return content
+	const contentWithoutManagedBlocks = content
 		.replace(/^---\n[\s\S]*?\n---\n?/, "")
 		.replace(new RegExp(`${escapeRegExp(ANALYSIS_LINKS_START)}[\\s\\S]*?${escapeRegExp(ANALYSIS_LINKS_END)}\\n?`, "g"), "")
 		.replace(new RegExp(`${escapeRegExp(TRANSCRIPT_ANALYSIS_START)}[\\s\\S]*?${escapeRegExp(TRANSCRIPT_ANALYSIS_END)}\\n?`, "g"), "")
 		.trim();
+
+	return extractContentAfterTranscriptHeading(contentWithoutManagedBlocks) ?? contentWithoutManagedBlocks;
 }
 
 export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlockInput): string {
@@ -35,11 +37,11 @@ export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlo
 
 	return [
 		getTranscriptAnalysisItemStart(input.templateId),
-		`### ${input.templateName}`,
+		`## ${input.templateName}`,
 		"",
 		`_${metadata.join(metadataSeparator)}_`,
 		"",
-		input.result.text.trim(),
+		normalizeAnalysisMarkdownHeadings(input.result.text.trim()),
 		getTranscriptAnalysisItemEnd(input.templateId)
 	].join("\n");
 }
@@ -49,12 +51,12 @@ export function insertOrReplaceTranscriptAnalysis(
 	analysisBlock: string,
 	templateId: AnalysisTemplateId,
 	heading: string,
-	insertBeforeHeading?: string
+	insertBeforeHeading?: string | string[]
 ): string {
 	const startIndex = content.indexOf(TRANSCRIPT_ANALYSIS_START);
 	const endIndex = content.indexOf(TRANSCRIPT_ANALYSIS_END);
 	if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-		const fullBlock = [TRANSCRIPT_ANALYSIS_START, `## ${heading}`, "", analysisBlock, TRANSCRIPT_ANALYSIS_END].join("\n");
+		const fullBlock = [TRANSCRIPT_ANALYSIS_START, `# ${heading}`, "", analysisBlock, TRANSCRIPT_ANALYSIS_END].join("\n");
 		return insertAnalysisSection(content, fullBlock, insertBeforeHeading);
 	}
 
@@ -91,7 +93,7 @@ function getTranscriptAnalysisItemEnd(templateId: AnalysisTemplateId): string {
 	return `<!-- echo-notes-analysis-item:end ${templateId} -->`;
 }
 
-function insertAnalysisSection(content: string, section: string, insertBeforeHeading?: string): string {
+function insertAnalysisSection(content: string, section: string, insertBeforeHeading?: string | string[]): string {
 	const trimmedSection = section.trim();
 	const insertionIndex = insertBeforeHeading ? findHeadingIndex(content, insertBeforeHeading) : -1;
 	if (insertionIndex === -1) {
@@ -105,10 +107,68 @@ function insertAnalysisSection(content: string, section: string, insertBeforeHea
 	return `${prefix}${trimmedSection}\n\n${after}`;
 }
 
-function findHeadingIndex(content: string, heading: string): number {
-	const pattern = new RegExp(`^##\\s+${escapeRegExp(heading)}\\s*$`, "m");
-	const match = pattern.exec(content);
-	return match?.index ?? -1;
+function findHeadingIndex(content: string, heading: string | string[]): number {
+	const headings = Array.isArray(heading) ? heading : [heading];
+	const matches = headings
+		.map((candidate) => {
+			const pattern = new RegExp(`^#{1,6}\\s+${escapeRegExp(candidate)}\\s*$`, "m");
+			return pattern.exec(content)?.index ?? -1;
+		})
+		.filter((index) => index !== -1);
+
+	return matches.length > 0 ? Math.min(...matches) : -1;
+}
+
+function extractContentAfterTranscriptHeading(content: string): string | null {
+	const lines = content.split("\n");
+	const transcriptHeadingIndex = lines.findIndex((line) => isTranscriptHeading(line));
+	if (transcriptHeadingIndex === -1) {
+		return null;
+	}
+
+	return lines
+		.slice(transcriptHeadingIndex + 1)
+		.join("\n")
+		.trim();
+}
+
+function isTranscriptHeading(line: string): boolean {
+	const match = /^#{1,6}\s+(.+?)\s*$/.exec(line);
+	if (!match) {
+		return false;
+	}
+
+	const heading = match[1];
+	return (
+		heading === "转写稿" ||
+		heading.startsWith("转写稿 ") ||
+		heading === "Transcribed manuscript" ||
+		heading.startsWith("Transcribed manuscript ")
+	);
+}
+
+function normalizeAnalysisMarkdownHeadings(markdown: string): string {
+	let inFence = false;
+	return markdown
+		.split("\n")
+		.map((line) => {
+			if (/^\s*(```|~~~)/.test(line)) {
+				inFence = !inFence;
+				return line;
+			}
+			if (inFence) {
+				return line;
+			}
+
+			const headingMatch = /^(\s{0,3})(#{1,6})(\s+.*)$/.exec(line);
+			if (!headingMatch) {
+				return line;
+			}
+
+			const nextLevel = Math.min(Math.max(headingMatch[2].length + 1, 3), 6);
+			return `${headingMatch[1]}${"#".repeat(nextLevel)}${headingMatch[3]}`;
+		})
+		.join("\n");
 }
 
 function escapeRegExp(value: string): string {
