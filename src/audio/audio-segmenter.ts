@@ -8,7 +8,7 @@ export const LONG_AUDIO_SILENCE_RMS_THRESHOLD = 0.015;
 export const WAV_SEGMENT_SAMPLE_RATE = 16000;
 export const WAV_SEGMENT_MIME_TYPE = "audio/wav";
 
-export interface AudioSegmentRange extends TranscriptionSegmentRange {}
+export type AudioSegmentRange = TranscriptionSegmentRange;
 
 export interface AudioSegmentRangeOptions {
 	targetSegmentSeconds?: number;
