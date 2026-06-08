@@ -43,20 +43,20 @@ export function getDefaultAnalysisTemplate(settings: EchoNotesSettings): Analysi
 }
 
 export function selectAnalysisTemplateForContext(settings: EchoNotesSettings, contextText: string): AnalysisTemplateConfig | null {
+	return selectAnalysisTemplatesForContext(settings, contextText)[0] ?? null;
+}
+
+export function selectAnalysisTemplatesForContext(settings: EchoNotesSettings, contextText: string): AnalysisTemplateConfig[] {
 	const normalizedContext = contextText.toLowerCase();
 	const enabledTemplates = getEnabledAnalysisTemplates(settings);
-
-	for (const template of enabledTemplates) {
-		const hasKeyword = template.recognitionKeywords.some((keyword) => {
+	const matchedTemplates = enabledTemplates.filter((template) =>
+		template.recognitionKeywords.some((keyword) => {
 			const normalizedKeyword = keyword.trim().toLowerCase();
 			return normalizedKeyword.length > 0 && normalizedContext.includes(normalizedKeyword);
-		});
-		if (hasKeyword) {
-			return template;
-		}
-	}
+		})
+	);
 
-	return getDefaultAnalysisTemplate(settings);
+	return matchedTemplates.length > 0 ? matchedTemplates : getDefaultAnalysisTemplates(settings);
 }
 
 export function selectAnalysisTemplateForSourceMarkdown(
@@ -64,45 +64,58 @@ export function selectAnalysisTemplateForSourceMarkdown(
 	sourceMarkdown: string,
 	contextText: string
 ): AnalysisTemplateConfig | null {
-	const frontmatterTemplate = selectAnalysisTemplateFromFrontmatter(settings, sourceMarkdown);
-	const tagTemplate = selectAnalysisTemplateFromTags(settings, sourceMarkdown);
-	return frontmatterTemplate ?? tagTemplate ?? selectAnalysisTemplateForContext(settings, contextText);
+	return selectAnalysisTemplatesForSourceMarkdown(settings, sourceMarkdown, contextText)[0] ?? null;
+}
+
+export function selectAnalysisTemplatesForSourceMarkdown(
+	settings: EchoNotesSettings,
+	sourceMarkdown: string,
+	contextText: string
+): AnalysisTemplateConfig[] {
+	const frontmatterTemplates = selectAnalysisTemplatesFromFrontmatter(settings, sourceMarkdown);
+	if (frontmatterTemplates.length > 0) {
+		return frontmatterTemplates;
+	}
+
+	const tagTemplates = selectAnalysisTemplatesFromTags(settings, sourceMarkdown);
+	return tagTemplates.length > 0 ? tagTemplates : selectAnalysisTemplatesForContext(settings, contextText);
 }
 
 export function selectAnalysisTemplateFromFrontmatter(
 	settings: EchoNotesSettings,
 	sourceMarkdown: string
 ): AnalysisTemplateConfig | null {
-	const requestedTemplate = getAnalysisTemplateFrontmatterValue(sourceMarkdown);
-	if (!requestedTemplate) {
-		return null;
-	}
+	return selectAnalysisTemplatesFromFrontmatter(settings, sourceMarkdown)[0] ?? null;
+}
 
-	const normalizedRequestedTemplate = requestedTemplate.trim().toLowerCase();
-	return (
-		getEnabledAnalysisTemplates(settings).find(
-			(template) =>
-				template.id.toLowerCase() === normalizedRequestedTemplate ||
-				template.name.trim().toLowerCase() === normalizedRequestedTemplate
-		) ?? null
-	);
+export function selectAnalysisTemplatesFromFrontmatter(
+	settings: EchoNotesSettings,
+	sourceMarkdown: string
+): AnalysisTemplateConfig[] {
+	const requestedTemplates = getAnalysisTemplateFrontmatterValues(sourceMarkdown);
+	return getTemplatesForRequestedValues(settings, requestedTemplates);
 }
 
 export function selectAnalysisTemplateFromTags(
 	settings: EchoNotesSettings,
 	sourceMarkdown: string
 ): AnalysisTemplateConfig | null {
+	return selectAnalysisTemplatesFromTags(settings, sourceMarkdown)[0] ?? null;
+}
+
+export function selectAnalysisTemplatesFromTags(
+	settings: EchoNotesSettings,
+	sourceMarkdown: string
+): AnalysisTemplateConfig[] {
 	const normalizedTags = new Set(getSourceNoteTags(sourceMarkdown).map(normalizeAnalysisTagValue).filter(Boolean));
 	if (normalizedTags.size === 0) {
-		return null;
+		return [];
 	}
 
-	return (
-		getEnabledAnalysisTemplates(settings).find((template) =>
-			[template.id, template.name, ...template.recognitionKeywords]
-				.map(normalizeAnalysisTagValue)
-				.some((candidate) => candidate.length > 0 && normalizedTags.has(candidate))
-		) ?? null
+	return getEnabledAnalysisTemplates(settings).filter((template) =>
+		[template.id, template.name, ...template.recognitionKeywords]
+			.map(normalizeAnalysisTagValue)
+			.some((candidate) => candidate.length > 0 && normalizedTags.has(candidate))
 	);
 }
 
@@ -113,13 +126,20 @@ export function getAnalysisContextAroundAudioMatch(markdown: string, match: Pick
 	return lines.slice(start, end + 1).join("\n");
 }
 
-function getAnalysisTemplateFrontmatterValue(markdown: string): string | null {
+function getDefaultAnalysisTemplates(settings: EchoNotesSettings): AnalysisTemplateConfig[] {
+	const template = getDefaultAnalysisTemplate(settings);
+	return template ? [template] : [];
+}
+
+function getAnalysisTemplateFrontmatterValues(markdown: string): string[] {
 	const lines = getFrontmatterLines(markdown);
 	if (!lines) {
-		return null;
+		return [];
 	}
 
-	for (const line of lines) {
+	const requestedTemplates: string[] = [];
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex];
 		const separatorIndex = line.indexOf(":");
 		if (separatorIndex === -1) {
 			continue;
@@ -130,10 +150,87 @@ function getAnalysisTemplateFrontmatterValue(markdown: string): string | null {
 			continue;
 		}
 
-		return unquoteYamlScalar(line.slice(separatorIndex + 1).trim());
+		const inlineValue = line.slice(separatorIndex + 1).trim();
+		if (inlineValue) {
+			requestedTemplates.push(...parseAnalysisTemplateRequestValue(inlineValue));
+			continue;
+		}
+
+		for (let childIndex = lineIndex + 1; childIndex < lines.length; childIndex += 1) {
+			const childLine = lines[childIndex];
+			const listMatch = childLine.match(/^\s*-\s+(.+)$/);
+			if (!listMatch) {
+				break;
+			}
+
+			requestedTemplates.push(...parseAnalysisTemplateRequestValue(listMatch[1].trim()));
+		}
 	}
 
-	return null;
+	return uniqueTemplates(requestedTemplates);
+}
+
+function getTemplatesForRequestedValues(settings: EchoNotesSettings, requestedValues: string[]): AnalysisTemplateConfig[] {
+	const enabledTemplates = getEnabledAnalysisTemplates(settings);
+	const templates: AnalysisTemplateConfig[] = [];
+	const seen = new Set<string>();
+
+	for (const requestedValue of requestedValues) {
+		const normalizedRequestedValue = requestedValue.trim().toLowerCase();
+		if (!normalizedRequestedValue) {
+			continue;
+		}
+
+		const template = enabledTemplates.find(
+			(candidate) =>
+				candidate.id.toLowerCase() === normalizedRequestedValue ||
+				candidate.name.trim().toLowerCase() === normalizedRequestedValue
+		);
+		if (!template || seen.has(template.id)) {
+			continue;
+		}
+
+		seen.add(template.id);
+		templates.push(template);
+	}
+
+	return templates;
+}
+
+function parseAnalysisTemplateRequestValue(value: string): string[] {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return [];
+	}
+
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+		return trimmed
+			.slice(1, -1)
+			.split(/[,，、]+/g)
+			.map((template) => unquoteYamlScalar(template.trim()))
+			.filter(Boolean);
+	}
+
+	return trimmed
+		.split(/[,，、]+/g)
+		.map((template) => unquoteYamlScalar(template.trim()))
+		.filter(Boolean);
+}
+
+function uniqueTemplates(values: string[]): string[] {
+	const seen = new Set<string>();
+	const result: string[] = [];
+
+	for (const value of values) {
+		const normalizedValue = value.trim().toLowerCase();
+		if (!normalizedValue || seen.has(normalizedValue)) {
+			continue;
+		}
+		seen.add(normalizedValue);
+		result.push(value.trim());
+	}
+
+	return result;
 }
 
 function getSourceNoteTags(markdown: string): string[] {

@@ -14,9 +14,13 @@ import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
 	selectAnalysisTemplateForContext,
+	selectAnalysisTemplatesForContext,
 	selectAnalysisTemplateFromFrontmatter,
+	selectAnalysisTemplatesFromFrontmatter,
 	selectAnalysisTemplateFromTags,
-	selectAnalysisTemplateForSourceMarkdown
+	selectAnalysisTemplatesFromTags,
+	selectAnalysisTemplateForSourceMarkdown,
+	selectAnalysisTemplatesForSourceMarkdown
 } from "../src/analysis/analysis-templates";
 import { parseAudioLinks } from "../src/audio/audio-link-parser";
 import {
@@ -832,6 +836,12 @@ assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记�
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为管理者纪要。")?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里没有任何关键字。")?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "学习纪要和产品需求挖掘纪要同时出现。")?.id, "study-notes");
+assert.deepEqual(
+	selectAnalysisTemplatesForContext(normalizedSettings, "学习纪要和产品需求挖掘纪要同时出现。").map(
+		(template) => template.id
+	),
+	["study-notes", "product-requirement-mining"]
+);
 const frontmatterTemplateById = [
 	"---",
 	"echo_notes_analysis_template: product-requirement-mining",
@@ -842,6 +852,35 @@ assert.equal(selectAnalysisTemplateFromFrontmatter(normalizedSettings, frontmatt
 assert.equal(
 	selectAnalysisTemplateForSourceMarkdown(normalizedSettings, frontmatterTemplateById, "这里标记为学习纪要。")?.id,
 	"product-requirement-mining"
+);
+const frontmatterTemplateList = [
+	"---",
+	"echo_notes_analysis_template:",
+	"  - study-notes",
+	"  - product-requirement-mining",
+	"  - study-notes",
+	"---",
+	"这里没有任何关键字。"
+].join("\n");
+assert.deepEqual(
+	selectAnalysisTemplatesFromFrontmatter(normalizedSettings, frontmatterTemplateList).map((template) => template.id),
+	["study-notes", "product-requirement-mining"]
+);
+assert.deepEqual(
+	selectAnalysisTemplatesForSourceMarkdown(normalizedSettings, frontmatterTemplateList, "这里没有任何关键字。").map(
+		(template) => template.id
+	),
+	["study-notes", "product-requirement-mining"]
+);
+const frontmatterTemplateInlineList = [
+	"---",
+	"echo_notes_template: [访谈纪要, product-requirement-mining, missing-template]",
+	"---",
+	"这里没有任何关键字。"
+].join("\n");
+assert.deepEqual(
+	selectAnalysisTemplatesFromFrontmatter(normalizedSettings, frontmatterTemplateInlineList).map((template) => template.id),
+	["custom-template", "product-requirement-mining"]
 );
 const frontmatterTemplateByName = ["---", "echo_notes_template: 访谈纪要", "---", "这里没有任何关键字。"].join("\n");
 assert.equal(selectAnalysisTemplateFromFrontmatter(normalizedSettings, frontmatterTemplateByName)?.id, "custom-template");
@@ -857,6 +896,11 @@ assert.equal(
 	selectAnalysisTemplateForSourceMarkdown(normalizedSettings, frontmatterTagTemplate, "这里标记为学习纪要。")?.id,
 	"product-requirement-mining"
 );
+const multiTagTemplate = ["---", "tags: [学习纪要, 产品需求挖掘纪要]", "---", "这里没有任何关键字。"].join("\n");
+assert.deepEqual(
+	selectAnalysisTemplatesFromTags(normalizedSettings, multiTagTemplate).map((template) => template.id),
+	["study-notes", "product-requirement-mining"]
+);
 const listTagTemplate = ["---", "tags:", "  - custom-template", "---", "这里没有任何关键字。"].join("\n");
 assert.equal(selectAnalysisTemplateFromTags(normalizedSettings, listTagTemplate)?.id, "custom-template");
 const inlineTagTemplate = "这里没有模板关键字，但有 #学习纪要 标签。";
@@ -871,6 +915,12 @@ const explicitFrontmatterBeatsTag = [
 assert.equal(
 	selectAnalysisTemplateForSourceMarkdown(normalizedSettings, explicitFrontmatterBeatsTag, "这里没有任何关键字。")?.id,
 	"study-notes"
+);
+assert.deepEqual(
+	selectAnalysisTemplatesForSourceMarkdown(normalizedSettings, explicitFrontmatterBeatsTag, "这里没有任何关键字。").map(
+		(template) => template.id
+	),
+	["study-notes"]
 );
 
 const contextNote = [

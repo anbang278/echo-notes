@@ -5,7 +5,7 @@ import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
 	getEnabledAnalysisTemplates,
-	selectAnalysisTemplateForSourceMarkdown
+	selectAnalysisTemplatesForSourceMarkdown
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
 import { isSupportedAudioFile } from "./audio/audio-detector";
@@ -438,7 +438,7 @@ export default class EchoNotesPlugin extends Plugin {
 					void this.processAudioToTranscript(file, undefined, { allowUploadConfirmation: false })
 						.then((result) => {
 							if (result?.analysisEligible) {
-								this.startAnalysisTask(result.transcriptFile, this.getDefaultAnalysisTemplateForAnalysis());
+								this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis());
 							}
 						})
 						.catch((error) => {
@@ -472,7 +472,7 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		const absoluteMatch = toAbsoluteMatch(audioMatch, range.lineStart);
-		const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), absoluteMatch);
+		const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(editor.getValue(), absoluteMatch);
 		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
 			audioLinkPath: audioMatch.linkPath,
 			onTranscriptFileReady: async (transcriptFile) => {
@@ -485,7 +485,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const transcriptFile = result.transcriptFile;
 
 		if (result.analysisEligible) {
-			this.startAnalysisTask(transcriptFile, analysisTemplate);
+			this.startAnalysisTasks(transcriptFile, analysisTemplates);
 		}
 	}
 
@@ -512,7 +512,7 @@ export default class EchoNotesPlugin extends Plugin {
 				continue;
 			}
 
-			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), audioMatch);
+			const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(editor.getValue(), audioMatch);
 			const result = await this.processAudioToTranscript(audioFile, sourceNote, {
 				audioLinkPath: audioMatch.linkPath,
 				onTranscriptFileReady: async (transcriptFile) => {
@@ -526,7 +526,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			const transcriptFile = result.transcriptFile;
 			if (result.analysisEligible) {
-				this.startAnalysisTask(transcriptFile, analysisTemplate);
+				this.startAnalysisTasks(transcriptFile, analysisTemplates);
 			}
 			completed += 1;
 		}
@@ -822,7 +822,7 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 
 		if (result?.analysisEligible) {
-			this.startAnalysisTask(result.transcriptFile, this.getDefaultAnalysisTemplateForAnalysis());
+			this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis());
 		}
 	}
 
@@ -848,35 +848,44 @@ export default class EchoNotesPlugin extends Plugin {
 		return true;
 	}
 
-	private resolveAnalysisTemplateForAudioMatch(content: string, audioMatch: AudioLinkMatch): AnalysisTemplateConfig | null {
+	private resolveAnalysisTemplatesForAudioMatch(content: string, audioMatch: AudioLinkMatch): AnalysisTemplateConfig[] {
 		if (!this.settings.analysisEnabled) {
-			return null;
+			return [];
 		}
 
 		const contextText = getAnalysisContextAroundAudioMatch(content, audioMatch);
-		const template = selectAnalysisTemplateForSourceMarkdown(this.settings, content, contextText);
-		if (!template) {
+		const templates = selectAnalysisTemplatesForSourceMarkdown(this.settings, content, contextText);
+		if (templates.length === 0) {
 			new Notice("没有启用的 AI 纪要分析模板，已跳过分析。");
-			return null;
+			return [];
 		}
 
-		this.log(`AI 纪要分析模板：${template.name}`, {
+		this.log(`AI 纪要分析模板：${templates.map((template) => template.name).join("、")}`, {
 			audioLink: audioMatch.linkPath,
-			keywords: template.recognitionKeywords
+			templates: templates.map((template) => ({
+				id: template.id,
+				keywords: template.recognitionKeywords
+			}))
 		});
-		return template;
+		return templates;
 	}
 
-	private getDefaultAnalysisTemplateForAnalysis(): AnalysisTemplateConfig | null {
+	private getDefaultAnalysisTemplatesForAnalysis(): AnalysisTemplateConfig[] {
 		if (!this.settings.analysisEnabled) {
-			return null;
+			return [];
 		}
 
 		const template = getDefaultAnalysisTemplate(this.settings);
 		if (!template) {
 			new Notice("没有启用的 AI 纪要分析模板，已跳过分析。");
 		}
-		return template;
+		return template ? [template] : [];
+	}
+
+	private startAnalysisTasks(transcriptFile: TFile, templates: AnalysisTemplateConfig[]): void {
+		for (const template of templates) {
+			this.startAnalysisTask(transcriptFile, template);
+		}
 	}
 
 	private startAnalysisTask(transcriptFile: TFile, template: AnalysisTemplateConfig | null | undefined): void {
@@ -1025,7 +1034,7 @@ export default class EchoNotesPlugin extends Plugin {
 				continue;
 			}
 
-			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(content, audioMatch);
+			const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(content, audioMatch);
 			const result = await this.processAudioToTranscript(audioFile, file, {
 				allowUploadConfirmation: false,
 				audioLinkPath: audioMatch.linkPath,
@@ -1040,7 +1049,7 @@ export default class EchoNotesPlugin extends Plugin {
 			const transcriptFile = result.transcriptFile;
 
 			if (result.analysisEligible) {
-				this.startAnalysisTask(transcriptFile, analysisTemplate);
+				this.startAnalysisTasks(transcriptFile, analysisTemplates);
 			}
 		}
 	}
