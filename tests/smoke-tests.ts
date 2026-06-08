@@ -21,6 +21,7 @@ import {
 	estimateBase64DataUrlByteLength,
 	formatSegmentTimeRange
 } from "../src/audio/audio-segmenter";
+import { runAudioChunkPipeline } from "../src/audio/audio-chunk-pipeline";
 import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/audio/audio-link-fingerprint";
 import { LinkService } from "../src/obsidian/link-service";
 import {
@@ -292,6 +293,60 @@ assert.deepEqual(
 		[2, 2, 180, 390]
 	]
 );
+
+const chunkPipelineEvents: string[] = [];
+const chunkPipelineResult = await runAudioChunkPipeline({
+	createChunks: async () => [
+		{
+			index: 1,
+			total: 2,
+			startSeconds: 0,
+			endSeconds: 180,
+			audioBuffer: new ArrayBuffer(1),
+			mimeType: "audio/wav"
+		},
+		{
+			index: 2,
+			total: 2,
+			startSeconds: 180,
+			endSeconds: 321,
+			audioBuffer: new ArrayBuffer(1),
+			mimeType: "audio/wav"
+		}
+	],
+	transcribeChunk: async (chunk) => ({
+		text: ` 第 ${chunk.index} 段 `,
+		traceId: `trace-${chunk.index}`,
+		raw: { index: chunk.index }
+	}),
+	onProgress: (progress) => {
+		if (progress.type === "long-audio-preparing") {
+			chunkPipelineEvents.push("preparing");
+			return;
+		}
+		if (progress.type === "long-audio-started") {
+			chunkPipelineEvents.push(`started:${progress.totalSegments}`);
+			return;
+		}
+		if (progress.type === "segment-started") {
+			chunkPipelineEvents.push(`segment-started:${progress.segment.index}:${progress.segments.length}`);
+			return;
+		}
+		chunkPipelineEvents.push(`segment-completed:${progress.segment.index}:${progress.segments.length}`);
+	}
+});
+assert.deepEqual(chunkPipelineEvents, [
+	"preparing",
+	"started:2",
+	"segment-started:1:0",
+	"segment-completed:1:1",
+	"segment-started:2:1",
+	"segment-completed:2:2"
+]);
+assert.equal(chunkPipelineResult.text, "第 1 段\n\n第 2 段");
+assert.equal(chunkPipelineResult.traceId, "trace-1, trace-2");
+assert.equal(chunkPipelineResult.segments[1].startSeconds, 180);
+assert.deepEqual(chunkPipelineResult.rawSegments, [{ index: 1 }, { index: 2 }]);
 
 const transcriptSegments = [
 	{

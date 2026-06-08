@@ -1,4 +1,5 @@
 import type { TranscriptionSegmentRange } from "../providers/transcription-provider";
+import type { AudioChunk } from "./audio-chunk-pipeline";
 
 export const LONG_AUDIO_TARGET_SEGMENT_SECONDS = 180;
 export const LONG_AUDIO_SILENCE_SEARCH_SECONDS = 10;
@@ -15,10 +16,7 @@ export interface AudioSegmentRangeOptions {
 	minSegmentSeconds?: number;
 }
 
-export interface WavAudioSegment extends AudioSegmentRange {
-	audioBuffer: ArrayBuffer;
-	mimeType: string;
-}
+export type WavAudioSegment = AudioChunk;
 
 interface SilenceSearchOptions {
 	searchWindowSeconds: number;

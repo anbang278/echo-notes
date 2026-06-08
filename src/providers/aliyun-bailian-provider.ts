@@ -1,4 +1,5 @@
 import { App, requestUrl } from "obsidian";
+import { runAudioChunkPipeline } from "../audio/audio-chunk-pipeline";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
 import {
 	createWavAudioSegments,
@@ -13,8 +14,7 @@ import {
 	TranscriptionError,
 	type TranscriptionInput,
 	type TranscriptionProvider,
-	type TranscriptionResult,
-	type TranscriptionSegment
+	type TranscriptionResult
 } from "./transcription-provider";
 
 const BAILIAN_MAX_BASE64_BYTES = 10 * 1024 * 1024;
@@ -81,68 +81,28 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 	}
 
 	private async transcribeLongAudio(audioBuffer: ArrayBuffer, input: TranscriptionInput): Promise<TranscriptionResult> {
-		await input.onProgress?.({
-			type: "long-audio-preparing",
-			segments: []
-		});
-
-		const chunks = await this.createLongAudioChunks(audioBuffer);
-		const completedSegments: TranscriptionSegment[] = [];
-		const rawResponses: BailianChatCompletionResponse[] = [];
-
-		await input.onProgress?.({
-			type: "long-audio-started",
-			totalSegments: chunks.length,
-			segments: []
-		});
-
-		for (const chunk of chunks) {
-			await input.onProgress?.({
-				type: "segment-started",
-				segment: chunk,
-				segments: [...completedSegments]
-			});
-
-			const encodedByteLength = estimateBase64DataUrlByteLength(chunk.audioBuffer.byteLength, chunk.mimeType);
-			if (encodedByteLength > BAILIAN_MAX_BASE64_BYTES) {
-				throw new TranscriptionError(
-					"file_too_large",
-					`长音频分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）编码后仍超过阿里百炼 qwen3-asr-flash 10MB Base64 输入限制。`
-				);
+		const pipelineResult = await runAudioChunkPipeline<WavAudioSegment, BailianChatCompletionResponse>({
+			onProgress: input.onProgress,
+			createChunks: () => this.createLongAudioChunks(audioBuffer),
+			transcribeChunk: async (chunk) => {
+				this.assertChunkWithinBase64Limit(chunk);
+				const result = await this.transcribeAudioBuffer(chunk.audioBuffer, chunk.mimeType);
+				return {
+					text: result.text,
+					traceId: result.traceId,
+					raw: result.raw
+				};
 			}
-
-			const result = await this.transcribeAudioBuffer(chunk.audioBuffer, chunk.mimeType);
-			const segment: TranscriptionSegment = {
-				index: chunk.index,
-				total: chunk.total,
-				startSeconds: chunk.startSeconds,
-				endSeconds: chunk.endSeconds,
-				text: result.text,
-				traceId: result.traceId
-			};
-			completedSegments.push(segment);
-			rawResponses.push(result.raw);
-
-			await input.onProgress?.({
-				type: "segment-completed",
-				segment,
-				segments: [...completedSegments]
-			});
-		}
-
-		const traceId = completedSegments
-			.map((segment) => segment.traceId)
-			.filter((segmentTraceId): segmentTraceId is string => Boolean(segmentTraceId))
-			.join(", ");
+		});
 
 		return {
-			text: completedSegments.map((segment) => segment.text.trim()).filter(Boolean).join("\n\n"),
+			text: pipelineResult.text,
 			provider: this.id,
 			model: this.settings.model,
-			traceId: traceId || undefined,
-			segments: completedSegments,
+			traceId: pipelineResult.traceId,
+			segments: pipelineResult.segments,
 			raw: {
-				segments: rawResponses
+				segments: pipelineResult.rawSegments
 			}
 		};
 	}
@@ -154,6 +114,18 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new TranscriptionError("audio_decode_error", `音频解码失败，无法进行长音频分段转写：${message}`);
 		}
+	}
+
+	private assertChunkWithinBase64Limit(chunk: WavAudioSegment): void {
+		const encodedByteLength = estimateBase64DataUrlByteLength(chunk.audioBuffer.byteLength, chunk.mimeType);
+		if (encodedByteLength <= BAILIAN_MAX_BASE64_BYTES) {
+			return;
+		}
+
+		throw new TranscriptionError(
+			"file_too_large",
+			`长音频分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）编码后仍超过阿里百炼 qwen3-asr-flash 10MB Base64 输入限制。`
+		);
 	}
 
 	private async transcribeAudioBuffer(audioBuffer: ArrayBuffer, mimeType: string): Promise<BailianTranscriptionResponse> {
