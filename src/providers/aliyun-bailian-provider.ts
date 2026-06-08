@@ -8,6 +8,8 @@ import {
 } from "../audio/audio-segmenter";
 import type { EchoNotesSettings } from "../settings/settings";
 import {
+	createHttpTranscriptionError,
+	createNetworkTranscriptionError,
 	TranscriptionError,
 	type TranscriptionInput,
 	type TranscriptionProvider,
@@ -57,7 +59,7 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 		}
 
 		if (!isSupportedAudioFile(input.audioFile)) {
-			throw new TranscriptionError("unsupported_audio", `不支持的音频格式：${input.audioFile.extension}`);
+			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
 		}
 
 		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
@@ -193,15 +195,14 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 				})
 			});
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			throw new TranscriptionError("network_error", `阿里百炼 API 调用失败：${message}`);
+			throw createNetworkTranscriptionError("阿里百炼", error);
 		}
 
 		const traceId = readTraceId(response.headers);
 		const data = response.json as BailianChatCompletionResponse;
 		if (response.status < 200 || response.status >= 300) {
 			const message = data?.error?.message ?? response.text;
-			throw new TranscriptionError("api_error", `阿里百炼 API 请求失败：HTTP ${response.status} ${message}`, traceId);
+			throw createHttpTranscriptionError("阿里百炼", response.status, message, traceId);
 		}
 
 		const text = data?.choices?.[0]?.message?.content;

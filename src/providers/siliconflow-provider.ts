@@ -2,6 +2,8 @@ import { App, requestUrl } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
 import type { EchoNotesSettings } from "../settings/settings";
 import {
+	createHttpTranscriptionError,
+	createNetworkTranscriptionError,
 	TranscriptionError,
 	type TranscriptionInput,
 	type TranscriptionProvider,
@@ -35,7 +37,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 		}
 
 		if (!isSupportedAudioFile(input.audioFile)) {
-			throw new TranscriptionError("unsupported_audio", `不支持的音频格式：${input.audioFile.extension}`);
+			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
 		}
 
 		if (input.audioFile.stat.size > SILICONFLOW_MAX_AUDIO_BYTES) {
@@ -74,11 +76,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 
 			const traceId = readTraceId(response.headers);
 			if (response.status < 200 || response.status >= 300) {
-				throw new TranscriptionError(
-					"api_error",
-					`SiliconFlow API 请求失败：HTTP ${response.status} ${response.text}`,
-					traceId
-				);
+				throw createHttpTranscriptionError("SiliconFlow", response.status, response.text, traceId);
 			}
 
 			const data = response.json as SiliconFlowTranscriptionResponse;
@@ -98,8 +96,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 				throw error;
 			}
 
-			const message = error instanceof Error ? error.message : String(error);
-			throw new TranscriptionError("network_error", `SiliconFlow API 调用失败：${message}`);
+			throw createNetworkTranscriptionError("SiliconFlow", error);
 		}
 	}
 }

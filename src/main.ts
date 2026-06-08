@@ -25,6 +25,7 @@ import {
 	type EchoNotesHotkeySetting,
 	type EchoNotesSettings
 } from "./settings/settings";
+import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { TranscriptService } from "./transcript/transcript-service";
 
@@ -766,7 +767,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private log(message: string, ...args: unknown[]): void {
 		if (this.settings.verboseLog) {
-			console.log(`[Echo Notes] ${message}`, ...args);
+			console.log(`[Echo Notes] ${message}`, ...args.map(sanitizeLogValue));
 		}
 	}
 }
@@ -780,5 +781,5 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 }
 
 function getErrorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	return getSanitizedErrorMessage(error);
 }

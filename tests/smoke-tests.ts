@@ -30,6 +30,14 @@ import {
 	TRANSCRIPTION_PROVIDER_CAPABILITIES
 } from "../src/providers/provider-capabilities";
 import {
+	classifyHttpTranscriptionError,
+	createHttpTranscriptionError,
+	createNetworkTranscriptionError,
+	shouldWriteFailedTranscript,
+	TranscriptionError
+} from "../src/providers/transcription-provider";
+import { sanitizeSensitiveText } from "../src/security/redaction";
+import {
 	createAnalysisTemplateId,
 	createCustomAnalysisTemplate,
 	ANALYSIS_PROVIDER_DEFAULTS,
@@ -340,6 +348,37 @@ for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
 	assert.equal(capability.uploadMode, "multipart");
 	assert.equal(capability.maxAudioBytes, 25 * 1024 * 1024);
 }
+const sensitiveErrorText = [
+	"Authorization: Bearer sk-testsecret123456",
+	'{"api_key":"sk-jsonsecret123456"}',
+	"data:audio/wav;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
+].join("\n");
+const sanitizedErrorText = sanitizeSensitiveText(sensitiveErrorText);
+assert.doesNotMatch(sanitizedErrorText, /testsecret/);
+assert.doesNotMatch(sanitizedErrorText, /jsonsecret/);
+assert.doesNotMatch(sanitizedErrorText, /QUJDREV/);
+assert.match(sanitizedErrorText, /Authorization: Bearer \[REDACTED\]/);
+assert.match(sanitizedErrorText, /"api_key":"\[REDACTED\]"/);
+assert.match(sanitizedErrorText, /data:audio\/wav;base64,\[REDACTED\]/);
+assert.match(sanitizeSensitiveText("响应内容".repeat(260)), /已截断/);
+assert.equal(classifyHttpTranscriptionError(401, "unauthorized"), "authentication_failed");
+assert.equal(classifyHttpTranscriptionError(403, "forbidden"), "authentication_failed");
+assert.equal(classifyHttpTranscriptionError(413, "too large"), "file_too_large");
+assert.equal(classifyHttpTranscriptionError(429, "rate limited"), "rate_limited");
+assert.equal(classifyHttpTranscriptionError(400, "insufficient_quota"), "quota_exceeded");
+assert.equal(classifyHttpTranscriptionError(400, "model_not_found"), "invalid_model");
+assert.equal(classifyHttpTranscriptionError(500, "server error"), "api_error");
+const httpError = createHttpTranscriptionError("OpenAI", 429, sensitiveErrorText, "trace-rate");
+assert.equal(httpError.code, "rate_limited");
+assert.equal(httpError.traceId, "trace-rate");
+assert.doesNotMatch(httpError.message, /testsecret|jsonsecret|QUJDREV/);
+const networkError = createNetworkTranscriptionError("OpenAI", new Error("Bearer sk-networksecret123456"));
+assert.equal(networkError.code, "network_error");
+assert.doesNotMatch(networkError.message, /networksecret/);
+assert.equal(shouldWriteFailedTranscript(new TranscriptionError("unsupported_format", "bad format")), false);
+assert.equal(shouldWriteFailedTranscript(new TranscriptionError("missing_api_key", "missing key")), false);
+assert.equal(shouldWriteFailedTranscript(new TranscriptionError("rate_limited", "slow down")), true);
+assert.equal(shouldWriteFailedTranscript(new TranscriptionError("invalid_model", "bad model")), true);
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "Ctrl+S");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "Ctrl+Z");

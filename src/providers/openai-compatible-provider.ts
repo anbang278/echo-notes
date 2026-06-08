@@ -2,6 +2,8 @@ import { App, requestUrl } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
 import type { EchoNotesSettings, ProviderId } from "../settings/settings";
 import {
+	createHttpTranscriptionError,
+	createNetworkTranscriptionError,
 	TranscriptionError,
 	type TranscriptionInput,
 	type TranscriptionProvider,
@@ -37,7 +39,7 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 		}
 
 		if (!isSupportedAudioFile(input.audioFile)) {
-			throw new TranscriptionError("unsupported_audio", `不支持的音频格式：${input.audioFile.extension}`);
+			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
 		}
 
 		if (input.audioFile.stat.size > OPENAI_COMPATIBLE_MAX_AUDIO_BYTES) {
@@ -66,24 +68,25 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 			});
 		}
 
-		const response = await requestUrl({
-			url: `${this.settings.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`,
-			method: "POST",
-			throw: false,
-			headers: {
-				Authorization: `Bearer ${apiKey}`,
-				"Content-Type": `multipart/form-data; boundary=${boundary}`
-			},
-			body: buildMultipartBody(boundary, parts)
-		});
+		let response;
+		try {
+			response = await requestUrl({
+				url: `${this.settings.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`,
+				method: "POST",
+				throw: false,
+				headers: {
+					Authorization: `Bearer ${apiKey}`,
+					"Content-Type": `multipart/form-data; boundary=${boundary}`
+				},
+				body: buildMultipartBody(boundary, parts)
+			});
+		} catch (error) {
+			throw createNetworkTranscriptionError(this.name, error);
+		}
 
 		const traceId = readTraceId(response.headers);
 		if (response.status < 200 || response.status >= 300) {
-			throw new TranscriptionError(
-				"api_error",
-				`${this.name} API 请求失败：HTTP ${response.status} ${response.text}`,
-				traceId
-			);
+			throw createHttpTranscriptionError(this.name, response.status, response.text, traceId);
 		}
 
 		const data = response.json as OpenAICompatibleTranscriptionResponse;
