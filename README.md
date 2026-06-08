@@ -63,7 +63,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
 - Run a local transcription-provider configuration check for API key, Base URL, model, HTTP risk, endpoint shape, and capability-limit warnings without uploading audio.
 - Standardize transcription provider errors and redact API keys, authorization headers, Base64 audio payloads, and overlong responses before showing or writing failure messages.
-- Use a shared AudioChunkPipeline core for long-audio preparation, chunk progress events, segment transcription, text merging, trace id aggregation, and raw segment collection.
+- Use a shared AudioChunkPipeline core for long-audio preparation, chunk progress events, segment transcription, text merging, trace id aggregation, raw segment collection, and releasing completed chunk audio buffers.
 - Open an in-memory Task Center from the ribbon or command palette to inspect transcription and AI analysis status, failures, durations, providers, models, outputs, and retry failed tasks.
 - Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.

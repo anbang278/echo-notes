@@ -63,7 +63,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 在设置页展示当前转写 Provider 的上传方式、接口形态、文件限制、长音频分段、语言参数、时间戳和说话人分离能力。
 - 可在设置页本地自检转写 Provider 配置，检查 API Key、Base URL、模型、HTTP 风险、接口形态和能力限制，不上传音频。
 - 标准化转写 Provider 错误，并在展示或写入失败信息前脱敏 API Key、Authorization header、Base64 音频载荷和过长响应。
-- 使用共享 AudioChunkPipeline 核心处理长音频准备、分段进度事件、逐段转写、文本合并、trace id 汇总和 raw segment 收集。
+- 使用共享 AudioChunkPipeline 核心处理长音频准备、分段进度事件、逐段转写、文本合并、trace id 汇总、raw segment 收集，并释放已完成分段的音频 buffer。
 - 可从 Ribbon 或命令面板打开内存型任务中心，查看转写和 AI 分析状态、失败原因、耗时、Provider、模型、输出文件，并重试失败任务。
 - 可选开启手动上传前确认：上传前预览 Provider、Base URL、模型、文件大小和 HTTP 风险；开启后自动化会跳过需要确认的上传。
 - 在设置页控制 Obsidian 核心插件录音机开关，并为其代理命令配置默认快捷键。

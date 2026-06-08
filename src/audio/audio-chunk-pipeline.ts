@@ -26,6 +26,7 @@ export interface AudioChunkPipelineInput<Chunk extends AudioChunk, RawResponse =
 	createChunks: () => Promise<Chunk[]>;
 	transcribeChunk: (chunk: Chunk) => Promise<AudioChunkTranscriptionResult<RawResponse>>;
 	onProgress?: (progress: TranscriptionProgress) => Promise<void> | void;
+	releaseChunkBuffer?: boolean;
 }
 
 export async function runAudioChunkPipeline<Chunk extends AudioChunk, RawResponse = unknown>(
@@ -53,7 +54,14 @@ export async function runAudioChunkPipeline<Chunk extends AudioChunk, RawRespons
 			segments: [...completedSegments]
 		});
 
-		const result = await input.transcribeChunk(chunk);
+		let result: AudioChunkTranscriptionResult<RawResponse>;
+		try {
+			result = await input.transcribeChunk(chunk);
+		} finally {
+			if (input.releaseChunkBuffer !== false) {
+				releaseAudioChunkBuffer(chunk);
+			}
+		}
 		const segment: TranscriptionSegment = {
 			index: chunk.index,
 			total: chunk.total,
@@ -83,4 +91,8 @@ export async function runAudioChunkPipeline<Chunk extends AudioChunk, RawRespons
 		segments: completedSegments,
 		rawSegments
 	};
+}
+
+function releaseAudioChunkBuffer(chunk: AudioChunk): void {
+	chunk.audioBuffer = new ArrayBuffer(0);
 }

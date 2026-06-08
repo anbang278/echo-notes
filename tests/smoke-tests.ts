@@ -362,25 +362,26 @@ assert.deepEqual(
 );
 
 const chunkPipelineEvents: string[] = [];
+const chunkPipelineChunks = [
+	{
+		index: 1,
+		total: 2,
+		startSeconds: 0,
+		endSeconds: 180,
+		audioBuffer: new ArrayBuffer(8),
+		mimeType: "audio/wav"
+	},
+	{
+		index: 2,
+		total: 2,
+		startSeconds: 180,
+		endSeconds: 321,
+		audioBuffer: new ArrayBuffer(16),
+		mimeType: "audio/wav"
+	}
+];
 const chunkPipelineResult = await runAudioChunkPipeline({
-	createChunks: async () => [
-		{
-			index: 1,
-			total: 2,
-			startSeconds: 0,
-			endSeconds: 180,
-			audioBuffer: new ArrayBuffer(1),
-			mimeType: "audio/wav"
-		},
-		{
-			index: 2,
-			total: 2,
-			startSeconds: 180,
-			endSeconds: 321,
-			audioBuffer: new ArrayBuffer(1),
-			mimeType: "audio/wav"
-		}
-	],
+	createChunks: async () => chunkPipelineChunks,
 	transcribeChunk: async (chunk) => ({
 		text: ` 第 ${chunk.index} 段 `,
 		traceId: `trace-${chunk.index}`,
@@ -414,6 +415,7 @@ assert.equal(chunkPipelineResult.text, "第 1 段\n\n第 2 段");
 assert.equal(chunkPipelineResult.traceId, "trace-1, trace-2");
 assert.equal(chunkPipelineResult.segments[1].startSeconds, 180);
 assert.deepEqual(chunkPipelineResult.rawSegments, [{ index: 1 }, { index: 2 }]);
+assert.deepEqual(chunkPipelineChunks.map((chunk) => chunk.audioBuffer.byteLength), [0, 0]);
 
 const transcriptSegments = [
 	{
