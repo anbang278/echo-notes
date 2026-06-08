@@ -32,6 +32,8 @@ import {
 	type UploadPreviewAudioFile
 } from "./security/upload-preview";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
+import { createTaskId, TaskCenterStore, type EchoNotesTask } from "./task-center/task-center-store";
+import { ECHO_NOTES_TASK_CENTER_VIEW_TYPE, EchoNotesTaskCenterView } from "./task-center/task-center-view";
 import { TranscriptService } from "./transcript/transcript-service";
 
 const API_KEY_SECRET_ID = "echo-notes-api-key";
@@ -43,6 +45,7 @@ const AUDIO_RECORDER_STOP_COMMAND_ID = "audio-recorder:stop";
 const ECHO_NOTES_COMMAND_IDS = [
 	"start-official-audio-recorder",
 	"stop-official-audio-recorder",
+	"open-task-center",
 	"transcribe-selected-audio",
 	"transcribe-all-audio-files-in-current-note"
 ];
@@ -55,6 +58,8 @@ interface ProcessAudioResult {
 interface ProcessAudioOptions {
 	onTranscriptFileReady?: (transcriptFile: TFile) => Promise<void> | void;
 	allowUploadConfirmation?: boolean;
+	audioLinkPath?: string;
+	forceTranscription?: boolean;
 }
 
 interface ObsidianCommandManager {
@@ -89,6 +94,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private transcriptService: TranscriptService;
 	private linkService: LinkService;
 	private analysisService: AnalysisService;
+	private taskCenter = new TaskCenterStore();
 	private editorService = new EditorService();
 	private processingAudio = new Set<string>();
 	private processingAnalyses = new Set<string>();
@@ -101,6 +107,10 @@ export default class EchoNotesPlugin extends Plugin {
 		await this.loadSettings();
 		this.refreshServices();
 		this.addSettingTab(new EchoNotesSettingTab(this.app, this));
+		this.registerView(ECHO_NOTES_TASK_CENTER_VIEW_TYPE, (leaf) => new EchoNotesTaskCenterView(leaf, this));
+		this.addRibbonIcon("list-checks", "Echo Notes 任务中心", () => {
+			void this.activateTaskCenterView();
+		});
 		this.registerCommands();
 		this.registerAutomation();
 	}
@@ -110,6 +120,7 @@ export default class EchoNotesPlugin extends Plugin {
 			window.clearTimeout(timer);
 		}
 		this.markdownDebounceTimers.clear();
+		this.app.workspace.detachLeavesOfType(ECHO_NOTES_TASK_CENTER_VIEW_TYPE);
 	}
 
 	async loadSettings(): Promise<void> {
@@ -128,6 +139,45 @@ export default class EchoNotesPlugin extends Plugin {
 
 	refreshRegisteredCommands(): void {
 		this.registerCommands();
+	}
+
+	async activateTaskCenterView(): Promise<void> {
+		const existingLeaf = this.app.workspace.getLeavesOfType(ECHO_NOTES_TASK_CENTER_VIEW_TYPE)[0];
+		const leaf = existingLeaf ?? this.app.workspace.getRightLeaf(false);
+		if (!leaf) {
+			new Notice("无法打开 Echo Notes Task Center。");
+			return;
+		}
+
+		await leaf.setViewState({ type: ECHO_NOTES_TASK_CENTER_VIEW_TYPE, active: true });
+		this.app.workspace.revealLeaf(leaf);
+	}
+
+	getTaskCenterTasks(): EchoNotesTask[] {
+		return this.taskCenter.getTasks();
+	}
+
+	subscribeTaskCenter(listener: () => void): () => void {
+		return this.taskCenter.subscribe(listener);
+	}
+
+	async retryTaskCenterTask(taskId: string): Promise<boolean> {
+		return this.taskCenter.retryTask(taskId);
+	}
+
+	clearFinishedTaskCenterTasks(): void {
+		this.taskCenter.clearFinishedTasks();
+	}
+
+	async openTaskCenterTask(task: EchoNotesTask): Promise<void> {
+		const path = task.outputPath ?? task.targetPath;
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			new Notice(`任务文件不存在：${path}`);
+			return;
+		}
+
+		await this.app.workspace.getLeaf(false).openFile(file);
 	}
 
 	isOfficialAudioRecorderEnabled(): boolean | null {
@@ -230,6 +280,14 @@ export default class EchoNotesPlugin extends Plugin {
 			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStopHotkey),
 			callback: () => {
 				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_STOP_COMMAND_ID, "停止录音");
+			}
+		});
+
+		this.addCommand({
+			id: "open-task-center",
+			name: "Open Task Center",
+			callback: () => {
+				void this.activateTaskCenterView();
 			}
 		});
 
@@ -406,6 +464,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const absoluteMatch = toAbsoluteMatch(audioMatch, range.lineStart);
 		const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), absoluteMatch);
 		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
+			audioLinkPath: audioMatch.linkPath,
 			onTranscriptFileReady: async (transcriptFile) => {
 				this.insertTranscriptLinkIntoEditor(editor, sourceNote, absoluteMatch, transcriptFile, true);
 			}
@@ -445,6 +504,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(editor.getValue(), audioMatch);
 			const result = await this.processAudioToTranscript(audioFile, sourceNote, {
+				audioLinkPath: audioMatch.linkPath,
 				onTranscriptFileReady: async (transcriptFile) => {
 					if (this.insertTranscriptLinkIntoEditor(editor, sourceNote, audioMatch, transcriptFile, false)) {
 						linked += 1;
@@ -479,8 +539,27 @@ export default class EchoNotesPlugin extends Plugin {
 			await options.onTranscriptFileReady?.(transcriptFile);
 		};
 
+		const transcriptionTaskId = createTaskId("transcription", audioFile.path);
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
-		if (existingTranscript && this.settings.skipExistingTranscript) {
+		if (existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription) {
+			this.taskCenter.upsertTask({
+				id: transcriptionTaskId,
+				kind: "transcription",
+				title: audioFile.name,
+				status: "success",
+				stage: "已复用现有 transcript",
+				provider: this.settings.provider,
+				model: this.settings.model,
+				targetPath: audioFile.path,
+				sourcePath: sourceNote?.path,
+				outputPath: existingTranscript.path,
+				bytes: audioFile.stat.size,
+				currentSegment: undefined,
+				totalSegments: undefined,
+				error: undefined,
+				traceId: undefined,
+				completedAt: Date.now()
+			});
 			new Notice("transcript 已存在，已跳过转写。");
 			await notifyTranscriptFileReady(existingTranscript);
 			return { transcriptFile: existingTranscript, analysisEligible: true };
@@ -507,6 +586,28 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		}
 
+		this.taskCenter.upsertTask({
+			id: transcriptionTaskId,
+			kind: "transcription",
+			title: audioFile.name,
+			status: "running",
+			stage: "准备转写",
+			provider: this.settings.provider,
+			model: this.settings.model,
+			targetPath: audioFile.path,
+			sourcePath: sourceNote?.path,
+			outputPath: undefined,
+			bytes: audioFile.stat.size,
+			currentSegment: undefined,
+			totalSegments: undefined,
+			error: undefined,
+			traceId: undefined,
+			completedAt: undefined,
+			retry: {
+				label: "重试转写",
+				run: () => this.retryTranscriptionTask(audioFile.path, sourceNote?.path, options.audioLinkPath)
+			}
+		});
 		this.processingAudio.add(audioFile.path);
 		let completedSegments: TranscriptionSegment[] = [];
 		try {
@@ -523,6 +624,12 @@ export default class EchoNotesPlugin extends Plugin {
 						completedSegments
 					);
 					await notifyTranscriptFileReady(transcriptFile);
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: "正在准备长音频分段",
+						outputPath: transcriptFile.path,
+						currentSegment: 0,
+						totalSegments: undefined
+					});
 					new Notice(`正在准备长音频分段：${audioFile.name}`);
 					return;
 				}
@@ -537,11 +644,22 @@ export default class EchoNotesPlugin extends Plugin {
 						completedSegments
 					);
 					await notifyTranscriptFileReady(transcriptFile);
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `长音频分段已开始，共 ${progress.totalSegments} 段`,
+						outputPath: transcriptFile.path,
+						currentSegment: 0,
+						totalSegments: progress.totalSegments
+					});
 					new Notice(`长音频将分 ${progress.totalSegments} 段逐步转写：${audioFile.name}`);
 					return;
 				}
 
 				if (progress.type === "segment-started") {
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `正在转写分段 ${progress.segment.index}/${progress.segment.total}`,
+						currentSegment: progress.segment.index,
+						totalSegments: progress.segment.total
+					});
 					new Notice(
 						`开始转写分段 ${progress.segment.index}/${progress.segment.total}：${audioFile.name}`
 					);
@@ -556,6 +674,11 @@ export default class EchoNotesPlugin extends Plugin {
 					this.settings.model,
 					completedSegments
 				);
+				this.taskCenter.updateTask(transcriptionTaskId, {
+					stage: `已写入分段 ${progress.segment.index}/${progress.segment.total}`,
+					currentSegment: progress.segment.index,
+					totalSegments: progress.segment.total
+				});
 				new Notice(`已写入分段 ${progress.segment.index}/${progress.segment.total}：${audioFile.name}`);
 			};
 			const result = await provider.transcribe({
@@ -566,16 +689,35 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			await notifyTranscriptFileReady(transcriptFile);
+			this.taskCenter.updateTask(transcriptionTaskId, {
+				status: "success",
+				stage: "转写完成",
+				provider: result.provider,
+				model: result.model,
+				outputPath: transcriptFile.path,
+				traceId: result.traceId,
+				currentSegment: result.segments?.length,
+				totalSegments: result.segments?.length,
+				error: undefined,
+				completedAt: Date.now()
+			});
 			new Notice(`转写完成：${audioFile.name}`);
 			return { transcriptFile, analysisEligible: true };
 		} catch (error) {
 			const message = getErrorMessage(error);
+			const traceId = error instanceof TranscriptionError ? error.traceId : undefined;
+			this.taskCenter.updateTask(transcriptionTaskId, {
+				status: "failed",
+				stage: "转写失败",
+				error: message,
+				traceId,
+				completedAt: Date.now()
+			});
 			new Notice(`转写失败：${message}`);
 			this.log("转写失败", error);
 
 			if (completedSegments.length > 0 || shouldWriteFailedTranscript(error)) {
 				try {
-					const traceId = error instanceof TranscriptionError ? error.traceId : undefined;
 					const transcriptFile = await this.transcriptService.writeFailedTranscript(
 						audioFile,
 						sourceNote,
@@ -586,6 +728,9 @@ export default class EchoNotesPlugin extends Plugin {
 						completedSegments
 					);
 					await notifyTranscriptFileReady(transcriptFile);
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						outputPath: transcriptFile.path
+					});
 					return { transcriptFile, analysisEligible: false };
 				} catch (writeError) {
 					new Notice(`写入失败 transcript 时出错：${getErrorMessage(writeError)}`);
@@ -595,6 +740,43 @@ export default class EchoNotesPlugin extends Plugin {
 			return null;
 		} finally {
 			this.processingAudio.delete(audioFile.path);
+		}
+	}
+
+	private async retryTranscriptionTask(audioPath: string, sourcePath: string | undefined, audioLinkPath: string | undefined): Promise<void> {
+		const audioFile = this.app.vault.getAbstractFileByPath(audioPath);
+		if (!(audioFile instanceof TFile) || !isSupportedAudioFile(audioFile)) {
+			const taskId = createTaskId("transcription", audioPath);
+			this.taskCenter.upsertTask({
+				id: taskId,
+				kind: "transcription",
+				title: getPathBasename(audioPath),
+				status: "failed",
+				stage: "无法重试",
+				targetPath: audioPath,
+				sourcePath,
+				error: "音频文件不存在或格式不支持。",
+				completedAt: Date.now()
+			});
+			new Notice(`无法重试转写，音频文件不存在或格式不支持：${audioPath}`);
+			return;
+		}
+
+		const sourceFile = sourcePath ? this.app.vault.getAbstractFileByPath(sourcePath) : null;
+		const sourceNote = sourceFile instanceof TFile ? sourceFile : undefined;
+		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
+			allowUploadConfirmation: true,
+			audioLinkPath,
+			forceTranscription: true,
+			onTranscriptFileReady: async (transcriptFile) => {
+				if (sourceNote && audioLinkPath) {
+					await this.insertTranscriptLinkIntoFile(sourceNote, audioLinkPath, transcriptFile);
+				}
+			}
+		});
+
+		if (result?.analysisEligible) {
+			this.startAnalysisTask(result.transcriptFile, this.getDefaultAnalysisTemplateForAnalysis());
 		}
 	}
 
@@ -658,18 +840,47 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const templateTitle = template.name;
 		const processingKey = `${transcriptFile.path}:${template.id}`;
+		const analysisTaskId = createTaskId("analysis", transcriptFile.path, template.id);
 		if (this.processingAnalyses.has(processingKey)) {
 			new Notice(`正在后台生成 ${templateTitle}：${transcriptFile.name}`);
 			return;
 		}
 
+		this.taskCenter.upsertTask({
+			id: analysisTaskId,
+			kind: "analysis",
+			title: `${templateTitle}：${transcriptFile.name}`,
+			status: "running",
+			stage: "等待 AI 分析返回",
+			provider: this.settings.analysisProvider,
+			model: this.settings.analysisModel,
+			targetPath: transcriptFile.path,
+			outputPath: transcriptFile.path,
+			error: undefined,
+			traceId: undefined,
+			completedAt: undefined,
+			retry: {
+				label: "重试分析",
+				run: () => this.startAnalysisTask(transcriptFile, template)
+			}
+		});
 		this.processingAnalyses.add(processingKey);
 		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
-		void this.runAnalysisTask(transcriptFile, template, processingKey);
+		void this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId);
 	}
 
-	private async runAnalysisTask(transcriptFile: TFile, template: AnalysisTemplateConfig, processingKey: string): Promise<void> {
+	private async runAnalysisTask(
+		transcriptFile: TFile,
+		template: AnalysisTemplateConfig,
+		processingKey: string,
+		analysisTaskId: string
+	): Promise<void> {
 		if (!this.settings.analysisEnabled) {
+			this.taskCenter.updateTask(analysisTaskId, {
+				status: "skipped",
+				stage: "AI 纪要分析未启用",
+				completedAt: Date.now()
+			});
 			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
 			this.processingAnalyses.delete(processingKey);
 			return;
@@ -679,6 +890,11 @@ export default class EchoNotesPlugin extends Plugin {
 		try {
 			const transcriptText = await this.analysisService.readTranscriptText(transcriptFile);
 			if (!transcriptText.trim()) {
+				this.taskCenter.updateTask(analysisTaskId, {
+					status: "skipped",
+					stage: "转写稿内容为空",
+					completedAt: Date.now()
+				});
 				new Notice("转写稿内容为空，已跳过 AI 纪要分析。");
 				return;
 			}
@@ -696,9 +912,25 @@ export default class EchoNotesPlugin extends Plugin {
 				result,
 				this.settings.copyLanguage
 			);
+			this.taskCenter.updateTask(analysisTaskId, {
+				status: "success",
+				stage: `${templateTitle} 已写入转写稿`,
+				provider: result.provider,
+				model: result.model,
+				traceId: result.traceId,
+				error: undefined,
+				completedAt: Date.now()
+			});
 			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
 		} catch (error) {
-			new Notice(`${templateTitle} 生成失败：${getErrorMessage(error)}`);
+			const message = getErrorMessage(error);
+			this.taskCenter.updateTask(analysisTaskId, {
+				status: "failed",
+				stage: "AI 分析失败",
+				error: message,
+				completedAt: Date.now()
+			});
+			new Notice(`${templateTitle} 生成失败：${message}`);
 			this.log("AI 纪要分析失败", error);
 		} finally {
 			this.processingAnalyses.delete(processingKey);
@@ -750,6 +982,7 @@ export default class EchoNotesPlugin extends Plugin {
 			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(content, audioMatch);
 			const result = await this.processAudioToTranscript(audioFile, file, {
 				allowUploadConfirmation: false,
+				audioLinkPath: audioMatch.linkPath,
 				onTranscriptFileReady: async (transcriptFile) => {
 					await this.insertTranscriptLinkIntoFile(file, audioMatch.linkPath, transcriptFile);
 				}
@@ -821,6 +1054,11 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 
 function getErrorMessage(error: unknown): string {
 	return getSanitizedErrorMessage(error);
+}
+
+function getPathBasename(path: string): string {
+	const normalized = path.replace(/\\/g, "/");
+	return normalized.split("/").filter(Boolean).pop() ?? path;
 }
 
 class TranscriptionUploadConfirmModal extends Modal {

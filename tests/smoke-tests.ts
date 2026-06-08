@@ -70,6 +70,13 @@ import {
 	getLegacyCustomFolderTranscriptPathForAudioPath,
 	getTranscriptPathForAudioPath
 } from "../src/transcript/transcript-path";
+import {
+	createTaskId,
+	formatTaskBytes,
+	formatTaskElapsedTime,
+	summarizeTaskCounts,
+	TaskCenterStore
+} from "../src/task-center/task-center-store";
 
 const sample = [
 	"![[Recording 20260531001942.m4a]]",
@@ -100,6 +107,67 @@ const duplicatedLinks = parseAudioLinks(["![[same.m4a]]", "![[same.m4a]]"].join(
 const duplicatedFingerprints = createAudioLinkFingerprints("Daily.md", duplicatedLinks);
 assert.equal(duplicatedFingerprints.length, 2);
 assert.notEqual(duplicatedFingerprints[0], duplicatedFingerprints[1]);
+
+assert.equal(
+	createTaskId("transcription", "Folder\\Audio File.m4a"),
+	createTaskId("transcription", "folder/audio file.m4a")
+);
+assert.equal(formatTaskBytes(undefined), "未知大小");
+assert.equal(formatTaskBytes(1536), "1.5 KB");
+const taskCenter = new TaskCenterStore();
+let taskCenterNotifications = 0;
+const unsubscribeTaskCenter = taskCenter.subscribe(() => {
+	taskCenterNotifications += 1;
+});
+const runningTaskId = createTaskId("transcription", "Audio.m4a");
+const failedTaskId = createTaskId("analysis", "Audio.transcript.md", "work-minutes");
+taskCenter.upsertTask({
+	id: runningTaskId,
+	kind: "transcription",
+	title: "Audio.m4a",
+	status: "running",
+	stage: "准备转写",
+	targetPath: "Audio.m4a",
+	createdAt: 1000,
+	updatedAt: 1000
+});
+let retriedTask = false;
+taskCenter.upsertTask({
+	id: failedTaskId,
+	kind: "analysis",
+	title: "工作纪要：Audio.transcript.md",
+	status: "failed",
+	stage: "AI 分析失败",
+	targetPath: "Audio.transcript.md",
+	error: "network_error",
+	createdAt: 2000,
+	updatedAt: 2000,
+	completedAt: 5000,
+	retry: {
+		label: "重试分析",
+		run: async () => {
+			retriedTask = true;
+		}
+	}
+});
+assert.deepEqual(summarizeTaskCounts(taskCenter.getTasks()), {
+	running: 1,
+	success: 0,
+	failed: 1,
+	skipped: 0,
+	total: 2
+});
+assert.equal(taskCenter.getTasks()[0].id, failedTaskId);
+assert.equal(formatTaskElapsedTime(taskCenter.getTasks()[0], 6000), "3s");
+assert.equal(await taskCenter.retryTask(failedTaskId), true);
+assert.equal(retriedTask, true);
+assert.equal(await taskCenter.retryTask("missing"), false);
+taskCenter.clearFinishedTasks();
+assert.equal(taskCenter.getTasks().length, 1);
+assert.equal(taskCenter.getTasks()[0].id, runningTaskId);
+unsubscribeTaskCenter();
+taskCenter.updateTask(runningTaskId, { stage: "正在转写" });
+assert.equal(taskCenterNotifications, 3);
 
 const fakeApp = {
 	fileManager: {
