@@ -79,6 +79,7 @@ export interface EchoNotesSettings {
 	analysisBaseUrl: string;
 	analysisModel: string;
 	analysisEnabled: boolean;
+	redactTranscriptBeforeAnalysis: boolean;
 	defaultAnalysisTemplateId: AnalysisTemplateId;
 	analysisTemplates: AnalysisTemplateConfig[];
 	skipExistingTranscript: boolean;
@@ -657,6 +658,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 	analysisModel: "deepseek-v4-pro",
 	analysisEnabled: false,
+	redactTranscriptBeforeAnalysis: false,
 	defaultAnalysisTemplateId: "work-minutes",
 	analysisTemplates: createDefaultAnalysisTemplates(),
 	skipExistingTranscript: true,
@@ -845,6 +847,10 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			? raw.analysisModel.trim()
 			: analysisDefaults.analysisModel;
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
+	settings.redactTranscriptBeforeAnalysis =
+		typeof raw.redactTranscriptBeforeAnalysis === "boolean"
+			? raw.redactTranscriptBeforeAnalysis
+			: DEFAULT_SETTINGS.redactTranscriptBeforeAnalysis;
 	settings.confirmBeforeTranscription =
 		typeof raw.confirmBeforeTranscription === "boolean" ? raw.confirmBeforeTranscription : DEFAULT_SETTINGS.confirmBeforeTranscription;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);

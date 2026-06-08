@@ -70,6 +70,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
+- Optionally redact common sensitive fields before sending transcript text to the AI analysis provider.
 - Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose one or more AI analysis templates from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a name, version, recognition keywords, system prompt, and custom prompt.
@@ -110,6 +111,8 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript files and inline AI analysis results are written inside your Obsidian vault.
 
 If "Confirm before manual transcription upload" is enabled in settings, Echo Notes shows a confirmation dialog before manual transcription uploads. The dialog lists the provider, Base URL, model, file size, and HTTP risk warnings. Automation skips uploads while this confirmation mode is enabled so audio is not sent in the background without user confirmation.
+
+If "Redact transcript before AI analysis" is enabled, Echo Notes masks common sensitive values only in the transcript text sent to the analysis provider. The local transcript file is not modified. The current redaction covers labeled customer/contact/company/address fields, email addresses, phone numbers, Chinese ID numbers, long numeric identifiers, amounts, and common Chinese address fragments.
 
 Markdown-link automation also skips source notes marked with Echo Notes privacy flags. Add any of these frontmatter values to a sensitive note:
 
@@ -188,8 +191,9 @@ These hotkeys belong to Echo Notes commands. Echo Notes does not directly rewrit
 3. Keep the default provider as `Alibaba Bailian`, or choose another provider that supports OpenAI-compatible Chat Completions.
 4. Keep Base URL as `https://dashscope.aliyuncs.com/compatible-mode/v1` and Model as `deepseek-v4-pro`, or edit them. Switching providers fills that provider's editable default Base URL and model.
 5. Enter the separate analysis API key.
-6. Choose the default analysis template used when no keyword is found near the audio link.
-7. Edit, enable, disable, restore, or add templates in the analysis template settings.
+6. Optionally enable transcript redaction before AI analysis if the transcript may contain sensitive personal, customer, company, address, or amount fields.
+7. Choose the default analysis template used when no keyword is found near the audio link.
+8. Edit, enable, disable, restore, or add templates in the analysis template settings.
 
 Built-in templates:
 

@@ -47,6 +47,7 @@ import {
 	shouldWriteFailedTranscript,
 	TranscriptionError
 } from "../src/providers/transcription-provider";
+import { redactAnalysisInputText } from "../src/security/content-redaction";
 import { sanitizeSensitiveText } from "../src/security/redaction";
 import {
 	buildTranscriptionUploadPreview,
@@ -655,6 +656,7 @@ assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
 assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.analysisModel, "deepseek-v4-pro");
+assert.equal(DEFAULT_SETTINGS.redactTranscriptBeforeAnalysis, false);
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisBaseUrl, "https://api.deepseek.com/v1");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisBaseUrl, "https://api.siliconflow.cn/v1");
@@ -695,6 +697,23 @@ assert.match(sanitizedErrorText, /Authorization: Bearer \[REDACTED\]/);
 assert.match(sanitizedErrorText, /"api_key":"\[REDACTED\]"/);
 assert.match(sanitizedErrorText, /data:audio\/wav;base64,\[REDACTED\]/);
 assert.match(sanitizeSensitiveText("响应内容".repeat(260)), /已截断/);
+const sensitiveAnalysisInput = [
+	"客户名：张三",
+	"公司：示例科技有限公司",
+	"邮箱 zhangsan@example.com",
+	"手机号 138 1234 5678，座机 010-88886666",
+	"身份证 110105199001011234",
+	"合同金额 ¥120,000.50，预算 30万元",
+	"地址 北京市朝阳区建国路 88 号"
+].join("\n");
+const redactedAnalysisInput = redactAnalysisInputText(sensitiveAnalysisInput);
+assert.doesNotMatch(redactedAnalysisInput, /张三|示例科技|zhangsan|138|88886666|110105199001011234|120,000|30万元|建国路/);
+assert.match(redactedAnalysisInput, /\[REDACTED_FIELD\]/);
+assert.match(redactedAnalysisInput, /\[REDACTED_EMAIL\]/);
+assert.match(redactedAnalysisInput, /\[REDACTED_PHONE\]/);
+assert.match(redactedAnalysisInput, /\[REDACTED_ID\]/);
+assert.match(redactedAnalysisInput, /\[REDACTED_AMOUNT\]/);
+assert.match(redactedAnalysisInput, /\[REDACTED_ADDRESS\]/);
 assert.equal(classifyHttpTranscriptionError(401, "unauthorized"), "authentication_failed");
 assert.equal(classifyHttpTranscriptionError(403, "forbidden"), "authentication_failed");
 assert.equal(classifyHttpTranscriptionError(413, "too large"), "file_too_large");
@@ -802,6 +821,7 @@ assert.equal(normalizedSettings.model, "qwen3-asr-flash");
 assert.equal(normalizedSettings.analysisProvider, "aliyun-bailian");
 assert.equal(normalizedSettings.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
+assert.equal(normalizedSettings.redactTranscriptBeforeAnalysis, false);
 assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].name, "工作纪要");
@@ -852,6 +872,7 @@ const siliconFlowAnalysisSettings = normalizeEchoNotesSettings({ analysisProvide
 assert.equal(siliconFlowAnalysisSettings.analysisProvider, "siliconflow");
 assert.equal(siliconFlowAnalysisSettings.analysisBaseUrl, "https://api.siliconflow.cn/v1");
 assert.equal(siliconFlowAnalysisSettings.analysisModel, "deepseek-ai/DeepSeek-V3");
+assert.equal(normalizeEchoNotesSettings({ redactTranscriptBeforeAnalysis: true }).redactTranscriptBeforeAnalysis, true);
 const customOpenAIAnalysisSettings = normalizeEchoNotesSettings({
 	analysisProvider: "openai",
 	analysisBaseUrl: "https://proxy.example.com/v1",

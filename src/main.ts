@@ -29,6 +29,7 @@ import {
 	type EchoNotesSettings
 } from "./settings/settings";
 import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction";
+import { redactAnalysisInputText } from "./security/content-redaction";
 import {
 	buildTranscriptionUploadPreview,
 	type UploadPreviewAudioFile
@@ -978,10 +979,13 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			const provider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
+			const analysisTranscriptText = this.settings.redactTranscriptBeforeAnalysis
+				? redactAnalysisInputText(transcriptText)
+				: transcriptText;
 			const result = await provider.analyze({
 				template,
 				transcriptTitle: transcriptFile.basename,
-				transcriptText,
+				transcriptText: analysisTranscriptText,
 				copyLanguage: this.settings.copyLanguage
 			});
 			await this.analysisService.writeAnalysisToTranscript(

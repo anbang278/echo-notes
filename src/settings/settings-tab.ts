@@ -411,6 +411,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
+			.setName("AI 分析前脱敏 transcript")
+			.setDesc("开启后，仅在发送给分析模型前遮盖邮箱、电话、身份证号、金额、地址以及带标签的人名/公司名字段；Vault 中的原始 transcript 不会被改写。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.redactTranscriptBeforeAnalysis)
+					.onChange(async (value) => {
+						this.plugin.settings.redactTranscriptBeforeAnalysis = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
 			.setName("默认分析模板")
 			.setDesc("录音链接上下三行未命中任何识别关键字时，使用这个模板生成 AI 纪要。若默认模板被禁用，会自动改用第一个已启用模板。")
 			.addDropdown((dropdown) => {
