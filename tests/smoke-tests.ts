@@ -21,6 +21,7 @@ import {
 	estimateBase64DataUrlByteLength,
 	formatSegmentTimeRange
 } from "../src/audio/audio-segmenter";
+import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/audio/audio-link-fingerprint";
 import { LinkService } from "../src/obsidian/link-service";
 import {
 	formatProviderCapabilityBytes,
@@ -83,6 +84,22 @@ assert.equal(links[0].linkPath, "Recording 20260531001942.m4a");
 assert.equal(links[1].linkPath, "Recording 20260531001942.m4a");
 assert.equal(links[2].linkPath, "Attachments/Recording 20260531001942.m4a");
 assert.equal(links[3].linkPath, "素材/会议录音.wav");
+assert.equal(createAudioLinkFingerprint("Daily.md", links[0]), createAudioLinkFingerprint("daily.md", links[0]));
+assert.notEqual(createAudioLinkFingerprint("Daily.md", links[0]), createAudioLinkFingerprint("Project.md", links[0]));
+assert.notEqual(createAudioLinkFingerprint("Daily.md", links[0]), createAudioLinkFingerprint("Daily.md", links[1]));
+assert.notEqual(
+	createAudioLinkFingerprint("Daily.md", links[0]),
+	createAudioLinkFingerprint("Daily.md", {
+		...links[0],
+		rawText: "![[Recording 20260531001942.m4a|别名]]"
+	})
+);
+const shiftedLinks = parseAudioLinks(`新增正文\n${sample}`);
+assert.deepEqual(createAudioLinkFingerprints("Daily.md", links), createAudioLinkFingerprints("Daily.md", shiftedLinks));
+const duplicatedLinks = parseAudioLinks(["![[same.m4a]]", "![[same.m4a]]"].join("\n"));
+const duplicatedFingerprints = createAudioLinkFingerprints("Daily.md", duplicatedLinks);
+assert.equal(duplicatedFingerprints.length, 2);
+assert.notEqual(duplicatedFingerprints[0], duplicatedFingerprints[1]);
 
 const fakeApp = {
 	fileManager: {

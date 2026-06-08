@@ -8,6 +8,7 @@ import {
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
 import { isSupportedAudioFile } from "./audio/audio-detector";
+import { createAudioLinkFingerprints } from "./audio/audio-link-fingerprint";
 import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
@@ -93,6 +94,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private processingAnalyses = new Set<string>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
+	private processedMarkdownAudioLinks = new Set<string>();
 	private loadedAt = Date.now();
 
 	async onload(): Promise<void> {
@@ -727,7 +729,18 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 
-		for (const audioMatch of matches) {
+		const fingerprints = createAudioLinkFingerprints(file.path, matches);
+		for (const [index, audioMatch] of matches.entries()) {
+			const fingerprint = fingerprints[index];
+			if (this.processedMarkdownAudioLinks.has(fingerprint)) {
+				this.log("跳过已处理的 Markdown 音频链接", {
+					source: file.path,
+					audioLink: audioMatch.linkPath,
+					lineStart: audioMatch.lineStart
+				});
+				continue;
+			}
+
 			const audioFile = this.audioFileService.resolveAudioFile(audioMatch.linkPath, file);
 			if (!audioFile) {
 				this.log("自动扫描未能解析音频文件", audioMatch.linkPath);
@@ -744,6 +757,7 @@ export default class EchoNotesPlugin extends Plugin {
 			if (!result) {
 				continue;
 			}
+			this.processedMarkdownAudioLinks.add(fingerprint);
 			const transcriptFile = result.transcriptFile;
 
 			if (result.analysisEligible) {

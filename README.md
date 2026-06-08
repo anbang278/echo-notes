@@ -71,6 +71,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Configure each analysis template with a name, recognition keywords, system prompt, and custom prompt.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
+- Markdown audio-link automation deduplicates processed links in the current plugin session using source note, normalized audio path, raw link text, and occurrence order.
 
 ## Providers
 
