@@ -73,6 +73,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Automatically choose one or more AI analysis templates from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a name, version, recognition keywords, system prompt, and custom prompt.
 - Record Dataview-friendly AI analysis metadata for each generated template result, including template id, template name, template version, provider, model, generated time, and trace id when available.
+- Track AI analysis lifecycle in transcript frontmatter with `analysis_status`, scheduled template ids, pending/done/failed template ids, provider, model, timestamps, and the latest sanitized analysis error.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
 - Markdown audio-link automation deduplicates processed links in the current plugin session using source note, normalized audio path, raw link text, and occurrence order.
@@ -227,6 +228,8 @@ Echo Notes writes AI analysis into a controlled block before the transcript sect
 
 Each generated analysis result starts with Dataview inline fields prefixed with `echo_notes_analysis_`. These fields make template id, template name, template version, provider, model, generated time, and trace id queryable without parsing the generated Markdown body.
 
+Transcript frontmatter also records the current AI analysis lifecycle. While analysis is running, `analysis_status` is `analysis_pending`; once all scheduled templates finish, it becomes `analysis_done`, `analysis_failed`, or `analysis_partial_failed`. The frontmatter keeps `analysis_template_ids`, `analysis_pending_template_ids`, `analysis_done_template_ids`, and `analysis_failed_template_ids` so Dataview can find transcripts that still need review or retry.
+
 Frontmatter template selection applies to the whole source note and has priority over tags and nearby keywords. Tags apply to the whole source note and have priority over nearby keywords. Keywords are matched only against the source note lines around the audio link, not against the transcript body. If multiple templates match the same context, Echo Notes runs all matching enabled templates in settings order.
 
 ## Output Example
@@ -280,6 +283,19 @@ This is the generated analysis content.
 # Transcribed manuscript Recording 20260531001942
 
 This is the full transcript text.
+```
+
+Transcript frontmatter after AI analysis may include:
+
+```yaml
+analysis_status: "analysis_done"
+analysis_template_ids: [work-minutes, study-notes]
+analysis_done_template_ids: [work-minutes, study-notes]
+analysis_provider: "aliyun-bailian"
+analysis_model: "deepseek-v4-pro"
+analysis_started_at: "2026-06-01T10:00:00.000Z"
+analysis_updated_at: "2026-06-01T10:03:00.000Z"
+analysis_completed_at: "2026-06-01T10:03:00.000Z"
 ```
 
 ## Automation

@@ -35,6 +35,11 @@ import {
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { createTaskId, TaskCenterStore, type EchoNotesTask } from "./task-center/task-center-store";
 import { ECHO_NOTES_TASK_CENTER_VIEW_TYPE, EchoNotesTaskCenterView } from "./task-center/task-center-view";
+import {
+	markTranscriptAnalysisDone,
+	markTranscriptAnalysisFailed,
+	markTranscriptAnalysisPending
+} from "./transcript/transcript-analysis-metadata";
 import { TranscriptService } from "./transcript/transcript-service";
 
 const API_KEY_SECRET_ID = "echo-notes-api-key";
@@ -943,8 +948,25 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const templateTitle = template.name;
 		try {
+			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
+				markTranscriptAnalysisPending(content, {
+					templateId: template.id,
+					provider: this.settings.analysisProvider,
+					model: this.settings.analysisModel,
+					timestamp: new Date().toISOString()
+				})
+			);
 			const transcriptText = await this.analysisService.readTranscriptText(transcriptFile);
 			if (!transcriptText.trim()) {
+				await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
+					markTranscriptAnalysisFailed(content, {
+						templateId: template.id,
+						provider: this.settings.analysisProvider,
+						model: this.settings.analysisModel,
+						timestamp: new Date().toISOString(),
+						error: "转写稿内容为空"
+					})
+				);
 				this.taskCenter.updateTask(analysisTaskId, {
 					status: "skipped",
 					stage: "转写稿内容为空",
@@ -967,6 +989,14 @@ export default class EchoNotesPlugin extends Plugin {
 				result,
 				this.settings.copyLanguage
 			);
+			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
+				markTranscriptAnalysisDone(content, {
+					templateId: template.id,
+					provider: result.provider,
+					model: result.model,
+					timestamp: new Date().toISOString()
+				})
+			);
 			this.taskCenter.updateTask(analysisTaskId, {
 				status: "success",
 				stage: `${templateTitle} 已写入转写稿`,
@@ -979,6 +1009,15 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
 		} catch (error) {
 			const message = getErrorMessage(error);
+			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
+				markTranscriptAnalysisFailed(content, {
+					templateId: template.id,
+					provider: this.settings.analysisProvider,
+					model: this.settings.analysisModel,
+					timestamp: new Date().toISOString(),
+					error: message
+				})
+			);
 			this.taskCenter.updateTask(analysisTaskId, {
 				status: "failed",
 				stage: "AI 分析失败",
@@ -989,6 +1028,14 @@ export default class EchoNotesPlugin extends Plugin {
 			this.log("AI 纪要分析失败", error);
 		} finally {
 			this.processingAnalyses.delete(processingKey);
+		}
+	}
+
+	private async updateTranscriptAnalysisMetadata(transcriptFile: TFile, update: (content: string) => string): Promise<void> {
+		try {
+			await this.app.vault.process(transcriptFile, update);
+		} catch (error) {
+			this.log("更新 AI 纪要分析 frontmatter 失败", error);
 		}
 	}
 

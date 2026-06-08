@@ -84,6 +84,11 @@ import {
 	isReusableTranscriptForAudio
 } from "../src/transcript/transcript-source-metadata";
 import {
+	markTranscriptAnalysisDone,
+	markTranscriptAnalysisFailed,
+	markTranscriptAnalysisPending
+} from "../src/transcript/transcript-analysis-metadata";
+import {
 	createTaskId,
 	formatTaskBytes,
 	formatTaskElapsedTime,
@@ -298,6 +303,76 @@ assert.equal(
 	}),
 	false
 );
+
+const analysisPendingTranscript = markTranscriptAnalysisPending(chineseTranscript, {
+	templateId: "work-minutes",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	timestamp: "2026-06-08T10:00:00.000Z"
+});
+assert.match(analysisPendingTranscript, /status: done/);
+assert.match(analysisPendingTranscript, /analysis_status: "analysis_pending"/);
+assert.match(analysisPendingTranscript, /analysis_template_ids: \[work-minutes\]/);
+assert.match(analysisPendingTranscript, /analysis_pending_template_ids: \[work-minutes\]/);
+assert.match(analysisPendingTranscript, /analysis_provider: "aliyun-bailian"/);
+assert.match(analysisPendingTranscript, /analysis_model: "deepseek-v4-pro"/);
+assert.match(analysisPendingTranscript, /analysis_started_at: "2026-06-08T10:00:00.000Z"/);
+assert.equal(
+	isReusableTranscriptForAudio(analysisPendingTranscript, {
+		sourceAudio: createSourceAudioMetadata(audioFile as never),
+		provider: "siliconflow",
+		model: "TeleAI/TeleSpeechASR"
+	}),
+	true
+);
+const twoPendingAnalysesTranscript = markTranscriptAnalysisPending(analysisPendingTranscript, {
+	templateId: "study-notes",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	timestamp: "2026-06-08T10:01:00.000Z"
+});
+assert.match(twoPendingAnalysesTranscript, /analysis_template_ids: \[work-minutes, study-notes\]/);
+assert.match(twoPendingAnalysesTranscript, /analysis_pending_template_ids: \[work-minutes, study-notes\]/);
+const partialAnalysisTranscript = markTranscriptAnalysisDone(twoPendingAnalysesTranscript, {
+	templateId: "work-minutes",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	timestamp: "2026-06-08T10:02:00.000Z"
+});
+assert.match(partialAnalysisTranscript, /analysis_status: "analysis_pending"/);
+assert.match(partialAnalysisTranscript, /analysis_pending_template_ids: \[study-notes\]/);
+assert.match(partialAnalysisTranscript, /analysis_done_template_ids: \[work-minutes\]/);
+const partialFailedAnalysisTranscript = markTranscriptAnalysisFailed(partialAnalysisTranscript, {
+	templateId: "study-notes",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	timestamp: "2026-06-08T10:03:00.000Z",
+	error: "模型超时"
+});
+assert.match(partialFailedAnalysisTranscript, /analysis_status: "analysis_partial_failed"/);
+assert.match(partialFailedAnalysisTranscript, /analysis_done_template_ids: \[work-minutes\]/);
+assert.match(partialFailedAnalysisTranscript, /analysis_failed_template_ids: \[study-notes\]/);
+assert.match(partialFailedAnalysisTranscript, /analysis_error: "模型超时"/);
+const retriedAnalysisTranscript = markTranscriptAnalysisPending(partialFailedAnalysisTranscript, {
+	templateId: "study-notes",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	timestamp: "2026-06-08T10:04:00.000Z"
+});
+assert.match(retriedAnalysisTranscript, /analysis_status: "analysis_pending"/);
+assert.match(retriedAnalysisTranscript, /analysis_pending_template_ids: \[study-notes\]/);
+assert.doesNotMatch(retriedAnalysisTranscript, /analysis_failed_template_ids/);
+assert.doesNotMatch(retriedAnalysisTranscript, /analysis_error/);
+const completedAnalysisTranscript = markTranscriptAnalysisDone(retriedAnalysisTranscript, {
+	templateId: "study-notes",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	timestamp: "2026-06-08T10:05:00.000Z"
+});
+assert.match(completedAnalysisTranscript, /analysis_status: "analysis_done"/);
+assert.match(completedAnalysisTranscript, /analysis_done_template_ids: \[work-minutes, study-notes\]/);
+assert.match(completedAnalysisTranscript, /analysis_completed_at: "2026-06-08T10:05:00.000Z"/);
+assert.doesNotMatch(completedAnalysisTranscript, /analysis_pending_template_ids/);
 
 const englishTranscript = renderTranscriptTemplate({
 	app: templateApp as never,
