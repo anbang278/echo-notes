@@ -109,6 +109,29 @@ const duplicatedFingerprints = createAudioLinkFingerprints("Daily.md", duplicate
 assert.equal(duplicatedFingerprints.length, 2);
 assert.notEqual(duplicatedFingerprints[0], duplicatedFingerprints[1]);
 
+const guardedMarkdown = [
+	"---",
+	"audio: ![[frontmatter.m4a]]",
+	"---",
+	"正文 ![[visible.m4a]]",
+	"```md",
+	"![[code-block.m4a]]",
+	"```",
+	"<!-- ![[commented.m4a]] -->",
+	"可见 [录音](Attachments/visible%202.wav)",
+	"~~~",
+	"[hidden](hidden.wav)",
+	"~~~",
+	"前缀 <!-- ![[inline-comment.m4a]] --> 后缀 ![[after-comment.wav]]"
+].join("\n");
+const guardedLinks = parseAudioLinks(guardedMarkdown);
+assert.deepEqual(
+	guardedLinks.map((link) => link.linkPath),
+	["visible.m4a", "Attachments/visible 2.wav", "after-comment.wav"]
+);
+assert.equal(guardedLinks[0].lineStart, 3);
+assert.equal(guardedLinks[2].lineStart, 12);
+
 assert.equal(
 	createTaskId("transcription", "Folder\\Audio File.m4a"),
 	createTaskId("transcription", "folder/audio file.m4a")

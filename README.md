@@ -273,7 +273,7 @@ This is the full transcript text.
 
 Echo Notes can optionally watch for Markdown audio links and newly created audio files.
 
-- Markdown audio links: after a Markdown file changes, Echo Notes waits briefly, scans supported audio references, transcribes missing transcripts, and inserts missing transcript links.
+- Markdown audio links: after a Markdown file changes, Echo Notes waits briefly, scans supported audio references outside frontmatter, fenced code blocks, and HTML comments, transcribes missing transcripts, and inserts missing transcript links.
 - New audio files: after Obsidian finishes loading the workspace, Echo Notes can transcribe newly created audio files without modifying any source note. Without source-note context, AI analysis uses the default template.
 - Transcription-time analysis: when AI analysis is enabled, manual transcription commands choose a template automatically from nearby audio-link keywords and write AI analysis back into the transcript in the background.
 
