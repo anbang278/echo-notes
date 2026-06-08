@@ -284,6 +284,7 @@ Echo Notes' long-term goal is to evolve from an audio transcription tool into a 
 
 ```bash
 npm install
+npm run typecheck
 npm run build
 ```
 
@@ -307,7 +308,7 @@ npm test
 
 - Speaker diarization is not supported.
 - Timestamped transcript segments are not supported.
-- Large-file chunking is not supported.
+- Universal large-file chunking across all providers is not supported yet. Chunking currently applies only to Alibaba Bailian `qwen3-asr-flash`.
 - Local Whisper is not supported.
 - AI analysis does not yet support long-text chunking.
 - There is no advanced task queue UI yet.

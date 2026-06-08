@@ -284,6 +284,7 @@ Echo Notes 的长期目标，是从录音转写工具逐步演进为个人 AI Me
 
 ```bash
 npm install
+npm run typecheck
 npm run build
 ```
 
@@ -307,7 +308,7 @@ npm test
 
 - 不支持说话人分离。
 - 不支持带时间戳的分段转写。
-- 不支持大文件自动切片。
+- 暂不支持所有 Provider 通用的大文件自动切片；目前长音频分段只适用于阿里百炼 `qwen3-asr-flash`。
 - 不支持本地 Whisper。
 - AI 纪要分析暂不支持长文本分块。
 - 暂无复杂任务队列 UI。
