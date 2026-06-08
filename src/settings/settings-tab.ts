@@ -5,6 +5,11 @@ import {
 	getTranscriptionProviderCapability
 } from "../providers/provider-capabilities";
 import {
+	diagnoseTranscriptionProviderSettings,
+	type ProviderDiagnosticItem,
+	type ProviderDiagnosticSeverity
+} from "../providers/provider-diagnostics";
+import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	COPY_LANGUAGE_LABELS,
@@ -109,6 +114,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		this.renderProviderDiagnostics(containerEl);
 
 		this.renderAnalysisSettings(containerEl);
 
@@ -472,6 +479,20 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private renderProviderDiagnostics(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName("转写配置自检")
+			.setDesc("本地检查 API Key、Base URL、模型和 Provider 能力限制；不会上传音频，也不会真实调用服务商接口。")
+			.addButton((button) =>
+				button
+					.setButtonText("检查转写配置")
+					.onClick(() => {
+						const result = diagnoseTranscriptionProviderSettings(this.plugin.settings, this.plugin.getApiKey());
+						new ProviderDiagnosticsModal(this.app, result.providerLabel, result.canAttemptTranscription, result.items).open();
+					})
+			);
+	}
+
 	private renderAnalysisTemplateCard(containerEl: HTMLElement, template: AnalysisTemplateConfig): void {
 		const keywords = template.recognitionKeywords.length > 0 ? template.recognitionKeywords.join("、") : "未设置";
 		const cardEl = containerEl.createDiv({ cls: "echo-notes-template-card" });
@@ -735,5 +756,68 @@ class AnalysisTemplateEditModal extends Modal {
 		await this.plugin.saveSettings();
 		this.onSaved();
 		this.close();
+	}
+}
+
+class ProviderDiagnosticsModal extends Modal {
+	private providerLabel: string;
+	private canAttemptTranscription: boolean;
+	private items: ProviderDiagnosticItem[];
+
+	constructor(app: App, providerLabel: string, canAttemptTranscription: boolean, items: ProviderDiagnosticItem[]) {
+		super(app);
+		this.providerLabel = providerLabel;
+		this.canAttemptTranscription = canAttemptTranscription;
+		this.items = items;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("echo-notes-provider-diagnostics-modal");
+		this.titleEl.setText("转写配置自检");
+
+		contentEl.createEl("p", {
+			text: `${this.providerLabel}：${this.canAttemptTranscription ? "未发现阻塞性问题。" : "存在需要先处理的问题。"}`
+		});
+
+		const listEl = contentEl.createDiv({ cls: "echo-notes-provider-diagnostics-list" });
+		for (const item of this.items) {
+			const itemEl = listEl.createDiv({
+				cls: `echo-notes-provider-diagnostics-item is-${item.severity}`
+			});
+			const headerEl = itemEl.createDiv({ cls: "echo-notes-provider-diagnostics-header" });
+			headerEl.createSpan({
+				cls: "echo-notes-provider-diagnostics-badge",
+				text: getDiagnosticSeverityLabel(item.severity)
+			});
+			headerEl.createSpan({ cls: "echo-notes-provider-diagnostics-title", text: item.title });
+			itemEl.createDiv({ cls: "echo-notes-provider-diagnostics-detail", text: item.detail });
+		}
+
+		new Setting(contentEl).addButton((button) =>
+			button
+				.setButtonText("关闭")
+				.setCta()
+				.onClick(() => {
+					this.close();
+				})
+		);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+function getDiagnosticSeverityLabel(severity: ProviderDiagnosticSeverity): string {
+	switch (severity) {
+		case "error":
+			return "错误";
+		case "warning":
+			return "警告";
+		case "info":
+		default:
+			return "提示";
 	}
 }

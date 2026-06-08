@@ -29,6 +29,7 @@ import {
 	OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS,
 	TRANSCRIPTION_PROVIDER_CAPABILITIES
 } from "../src/providers/provider-capabilities";
+import { diagnoseTranscriptionProviderSettings } from "../src/providers/provider-diagnostics";
 import {
 	classifyHttpTranscriptionError,
 	createHttpTranscriptionError,
@@ -409,6 +410,37 @@ assert.equal(uploadPreview.rows.find((row) => row.label === "音频文件")?.val
 assert.equal(uploadPreview.rows.find((row) => row.label === "文件大小")?.value, "1.5 KB");
 assert.equal(uploadPreview.rows.find((row) => row.label === "AI 分析模型")?.value, DEFAULT_SETTINGS.analysisModel);
 assert.equal(uploadPreview.warnings.length, 2);
+const missingProviderDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		baseUrl: "",
+		model: ""
+	},
+	""
+);
+assert.equal(missingProviderDiagnostics.canAttemptTranscription, false);
+assert.ok(missingProviderDiagnostics.items.some((item) => item.severity === "error" && item.title === "API Key 缺失"));
+assert.ok(missingProviderDiagnostics.items.some((item) => item.severity === "error" && item.title === "Base URL 缺失"));
+assert.ok(missingProviderDiagnostics.items.some((item) => item.severity === "error" && item.title === "模型缺失"));
+const warningProviderDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		provider: "custom-openai-compatible",
+		baseUrl: "http://example.com/v1",
+		model: "custom-whisper",
+		language: "zh"
+	},
+	"sk-valid"
+);
+assert.equal(warningProviderDiagnostics.canAttemptTranscription, false);
+assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "error" && item.title === "Base URL 仍是示例地址"));
+assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "warning" && item.title === "Base URL 使用未加密 HTTP"));
+assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "info" && item.title === "模型不在推荐列表中"));
+assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "info" && item.title === "OpenAI-compatible 音频端点"));
+const validProviderDiagnostics = diagnoseTranscriptionProviderSettings(DEFAULT_SETTINGS, "sk-valid");
+assert.equal(validProviderDiagnostics.canAttemptTranscription, true);
+assert.equal(validProviderDiagnostics.providerLabel, PROVIDER_LABELS["aliyun-bailian"]);
+assert.equal(validProviderDiagnostics.items.some((item) => item.severity === "error"), false);
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "Ctrl+S");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "Ctrl+Z");

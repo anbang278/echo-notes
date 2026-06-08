@@ -61,6 +61,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Skip existing transcripts and insert missing transcript links.
 - Avoid transcript filename collisions in a custom output folder by adding a stable source-path hash to generated transcript filenames.
 - Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
+- Run a local transcription-provider configuration check for API key, Base URL, model, HTTP risk, endpoint shape, and capability-limit warnings without uploading audio.
 - Standardize transcription provider errors and redact API keys, authorization headers, Base64 audio payloads, and overlong responses before showing or writing failure messages.
 - Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
@@ -83,6 +84,8 @@ Implemented transcription providers:
 - 自定义兼容接口（Custom OpenAI-compatible） for custom `/audio/transcriptions` endpoints
 
 Provider defaults can be changed in settings. The settings tab also shows a capability summary for the selected transcription provider, including upload mode, endpoint shape, size limit, chunking support, language parameter support, timestamp support, and speaker diarization support.
+
+The settings tab also includes a local "Check transcription configuration" action. It checks API key presence, Base URL format, example URLs, non-local HTTP risks, model hints, endpoint shape, and known capability limits. This check does not upload audio and does not call the provider.
 
 AI analysis uses a separate provider configuration. The default is Alibaba Bailian `deepseek-v4-pro` through an OpenAI-compatible `/chat/completions` endpoint. The analysis provider list mirrors the transcription provider list; optional chat presets must support `{Base URL}/chat/completions`.
 

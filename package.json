@@ -1,6 +1,6 @@
 {
 	"name": "echo-notes",
-	"version": "0.2.15",
+	"version": "0.2.16",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {

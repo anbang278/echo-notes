@@ -61,6 +61,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 跳过已存在的转写稿，并补充缺失链接。
 - 自定义输出目录下会为 transcript 文件名追加稳定的源路径短 hash，避免不同目录的同名音频互相覆盖。
 - 在设置页展示当前转写 Provider 的上传方式、接口形态、文件限制、长音频分段、语言参数、时间戳和说话人分离能力。
+- 可在设置页本地自检转写 Provider 配置，检查 API Key、Base URL、模型、HTTP 风险、接口形态和能力限制，不上传音频。
 - 标准化转写 Provider 错误，并在展示或写入失败信息前脱敏 API Key、Authorization header、Base64 音频载荷和过长响应。
 - 可选开启手动上传前确认：上传前预览 Provider、Base URL、模型、文件大小和 HTTP 风险；开启后自动化会跳过需要确认的上传。
 - 在设置页控制 Obsidian 核心插件录音机开关，并为其代理命令配置默认快捷键。
@@ -83,6 +84,8 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 自定义兼容接口（Custom OpenAI-compatible）：用于自定义 `/audio/transcriptions` 端点
 
 服务商的默认 Base URL 和模型都可以在设置页修改。设置页也会展示当前转写 Provider 的能力摘要，包括上传方式、接口形态、大小限制、是否支持长音频分段、语言参数、时间戳和说话人分离。
+
+设置页还提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
 
 AI 纪要分析使用独立配置，默认是阿里百炼 `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 列表与转写 Provider 列表保持一致；可选聊天模型预设需要确认支持 `{Base URL}/chat/completions`。
 
