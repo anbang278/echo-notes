@@ -4,6 +4,7 @@ import { AnalysisService } from "./analysis/analysis-service";
 import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
+	getEnabledAnalysisTemplates,
 	selectAnalysisTemplateForSourceMarkdown
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
@@ -47,7 +48,8 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"stop-official-audio-recorder",
 	"open-task-center",
 	"transcribe-selected-audio",
-	"transcribe-all-audio-files-in-current-note"
+	"transcribe-all-audio-files-in-current-note",
+	"analyze-current-transcript-with-template"
 ];
 
 interface ProcessAudioResult {
@@ -307,6 +309,14 @@ export default class EchoNotesPlugin extends Plugin {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
 			}
 		});
+
+		this.addCommand({
+			id: "analyze-current-transcript-with-template",
+			name: "Analyze current transcript with selected template",
+			callback: () => {
+				void this.handleAnalyzeCurrentTranscriptWithTemplate();
+			}
+		});
 	}
 
 	private removeRegisteredCommands(): void {
@@ -522,6 +532,29 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		new Notice(`Echo Notes 处理完成：${completed} 个音频，插入 ${linked} 个链接。`);
+	}
+
+	private async handleAnalyzeCurrentTranscriptWithTemplate(): Promise<void> {
+		const transcriptFile = this.app.workspace.getActiveFile();
+		if (!transcriptFile || !this.isTranscriptMarkdownFile(transcriptFile)) {
+			new Notice("请先打开一个 Echo Notes 转写稿。");
+			return;
+		}
+
+		if (!this.settings.analysisEnabled) {
+			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
+			return;
+		}
+
+		const templates = getEnabledAnalysisTemplates(this.settings);
+		if (templates.length === 0) {
+			new Notice("没有启用的 AI 纪要分析模板。");
+			return;
+		}
+
+		new AnalysisTemplatePickerModal(this.app, templates, (template) => {
+			this.startAnalysisTask(transcriptFile, template);
+		}).open();
 	}
 
 	private async processAudioToTranscript(
@@ -1050,6 +1083,10 @@ export default class EchoNotesPlugin extends Plugin {
 		return file.extension === "md" && !file.basename.endsWith(".transcript");
 	}
 
+	private isTranscriptMarkdownFile(file: TFile): boolean {
+		return file.extension === "md" && file.basename.endsWith(".transcript");
+	}
+
 	private log(message: string, ...args: unknown[]): void {
 		if (this.settings.verboseLog) {
 			console.log(`[Echo Notes] ${message}`, ...args.map(sanitizeLogValue));
@@ -1148,5 +1185,42 @@ class TranscriptionUploadConfirmModal extends Modal {
 		this.resolved = true;
 		this.onResolved(confirmed);
 		this.close();
+	}
+}
+
+class AnalysisTemplatePickerModal extends Modal {
+	private templates: AnalysisTemplateConfig[];
+	private onSelect: (template: AnalysisTemplateConfig) => void;
+
+	constructor(app: App, templates: AnalysisTemplateConfig[], onSelect: (template: AnalysisTemplateConfig) => void) {
+		super(app);
+		this.templates = templates;
+		this.onSelect = onSelect;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("echo-notes-analysis-template-picker-modal");
+		this.titleEl.setText("选择 AI 纪要模板");
+
+		const listEl = contentEl.createDiv({ cls: "echo-notes-analysis-template-picker-list" });
+		for (const template of this.templates) {
+			const itemEl = listEl.createEl("button", { cls: "echo-notes-analysis-template-picker-item" });
+			itemEl.type = "button";
+			itemEl.createDiv({ cls: "echo-notes-analysis-template-picker-title", text: template.name || template.id });
+			itemEl.createDiv({
+				cls: "echo-notes-analysis-template-picker-desc",
+				text: template.description || template.recognitionKeywords.join("、") || template.id
+			});
+			itemEl.addEventListener("click", () => {
+				this.onSelect(template);
+				this.close();
+			});
+		}
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
 	}
 }

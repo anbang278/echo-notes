@@ -69,6 +69,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
+- Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose an AI analysis template from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a name, recognition keywords, system prompt, and custom prompt.
 - Optional automation for newly added Markdown audio links.
@@ -218,6 +219,8 @@ If AI analysis is enabled, each audio link is matched independently. Different r
 ### AI analysis generation
 
 AI analysis runs automatically after a transcript is created or reused. Echo Notes inserts the transcript link first and does not wait for the model response. If "skip existing transcript" is enabled, running the transcription command again reuses only a `status: done` transcript whose source audio path, size, mtime, provider, and model still match, then generates or updates AI analysis in the background.
+
+To run analysis manually, open a `.transcript.md` file and run `Echo Notes: Analyze current transcript with selected template`, then choose any enabled template.
 
 Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different templates are appended inside the same AI analysis block.
 

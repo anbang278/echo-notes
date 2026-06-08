@@ -486,6 +486,45 @@
 	overflow-wrap: anywhere;
 }
 
+.echo-notes-analysis-template-picker-list {
+	display: grid;
+	gap: 10px;
+	margin-top: 10px;
+}
+
+.echo-notes-analysis-template-picker-item {
+	display: block;
+	width: 100%;
+	padding: 12px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	text-align: left;
+	cursor: pointer;
+}
+
+.echo-notes-analysis-template-picker-item:hover,
+.echo-notes-analysis-template-picker-item:focus {
+	border-color: var(--interactive-accent);
+	background: var(--background-modifier-hover);
+}
+
+.echo-notes-analysis-template-picker-title {
+	font-size: var(--font-ui-medium);
+	font-weight: 600;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-analysis-template-picker-desc {
+	margin-top: 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.45;
+	overflow-wrap: anywhere;
+}
+
 @media (max-width: 720px) {
 	.echo-notes-upload-preview-row {
 		grid-template-columns: 1fr;
