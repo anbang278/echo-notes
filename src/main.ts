@@ -13,6 +13,7 @@ import { createAudioLinkFingerprints } from "./audio/audio-link-fingerprint";
 import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
+import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import {
 	shouldWriteFailedTranscript,
@@ -1058,6 +1059,11 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		const content = await this.app.vault.cachedRead(file);
+		if (shouldSkipAutomationForPrivateNote(content)) {
+			this.log("跳过隐私标记笔记的 Markdown 音频链接自动化", file.path);
+			return;
+		}
+
 		const matches = parseAudioLinks(content);
 		if (matches.length === 0) {
 			return;

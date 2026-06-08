@@ -66,6 +66,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Use a shared AudioChunkPipeline core for long-audio preparation, chunk progress events, segment transcription, text merging, trace id aggregation, raw segment collection, and releasing completed chunk audio buffers.
 - Open an in-memory Task Center from the ribbon or command palette to inspect transcription and AI analysis status, failures, durations, providers, models, outputs, and retry failed tasks.
 - Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
+- Markdown-link automation skips source notes marked with Echo Notes privacy frontmatter or private tags.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
@@ -109,6 +110,16 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript files and inline AI analysis results are written inside your Obsidian vault.
 
 If "Confirm before manual transcription upload" is enabled in settings, Echo Notes shows a confirmation dialog before manual transcription uploads. The dialog lists the provider, Base URL, model, file size, and HTTP risk warnings. Automation skips uploads while this confirmation mode is enabled so audio is not sent in the background without user confirmation.
+
+Markdown-link automation also skips source notes marked with Echo Notes privacy flags. Add any of these frontmatter values to a sensitive note:
+
+```yaml
+echo_notes_private: true
+echo_notes_disable_automation: true
+echo_notes_disable_auto_transcribe: true
+```
+
+You can also use tags such as `#echo-notes-private`, `#echo-notes-no-auto`, `#echo-notes-disable-automation`, or `#echo-notes-disable-auto-transcribe`. These flags only disable background Markdown-link automation; manual commands still work when you explicitly run them.
 
 ## Supported Audio Formats
 
@@ -305,6 +316,7 @@ Echo Notes can optionally watch for Markdown audio links and newly created audio
 - Markdown audio links: after a Markdown file changes, Echo Notes waits briefly, scans supported audio references outside frontmatter, fenced code blocks, and HTML comments, transcribes missing transcripts, and inserts missing transcript links.
 - New audio files: after Obsidian finishes loading the workspace, Echo Notes can transcribe newly created audio files without modifying any source note. Without source-note context, AI analysis uses the default template.
 - Transcription-time analysis: when AI analysis is enabled, manual transcription commands choose a template automatically from nearby audio-link keywords and write AI analysis back into the transcript in the background.
+- Private source notes: Markdown-link automation skips notes with `echo_notes_private`, `echo_notes_disable_automation`, `echo_notes_disable_auto_transcribe`, or Echo Notes private tags.
 
 All automation options are disabled by default.
 

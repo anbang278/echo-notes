@@ -31,6 +31,7 @@ import {
 import { runAudioChunkPipeline } from "../src/audio/audio-chunk-pipeline";
 import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/audio/audio-link-fingerprint";
 import { LinkService } from "../src/obsidian/link-service";
+import { shouldSkipAutomationForPrivateNote } from "../src/privacy/note-privacy";
 import {
 	formatProviderCapabilityBytes,
 	getProviderCapabilitySummary,
@@ -148,6 +149,41 @@ assert.deepEqual(
 );
 assert.equal(guardedLinks[0].lineStart, 3);
 assert.equal(guardedLinks[2].lineStart, 12);
+
+assert.equal(
+	shouldSkipAutomationForPrivateNote(
+		["---", "echo_notes_private: true", "---", "", "![[private-meeting.m4a]]"].join("\n")
+	),
+	true
+);
+assert.equal(
+	shouldSkipAutomationForPrivateNote(
+		["---", "echo_notes_disable_automation: yes", "---", "", "![[private-meeting.m4a]]"].join("\n")
+	),
+	true
+);
+assert.equal(
+	shouldSkipAutomationForPrivateNote(
+		["---", "echo_notes_disable_auto_transcribe: \"on\"", "---", "", "![[private-meeting.m4a]]"].join("\n")
+	),
+	true
+);
+assert.equal(
+	shouldSkipAutomationForPrivateNote(
+		["---", "echo_notes_private: false", "---", "", "![[regular-meeting.m4a]]"].join("\n")
+	),
+	false
+);
+assert.equal(
+	shouldSkipAutomationForPrivateNote(["---", "tags: [echo-notes-private]", "---", "", "![[private.m4a]]"].join("\n")),
+	true
+);
+assert.equal(
+	shouldSkipAutomationForPrivateNote(["---", "tags:", "  - echo-notes-no-auto", "---", "", "![[private.m4a]]"].join("\n")),
+	true
+);
+assert.equal(shouldSkipAutomationForPrivateNote("正文 #echo-notes-disable-automation\n![[private.m4a]]"), true);
+assert.equal(shouldSkipAutomationForPrivateNote("正文 #regular-note\n![[regular.m4a]]"), false);
 
 assert.equal(
 	createTaskId("transcription", "Folder\\Audio File.m4a"),

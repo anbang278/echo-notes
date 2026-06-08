@@ -206,7 +206,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别 Markdown 音频链接")
-			.setDesc("监听笔记变更，发现新增音频链接后自动转写并补充链接。")
+			.setDesc("监听笔记变更，发现新增音频链接后自动转写并补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioLink)
