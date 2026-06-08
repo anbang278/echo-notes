@@ -65,7 +65,8 @@ export function selectAnalysisTemplateForSourceMarkdown(
 	contextText: string
 ): AnalysisTemplateConfig | null {
 	const frontmatterTemplate = selectAnalysisTemplateFromFrontmatter(settings, sourceMarkdown);
-	return frontmatterTemplate ?? selectAnalysisTemplateForContext(settings, contextText);
+	const tagTemplate = selectAnalysisTemplateFromTags(settings, sourceMarkdown);
+	return frontmatterTemplate ?? tagTemplate ?? selectAnalysisTemplateForContext(settings, contextText);
 }
 
 export function selectAnalysisTemplateFromFrontmatter(
@@ -87,6 +88,24 @@ export function selectAnalysisTemplateFromFrontmatter(
 	);
 }
 
+export function selectAnalysisTemplateFromTags(
+	settings: EchoNotesSettings,
+	sourceMarkdown: string
+): AnalysisTemplateConfig | null {
+	const normalizedTags = new Set(getSourceNoteTags(sourceMarkdown).map(normalizeAnalysisTagValue).filter(Boolean));
+	if (normalizedTags.size === 0) {
+		return null;
+	}
+
+	return (
+		getEnabledAnalysisTemplates(settings).find((template) =>
+			[template.id, template.name, ...template.recognitionKeywords]
+				.map(normalizeAnalysisTagValue)
+				.some((candidate) => candidate.length > 0 && normalizedTags.has(candidate))
+		) ?? null
+	);
+}
+
 export function getAnalysisContextAroundAudioMatch(markdown: string, match: Pick<AudioLinkMatch, "lineStart" | "lineEnd">): string {
 	const lines = markdown.split("\n");
 	const start = Math.max(0, match.lineStart - ANALYSIS_CONTEXT_LINE_RADIUS);
@@ -95,16 +114,11 @@ export function getAnalysisContextAroundAudioMatch(markdown: string, match: Pick
 }
 
 function getAnalysisTemplateFrontmatterValue(markdown: string): string | null {
-	if (!markdown.startsWith("---\n")) {
+	const lines = getFrontmatterLines(markdown);
+	if (!lines) {
 		return null;
 	}
 
-	const endIndex = markdown.indexOf("\n---", 4);
-	if (endIndex === -1) {
-		return null;
-	}
-
-	const lines = markdown.slice(4, endIndex).split(/\r?\n/);
 	for (const line of lines) {
 		const separatorIndex = line.indexOf(":");
 		if (separatorIndex === -1) {
@@ -120,6 +134,90 @@ function getAnalysisTemplateFrontmatterValue(markdown: string): string | null {
 	}
 
 	return null;
+}
+
+function getSourceNoteTags(markdown: string): string[] {
+	return [...getFrontmatterTags(markdown), ...getInlineTags(markdown)];
+}
+
+function getFrontmatterTags(markdown: string): string[] {
+	const lines = getFrontmatterLines(markdown);
+	if (!lines) {
+		return [];
+	}
+
+	const tags: string[] = [];
+	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+		const line = lines[lineIndex];
+		const separatorIndex = line.indexOf(":");
+		if (separatorIndex === -1 || line.slice(0, separatorIndex).trim() !== "tags") {
+			continue;
+		}
+
+		const inlineValue = line.slice(separatorIndex + 1).trim();
+		if (inlineValue) {
+			tags.push(...parseTagValue(inlineValue));
+			continue;
+		}
+
+		for (let childIndex = lineIndex + 1; childIndex < lines.length; childIndex += 1) {
+			const childLine = lines[childIndex];
+			const listMatch = childLine.match(/^\s*-\s+(.+)$/);
+			if (!listMatch) {
+				break;
+			}
+
+			tags.push(...parseTagValue(listMatch[1].trim()));
+		}
+	}
+
+	return tags;
+}
+
+function getInlineTags(markdown: string): string[] {
+	const tags: string[] = [];
+	const tagRegex = /(?:^|[\s([{"'])#([^\s#\])}",.;:!?]+)/g;
+	let match: RegExpExecArray | null;
+
+	while ((match = tagRegex.exec(markdown)) !== null) {
+		tags.push(match[1]);
+	}
+
+	return tags;
+}
+
+function parseTagValue(value: string): string[] {
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return [];
+	}
+
+	if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+		return trimmed
+			.slice(1, -1)
+			.split(",")
+			.map((tag) => unquoteYamlScalar(tag.trim()))
+			.filter(Boolean);
+	}
+
+	return trimmed.split(/\s+/).map(unquoteYamlScalar).filter(Boolean);
+}
+
+function normalizeAnalysisTagValue(value: string): string {
+	return value.trim().replace(/^#+/, "").toLowerCase();
+}
+
+function getFrontmatterLines(markdown: string): string[] | null {
+	if (!markdown.startsWith("---\n")) {
+		return null;
+	}
+
+	const endIndex = markdown.indexOf("\n---", 4);
+	if (endIndex === -1) {
+		return null;
+	}
+
+	return markdown.slice(4, endIndex).split(/\r?\n/);
 }
 
 function unquoteYamlScalar(value: string): string {

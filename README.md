@@ -69,7 +69,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
-- Automatically choose an AI analysis template from source-note frontmatter or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
+- Automatically choose an AI analysis template from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a name, recognition keywords, system prompt, and custom prompt.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
@@ -200,7 +200,7 @@ Run the command `Echo Notes: Transcribe selected audio`.
 
 Echo Notes resolves the audio file, calls the configured provider, creates a transcript, and inserts a transcript link below the audio reference.
 
-If AI analysis is enabled, Echo Notes first checks the source note frontmatter for `echo_notes_analysis_template`, `echo_notes_template`, or `analysis_template`. The value can be an enabled template id or template name. If no enabled frontmatter template is found, Echo Notes reads the three lines above and below the audio link and chooses an enabled template by recognition keyword. After the transcript link is inserted, AI analysis runs in the background; when the model returns, the result is written before the transcript section in the same `.transcript.md` file. If no keyword is found, Echo Notes uses the configured default template.
+If AI analysis is enabled, Echo Notes first checks the source note frontmatter for `echo_notes_analysis_template`, `echo_notes_template`, or `analysis_template`. The value can be an enabled template id or template name. If no enabled frontmatter template is found, Echo Notes checks frontmatter `tags` and inline `#tags` against enabled template ids, names, and recognition keywords. If no tag matches, Echo Notes reads the three lines above and below the audio link and chooses an enabled template by recognition keyword. After the transcript link is inserted, AI analysis runs in the background; when the model returns, the result is written before the transcript section in the same `.transcript.md` file. If no keyword is found, Echo Notes uses the configured default template.
 
 ### Transcribe all audio files in the current note
 
@@ -221,7 +221,7 @@ AI analysis runs automatically after a transcript is created or reused. Echo Not
 
 Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different templates are appended inside the same AI analysis block.
 
-Frontmatter template selection applies to the whole source note and has priority over nearby keywords. Keywords are matched only against the source note lines around the audio link, not against the transcript body. If multiple templates match the same context, Echo Notes uses the first enabled template in settings order.
+Frontmatter template selection applies to the whole source note and has priority over tags and nearby keywords. Tags apply to the whole source note and have priority over nearby keywords. Keywords are matched only against the source note lines around the audio link, not against the transcript body. If multiple templates match the same context, Echo Notes uses the first enabled template in settings order.
 
 ## Output Example
 
