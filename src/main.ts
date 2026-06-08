@@ -4,7 +4,7 @@ import { AnalysisService } from "./analysis/analysis-service";
 import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
-	selectAnalysisTemplateForContext
+	selectAnalysisTemplateForSourceMarkdown
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
 import { isSupportedAudioFile } from "./audio/audio-detector";
@@ -821,7 +821,7 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		const contextText = getAnalysisContextAroundAudioMatch(content, audioMatch);
-		const template = selectAnalysisTemplateForContext(this.settings, contextText);
+		const template = selectAnalysisTemplateForSourceMarkdown(this.settings, content, contextText);
 		if (!template) {
 			new Notice("没有启用的 AI 纪要分析模板，已跳过分析。");
 			return null;

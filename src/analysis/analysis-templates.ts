@@ -9,6 +9,11 @@ import type { AudioLinkMatch } from "../audio/audio-link-parser";
 
 export const ANALYSIS_TEMPLATE_ORDER = BUILTIN_ANALYSIS_TEMPLATE_IDS;
 export const ANALYSIS_CONTEXT_LINE_RADIUS = 3;
+export const ANALYSIS_TEMPLATE_FRONTMATTER_KEYS = [
+	"echo_notes_analysis_template",
+	"echo_notes_template",
+	"analysis_template"
+];
 
 export interface AnalysisPromptInput {
 	template: AnalysisTemplateConfig;
@@ -54,11 +59,79 @@ export function selectAnalysisTemplateForContext(settings: EchoNotesSettings, co
 	return getDefaultAnalysisTemplate(settings);
 }
 
+export function selectAnalysisTemplateForSourceMarkdown(
+	settings: EchoNotesSettings,
+	sourceMarkdown: string,
+	contextText: string
+): AnalysisTemplateConfig | null {
+	const frontmatterTemplate = selectAnalysisTemplateFromFrontmatter(settings, sourceMarkdown);
+	return frontmatterTemplate ?? selectAnalysisTemplateForContext(settings, contextText);
+}
+
+export function selectAnalysisTemplateFromFrontmatter(
+	settings: EchoNotesSettings,
+	sourceMarkdown: string
+): AnalysisTemplateConfig | null {
+	const requestedTemplate = getAnalysisTemplateFrontmatterValue(sourceMarkdown);
+	if (!requestedTemplate) {
+		return null;
+	}
+
+	const normalizedRequestedTemplate = requestedTemplate.trim().toLowerCase();
+	return (
+		getEnabledAnalysisTemplates(settings).find(
+			(template) =>
+				template.id.toLowerCase() === normalizedRequestedTemplate ||
+				template.name.trim().toLowerCase() === normalizedRequestedTemplate
+		) ?? null
+	);
+}
+
 export function getAnalysisContextAroundAudioMatch(markdown: string, match: Pick<AudioLinkMatch, "lineStart" | "lineEnd">): string {
 	const lines = markdown.split("\n");
 	const start = Math.max(0, match.lineStart - ANALYSIS_CONTEXT_LINE_RADIUS);
 	const end = Math.min(lines.length - 1, match.lineEnd + ANALYSIS_CONTEXT_LINE_RADIUS);
 	return lines.slice(start, end + 1).join("\n");
+}
+
+function getAnalysisTemplateFrontmatterValue(markdown: string): string | null {
+	if (!markdown.startsWith("---\n")) {
+		return null;
+	}
+
+	const endIndex = markdown.indexOf("\n---", 4);
+	if (endIndex === -1) {
+		return null;
+	}
+
+	const lines = markdown.slice(4, endIndex).split(/\r?\n/);
+	for (const line of lines) {
+		const separatorIndex = line.indexOf(":");
+		if (separatorIndex === -1) {
+			continue;
+		}
+
+		const key = line.slice(0, separatorIndex).trim();
+		if (!ANALYSIS_TEMPLATE_FRONTMATTER_KEYS.includes(key)) {
+			continue;
+		}
+
+		return unquoteYamlScalar(line.slice(separatorIndex + 1).trim());
+	}
+
+	return null;
+}
+
+function unquoteYamlScalar(value: string): string {
+	if (value.startsWith('"') && value.endsWith('"')) {
+		return value.slice(1, -1).replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+	}
+
+	if (value.startsWith("'") && value.endsWith("'")) {
+		return value.slice(1, -1).replace(/''/g, "'");
+	}
+
+	return value;
 }
 
 export function buildAnalysisMessages(input: AnalysisPromptInput): { system: string; user: string } {

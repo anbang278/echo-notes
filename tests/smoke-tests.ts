@@ -13,7 +13,9 @@ import {
 	buildAnalysisMessages,
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
-	selectAnalysisTemplateForContext
+	selectAnalysisTemplateForContext,
+	selectAnalysisTemplateFromFrontmatter,
+	selectAnalysisTemplateForSourceMarkdown
 } from "../src/analysis/analysis-templates";
 import { parseAudioLinks } from "../src/audio/audio-link-parser";
 import {
@@ -825,6 +827,25 @@ assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记�
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里标记为管理者纪要。")?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "这里没有任何关键字。")?.id, "study-notes");
 assert.equal(selectAnalysisTemplateForContext(normalizedSettings, "学习纪要和产品需求挖掘纪要同时出现。")?.id, "study-notes");
+const frontmatterTemplateById = [
+	"---",
+	"echo_notes_analysis_template: product-requirement-mining",
+	"---",
+	"这里标记为学习纪要。"
+].join("\n");
+assert.equal(selectAnalysisTemplateFromFrontmatter(normalizedSettings, frontmatterTemplateById)?.id, "product-requirement-mining");
+assert.equal(
+	selectAnalysisTemplateForSourceMarkdown(normalizedSettings, frontmatterTemplateById, "这里标记为学习纪要。")?.id,
+	"product-requirement-mining"
+);
+const frontmatterTemplateByName = ["---", "echo_notes_template: 访谈纪要", "---", "这里没有任何关键字。"].join("\n");
+assert.equal(selectAnalysisTemplateFromFrontmatter(normalizedSettings, frontmatterTemplateByName)?.id, "custom-template");
+const disabledFrontmatterTemplate = ["---", "analysis_template: manager-sync-minutes", "---", "这里标记为学习纪要。"].join("\n");
+assert.equal(selectAnalysisTemplateFromFrontmatter(normalizedSettings, disabledFrontmatterTemplate), null);
+assert.equal(
+	selectAnalysisTemplateForSourceMarkdown(normalizedSettings, disabledFrontmatterTemplate, "这里标记为学习纪要。")?.id,
+	"study-notes"
+);
 
 const contextNote = [
 	"第 0 行不应进入上下文",
