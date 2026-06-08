@@ -294,14 +294,10 @@ Echo Notes 的长期目标，是从录音转写工具逐步演进为个人 AI Me
 
 ```bash
 npm install
+npm run lint
 npm run typecheck
-npm run build
-```
-
-运行 smoke tests：
-
-```bash
 npm test
+npm run build
 ```
 
 ## 本地测试安装

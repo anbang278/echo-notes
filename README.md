@@ -294,14 +294,10 @@ Echo Notes' long-term goal is to evolve from an audio transcription tool into a 
 
 ```bash
 npm install
+npm run lint
 npm run typecheck
-npm run build
-```
-
-Run smoke tests:
-
-```bash
 npm test
+npm run build
 ```
 
 ## Install for Local Testing
