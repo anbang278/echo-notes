@@ -1,5 +1,10 @@
 import { App, TFile } from "obsidian";
-import { getLocalizedCopy, type AnalysisTemplateConfig, type CopyLanguage } from "../settings/settings";
+import {
+	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
+	getLocalizedCopy,
+	type AnalysisTemplateConfig,
+	type CopyLanguage
+} from "../settings/settings";
 import {
 	extractTranscriptText,
 	insertOrReplaceTranscriptAnalysis,
@@ -30,6 +35,7 @@ export class AnalysisService {
 		const analysisBlock = renderTranscriptAnalysisBlock({
 			templateId: template.id,
 			templateName: template.name,
+			templateVersion: template.version ?? DEFAULT_ANALYSIS_TEMPLATE_VERSION,
 			result,
 			copyLanguage
 		});

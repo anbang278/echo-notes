@@ -1,4 +1,9 @@
-import { getLocalizedCopy, type AnalysisTemplateId, type CopyLanguage } from "../settings/settings";
+import {
+	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
+	getLocalizedCopy,
+	type AnalysisTemplateId,
+	type CopyLanguage
+} from "../settings/settings";
 import type { AnalysisResult } from "./analysis-provider";
 
 export const ANALYSIS_LINKS_START = "<!-- echo-notes-analysis-links:start -->";
@@ -9,6 +14,7 @@ export const TRANSCRIPT_ANALYSIS_END = "<!-- echo-notes-analysis:end -->";
 export interface RenderTranscriptAnalysisBlockInput {
 	templateId: AnalysisTemplateId;
 	templateName: string;
+	templateVersion?: string;
 	result: AnalysisResult;
 	copyLanguage: CopyLanguage;
 }
@@ -26,8 +32,10 @@ export function extractTranscriptText(content: string): string {
 export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlockInput): string {
 	const copy = getLocalizedCopy(input.copyLanguage);
 	const metadataSeparator = input.copyLanguage === "en" ? "; " : "；";
+	const generatedAt = new Date().toISOString();
+	const templateVersion = input.templateVersion?.trim() || DEFAULT_ANALYSIS_TEMPLATE_VERSION;
 	const metadata = [
-		`${copy.analysisGeneratedAtLabel}${new Date().toISOString()}`,
+		`${copy.analysisGeneratedAtLabel}${generatedAt}`,
 		`${copy.analysisProviderLabel}${input.result.provider}`,
 		`${copy.analysisModelLabel}${input.result.model}`
 	];
@@ -35,9 +43,23 @@ export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlo
 		metadata.push(`${copy.analysisTraceIdLabel}${input.result.traceId}`);
 	}
 
+	const inlineFields = [
+		renderDataviewInlineField("echo_notes_analysis_template_id", input.templateId),
+		renderDataviewInlineField("echo_notes_analysis_template_name", input.templateName),
+		renderDataviewInlineField("echo_notes_analysis_template_version", templateVersion),
+		renderDataviewInlineField("echo_notes_analysis_provider", input.result.provider),
+		renderDataviewInlineField("echo_notes_analysis_model", input.result.model),
+		renderDataviewInlineField("echo_notes_analysis_generated_at", generatedAt)
+	];
+	if (input.result.traceId) {
+		inlineFields.push(renderDataviewInlineField("echo_notes_analysis_trace_id", input.result.traceId));
+	}
+
 	return [
 		getTranscriptAnalysisItemStart(input.templateId),
 		`## ${input.templateName}`,
+		"",
+		...inlineFields,
 		"",
 		`_${metadata.join(metadataSeparator)}_`,
 		"",
@@ -169,6 +191,14 @@ function normalizeAnalysisMarkdownHeadings(markdown: string): string {
 			return `${headingMatch[1]}${"#".repeat(nextLevel)}${headingMatch[3]}`;
 		})
 		.join("\n");
+}
+
+function renderDataviewInlineField(key: string, value: string): string {
+	return `- [${key}:: ${formatDataviewInlineValue(value)}]`;
+}
+
+function formatDataviewInlineValue(value: string): string {
+	return value.replace(/\r?\n/g, " ").replace(/]/g, "\\]").trim();
 }
 
 function escapeRegExp(value: string): string {

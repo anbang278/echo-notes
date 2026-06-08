@@ -13,6 +13,7 @@ import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	COPY_LANGUAGE_LABELS,
+	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
@@ -511,6 +512,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (template.builtin) {
 			badgesEl.createSpan({ cls: "echo-notes-template-badge", text: "预设" });
 		}
+		badgesEl.createSpan({ cls: "echo-notes-template-badge", text: `v${template.version ?? DEFAULT_ANALYSIS_TEMPLATE_VERSION}` });
 		if (!template.enabled) {
 			badgesEl.createSpan({ cls: "echo-notes-template-badge is-disabled", text: "未启用" });
 		}
@@ -673,6 +675,18 @@ class AnalysisTemplateEditModal extends Modal {
 			);
 
 		new Setting(contentEl)
+			.setName("模板版本")
+			.setDesc("用于写入分析结果的 Dataview 元数据。修改提示词或输出结构后，建议同步更新版本。")
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_ANALYSIS_TEMPLATE_VERSION)
+					.setValue(this.draft.version ?? DEFAULT_ANALYSIS_TEMPLATE_VERSION)
+					.onChange((value) => {
+						this.draft.version = value;
+					})
+			);
+
+		new Setting(contentEl)
 			.setName("启用模板")
 			.setDesc("开启后，此模板会参与录音链接上下三行的关键字识别；关闭后仍保留配置但不会自动使用。")
 			.addToggle((toggle) =>
@@ -747,6 +761,7 @@ class AnalysisTemplateEditModal extends Modal {
 
 	private async save(): Promise<void> {
 		this.template.name = this.draft.name.trim() || this.template.id;
+		this.template.version = this.draft.version?.trim() || DEFAULT_ANALYSIS_TEMPLATE_VERSION;
 		this.template.enabled = this.draft.enabled;
 		this.template.systemPrompt = this.draft.systemPrompt.trim() || DEFAULT_ANALYSIS_SYSTEM_PROMPT;
 		this.template.customPrompt = this.draft.customPrompt.trim();

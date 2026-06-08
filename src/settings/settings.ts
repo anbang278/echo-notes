@@ -35,6 +35,8 @@ export type AnalysisProviderId = ProviderId;
 
 export type EchoNotesHotkeySetting = Hotkey | null;
 
+export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
+
 export type BuiltInAnalysisTemplateId =
 	| "work-minutes"
 	| "study-notes"
@@ -53,6 +55,7 @@ export type AnalysisTemplateId = string;
 export interface AnalysisTemplateConfig {
 	id: AnalysisTemplateId;
 	name: string;
+	version?: string;
 	description: string;
 	systemPrompt: string;
 	customPrompt: string;
@@ -895,6 +898,7 @@ export function normalizeAnalysisTemplates(value: unknown): AnalysisTemplateConf
 			...existing,
 			id,
 			name: existing.name.trim() || defaults.name,
+			version: normalizeAnalysisTemplateVersion(existing.version ?? defaults.version),
 			description: existing.description.trim() || defaults.description,
 			systemPrompt: existing.systemPrompt.trim() || defaults.systemPrompt,
 			customPrompt: existing.customPrompt.trim() || defaults.customPrompt,
@@ -921,6 +925,7 @@ export function createCustomAnalysisTemplate(name: string, existingTemplates: An
 	return {
 		id: createAnalysisTemplateId(name, existingTemplates.map((template) => template.id)),
 		name: name.trim() || "自定义模板",
+		version: DEFAULT_ANALYSIS_TEMPLATE_VERSION,
 		description: "自定义转写稿分析模板。",
 		systemPrompt: DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 		customPrompt: [
@@ -961,6 +966,7 @@ export function sanitizeAnalysisTemplateId(value: string): string {
 function cloneAnalysisTemplate(template: AnalysisTemplateConfig): AnalysisTemplateConfig {
 	return {
 		...template,
+		version: normalizeAnalysisTemplateVersion(template.version),
 		recognitionKeywords: [...template.recognitionKeywords]
 	};
 }
@@ -977,6 +983,7 @@ function normalizeAnalysisTemplate(value: Partial<AnalysisTemplateConfig> & { pr
 	return {
 		id,
 		name,
+		version: normalizeAnalysisTemplateVersion(value.version),
 		description: typeof value.description === "string" ? value.description : "",
 		systemPrompt:
 			typeof value.systemPrompt === "string" && value.systemPrompt.trim()
@@ -1004,6 +1011,15 @@ function normalizeRecognitionKeywords(value: unknown, fallbackName: string): str
 	}
 
 	return uniqueNonEmptyStrings([fallbackName]);
+}
+
+function normalizeAnalysisTemplateVersion(value: unknown): string {
+	if (typeof value !== "string") {
+		return DEFAULT_ANALYSIS_TEMPLATE_VERSION;
+	}
+
+	const trimmed = value.trim();
+	return trimmed || DEFAULT_ANALYSIS_TEMPLATE_VERSION;
 }
 
 function normalizeDefaultAnalysisTemplateId(value: unknown, templates: AnalysisTemplateConfig[]): AnalysisTemplateId {

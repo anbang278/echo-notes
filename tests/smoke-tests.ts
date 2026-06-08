@@ -53,6 +53,7 @@ import {
 	createCustomAnalysisTemplate,
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
+	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
 	DEFAULT_SETTINGS,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
@@ -689,6 +690,7 @@ assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
 assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].id, "work-minutes");
 assert.equal(normalizedSettings.analysisTemplates[0].name, "工作纪要");
+assert.equal(normalizedSettings.analysisTemplates[0].version, DEFAULT_ANALYSIS_TEMPLATE_VERSION);
 assert.equal(normalizedSettings.analysisTemplates[0].enabled, false);
 assert.equal(normalizedSettings.analysisTemplates[0].builtin, true);
 assert.equal(normalizedSettings.analysisTemplates[0].systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
@@ -701,6 +703,7 @@ for (const templateId of expectedAnalysisTemplateOrder.slice(3)) {
 }
 const normalizedCustomTemplate = normalizedSettings.analysisTemplates.find((template) => template.id === "custom-template");
 assert.equal(normalizedCustomTemplate?.name, "访谈纪要");
+assert.equal(normalizedCustomTemplate?.version, DEFAULT_ANALYSIS_TEMPLATE_VERSION);
 assert.equal(normalizedCustomTemplate?.systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
 assert.equal(normalizedCustomTemplate?.customPrompt, "请输出访谈纪要。");
 assert.deepEqual(normalizedCustomTemplate?.recognitionKeywords, ["访谈纪要"]);
@@ -807,6 +810,7 @@ assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
 const customTemplate = createCustomAnalysisTemplate("自定义模板", []);
 assert.equal(customTemplate.id, "custom-template");
 assert.equal(customTemplate.name, "自定义模板");
+assert.equal(customTemplate.version, DEFAULT_ANALYSIS_TEMPLATE_VERSION);
 assert.equal(customTemplate.systemPrompt, DEFAULT_ANALYSIS_SYSTEM_PROMPT);
 assert.match(customTemplate.customPrompt, /结构化纪要/);
 assert.deepEqual(customTemplate.recognitionKeywords, ["自定义模板"]);
@@ -921,6 +925,13 @@ const workAnalysisBlock = renderTranscriptAnalysisBlock({
 });
 assert.match(workAnalysisBlock, /<!-- echo-notes-analysis-item:start work-minutes -->/);
 assert.match(workAnalysisBlock, /^## 工作纪要$/m);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_template_id:: work-minutes\]/);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_template_name:: 工作纪要\]/);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_template_version:: 1\]/);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_provider:: deepseek\]/);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_model:: deepseek-chat\]/);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_generated_at:: \d{4}-\d{2}-\d{2}T.*Z\]/);
+assert.match(workAnalysisBlock, /\[echo_notes_analysis_trace_id:: trace-1\]/);
 assert.match(workAnalysisBlock, /Provider：deepseek/);
 assert.match(workAnalysisBlock, /模型：deepseek-chat/);
 assert.match(workAnalysisBlock, /Trace ID：trace-1/);

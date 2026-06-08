@@ -71,7 +71,8 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Run AI analysis in the background and write the result back into the matching transcript.
 - Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose an AI analysis template from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
-- Configure each analysis template with a name, recognition keywords, system prompt, and custom prompt.
+- Configure each analysis template with a name, version, recognition keywords, system prompt, and custom prompt.
+- Record Dataview-friendly AI analysis metadata for each generated template result, including template id, template name, template version, provider, model, generated time, and trace id when available.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
 - Markdown audio-link automation deduplicates processed links in the current plugin session using source note, normalized audio path, raw link text, and occurrence order.
@@ -224,6 +225,8 @@ To run analysis manually, open a `.transcript.md` file and run `Echo Notes: Anal
 
 Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different templates are appended inside the same AI analysis block.
 
+Each generated analysis result starts with Dataview inline fields prefixed with `echo_notes_analysis_`. These fields make template id, template name, template version, provider, model, generated time, and trace id queryable without parsing the generated Markdown body.
+
 Frontmatter template selection applies to the whole source note and has priority over tags and nearby keywords. Tags apply to the whole source note and have priority over nearby keywords. Keywords are matched only against the source note lines around the audio link, not against the transcript body. If multiple templates match the same context, Echo Notes uses the first enabled template in settings order.
 
 ## Output Example
@@ -258,6 +261,13 @@ Source note: [[2026-06-05]]
 
 <!-- echo-notes-analysis-item:start work-minutes -->
 ## Work minutes
+
+- [echo_notes_analysis_template_id:: work-minutes]
+- [echo_notes_analysis_template_name:: Work minutes]
+- [echo_notes_analysis_template_version:: 1]
+- [echo_notes_analysis_provider:: aliyun-bailian]
+- [echo_notes_analysis_model:: deepseek-v4-pro]
+- [echo_notes_analysis_generated_at:: 2026-06-01T10:00:00.000Z]
 
 _Generated at: 2026-06-01T10:00:00.000Z; Provider: aliyun-bailian; Model: deepseek-v4-pro_
 
