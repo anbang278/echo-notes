@@ -72,6 +72,10 @@ import {
 	getTranscriptPathForAudioPath
 } from "../src/transcript/transcript-path";
 import {
+	createSourceAudioMetadata,
+	isReusableTranscriptForAudio
+} from "../src/transcript/transcript-source-metadata";
+import {
 	createTaskId,
 	formatTaskBytes,
 	formatTaskElapsedTime,
@@ -230,7 +234,12 @@ const templateApp = {
 };
 const audioFile = {
 	basename: "Recording 20260531001942",
-	name: "Recording 20260531001942.m4a"
+	name: "Recording 20260531001942.m4a",
+	path: "Recordings/Recording 20260531001942.m4a",
+	stat: {
+		size: 123456,
+		mtime: 1780900000000
+	}
 };
 const sourceNote = {
 	basename: "Daily"
@@ -252,8 +261,35 @@ const chineseTranscript = renderTranscriptTemplate({
 assert.match(chineseTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(chineseTranscript, /原始录音：!\[\[Recording 20260531001942\]\]/);
 assert.match(chineseTranscript, /来源笔记：\[\[Daily\]\]/);
+assert.match(chineseTranscript, /source_audio_path: "Recordings\/Recording 20260531001942\.m4a"/);
+assert.match(chineseTranscript, /source_audio_size: 123456/);
+assert.match(chineseTranscript, /source_audio_mtime: 1780900000000/);
 assert.doesNotMatch(chineseTranscript, /# Recording 20260531001942 转写稿/);
 assert.ok(chineseTranscript.indexOf("来源笔记：[[Daily]]") < chineseTranscript.indexOf("# 转写稿 Recording 20260531001942"));
+assert.equal(
+	isReusableTranscriptForAudio(chineseTranscript, {
+		sourceAudio: createSourceAudioMetadata(audioFile as never),
+		provider: "siliconflow",
+		model: "TeleAI/TeleSpeechASR"
+	}),
+	true
+);
+assert.equal(
+	isReusableTranscriptForAudio(chineseTranscript, {
+		sourceAudio: { ...createSourceAudioMetadata(audioFile as never), mtime: 1780900000001 },
+		provider: "siliconflow",
+		model: "TeleAI/TeleSpeechASR"
+	}),
+	false
+);
+assert.equal(
+	isReusableTranscriptForAudio(chineseTranscript, {
+		sourceAudio: createSourceAudioMetadata(audioFile as never),
+		provider: "openai",
+		model: "TeleAI/TeleSpeechASR"
+	}),
+	false
+);
 
 const englishTranscript = renderTranscriptTemplate({
 	app: templateApp as never,
@@ -285,6 +321,14 @@ const englishFailedTranscript = renderFailedTranscriptTemplate({
 
 assert.match(englishFailedTranscript, /# Transcription failed/);
 assert.match(englishFailedTranscript, /Error reason:/);
+assert.equal(
+	isReusableTranscriptForAudio(englishFailedTranscript, {
+		sourceAudio: createSourceAudioMetadata(audioFile as never),
+		provider: "openai",
+		model: "whisper-1"
+	}),
+	false
+);
 
 assert.equal(estimateBase64DataUrlByteLength(3, "audio/wav"), "data:audio/wav;base64,".length + 4);
 assert.equal(estimateBase64DataUrlByteLength(4, "audio/wav"), "data:audio/wav;base64,".length + 8);

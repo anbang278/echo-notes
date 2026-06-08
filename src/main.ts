@@ -541,7 +541,11 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const transcriptionTaskId = createTaskId("transcription", audioFile.path);
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
-		if (existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription) {
+		const reusableTranscript =
+			existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription
+				? await this.transcriptService.getReusableTranscriptFile(audioFile)
+				: null;
+		if (reusableTranscript) {
 			this.taskCenter.upsertTask({
 				id: transcriptionTaskId,
 				kind: "transcription",
@@ -552,7 +556,7 @@ export default class EchoNotesPlugin extends Plugin {
 				model: this.settings.model,
 				targetPath: audioFile.path,
 				sourcePath: sourceNote?.path,
-				outputPath: existingTranscript.path,
+				outputPath: reusableTranscript.path,
 				bytes: audioFile.stat.size,
 				currentSegment: undefined,
 				totalSegments: undefined,
@@ -561,8 +565,17 @@ export default class EchoNotesPlugin extends Plugin {
 				completedAt: Date.now()
 			});
 			new Notice("transcript 已存在，已跳过转写。");
-			await notifyTranscriptFileReady(existingTranscript);
-			return { transcriptFile: existingTranscript, analysisEligible: true };
+			await notifyTranscriptFileReady(reusableTranscript);
+			return { transcriptFile: reusableTranscript, analysisEligible: true };
+		}
+
+		if (existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription) {
+			this.log("已存在 transcript 但源音频或转写配置不匹配，将重新转写", {
+				audioPath: audioFile.path,
+				transcriptPath: existingTranscript.path,
+				provider: this.settings.provider,
+				model: this.settings.model
+			});
 		}
 
 		if (this.processingAudio.has(audioFile.path)) {

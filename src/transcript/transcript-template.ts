@@ -2,6 +2,11 @@ import type { App, TFile } from "obsidian";
 import { formatSegmentTimeRange } from "../audio/audio-segmenter";
 import type { TranscriptionResult, TranscriptionSegment } from "../providers/transcription-provider";
 import { getLocalizedCopy, type CopyLanguage } from "../settings/settings";
+import {
+	createSourceAudioMetadata,
+	renderSourceAudioMetadata,
+	type SourceAudioMetadata
+} from "./transcript-source-metadata";
 
 export interface TranscriptTemplateInput {
 	app: App;
@@ -42,12 +47,14 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 	const sourceNoteLink = input.sourceNote
 		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
 		: "";
+	const sourceAudioMetadata = createSourceAudioMetadata(input.audioFile);
 	const title = input.audioFile.basename;
 
 	return [
 		"---",
 		"type: audio-transcript",
 		`source_audio: "${escapeYaml(sourceAudioLink)}"`,
+		...renderSourceAudioMetadata(sourceAudioMetadata),
 		`source_note: "${escapeYaml(sourceNoteLink)}"`,
 		`provider: "${escapeYaml(input.result.provider)}"`,
 		`model: "${escapeYaml(input.result.model)}"`,
@@ -74,11 +81,13 @@ export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateIn
 	const sourceNoteLink = input.sourceNote
 		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
 		: "";
+	const sourceAudioMetadata = createSourceAudioMetadata(input.audioFile);
 
 	return [
 		"---",
 		"type: audio-transcript",
 		`source_audio: "${escapeYaml(sourceAudioLink)}"`,
+		...renderSourceAudioMetadata(sourceAudioMetadata),
 		`source_note: "${escapeYaml(sourceNoteLink)}"`,
 		`provider: "${escapeYaml(input.provider)}"`,
 		`model: "${escapeYaml(input.model)}"`,
@@ -103,11 +112,13 @@ export function renderProgressTranscriptTemplate(input: ProgressTranscriptTempla
 	const sourceNoteLink = input.sourceNote
 		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
 		: "";
+	const sourceAudioMetadata = createSourceAudioMetadata(input.audioFile);
 	const title = input.audioFile.basename;
 
 	return [
 		...renderTranscriptFrontmatter({
 			sourceAudioLink,
+			sourceAudioMetadata,
 			sourceNoteLink,
 			provider: input.provider,
 			model: input.model,
@@ -144,11 +155,13 @@ function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInpu
 	const sourceNoteLink = input.sourceNote
 		? input.app.fileManager.generateMarkdownLink(input.sourceNote, input.transcriptPath)
 		: "";
+	const sourceAudioMetadata = createSourceAudioMetadata(input.audioFile);
 	const title = input.audioFile.basename;
 
 	return [
 		...renderTranscriptFrontmatter({
 			sourceAudioLink,
+			sourceAudioMetadata,
 			sourceNoteLink,
 			provider: input.provider,
 			model: input.model,
@@ -185,6 +198,7 @@ function formatTranscriptTitle(copy: ReturnType<typeof getLocalizedCopy>, title:
 
 function renderTranscriptFrontmatter(input: {
 	sourceAudioLink: string;
+	sourceAudioMetadata: SourceAudioMetadata;
 	sourceNoteLink: string;
 	provider: string;
 	model: string;
@@ -196,6 +210,7 @@ function renderTranscriptFrontmatter(input: {
 		"---",
 		"type: audio-transcript",
 		`source_audio: "${escapeYaml(input.sourceAudioLink)}"`,
+		...renderSourceAudioMetadata(input.sourceAudioMetadata),
 		`source_note: "${escapeYaml(input.sourceNoteLink)}"`,
 		`provider: "${escapeYaml(input.provider)}"`,
 		`model: "${escapeYaml(input.model)}"`,

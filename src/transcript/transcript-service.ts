@@ -11,6 +11,10 @@ import {
 	getLegacyCustomFolderTranscriptPathForAudioPath,
 	getTranscriptPathForAudioPath
 } from "./transcript-path";
+import {
+	createSourceAudioMetadata,
+	isReusableTranscriptForAudio
+} from "./transcript-source-metadata";
 
 export class TranscriptService {
 	private app: App;
@@ -41,6 +45,22 @@ export class TranscriptService {
 
 		const legacyFile = this.app.vault.getAbstractFileByPath(legacyPath);
 		return legacyFile instanceof TFile ? legacyFile : null;
+	}
+
+	async getReusableTranscriptFile(audioFile: TFile): Promise<TFile | null> {
+		const transcriptFile = this.getTranscriptFile(audioFile);
+		if (!transcriptFile) {
+			return null;
+		}
+
+		const content = await this.app.vault.cachedRead(transcriptFile);
+		return isReusableTranscriptForAudio(content, {
+			sourceAudio: createSourceAudioMetadata(audioFile),
+			provider: this.settings.provider,
+			model: this.settings.model
+		})
+			? transcriptFile
+			: null;
 	}
 
 	async writeSuccessTranscript(audioFile: TFile, sourceNote: TFile | undefined, result: TranscriptionResult): Promise<TFile> {

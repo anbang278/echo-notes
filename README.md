@@ -58,7 +58,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Scan and transcribe all supported audio links in the current note.
 - Generate a Markdown transcript file with source metadata.
 - Insert a transcript link below the source audio reference.
-- Skip existing transcripts and insert missing transcript links.
+- Skip reusable existing transcripts and insert missing transcript links; reuse requires matching source audio path, size, mtime, transcription provider, model, and `status: done`.
 - Avoid transcript filename collisions in a custom output folder by adding a stable source-path hash to generated transcript filenames.
 - Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
 - Run a local transcription-provider configuration check for API key, Base URL, model, HTTP risk, endpoint shape, and capability-limit warnings without uploading audio.
@@ -217,7 +217,7 @@ If AI analysis is enabled, each audio link is matched independently. Different r
 
 ### AI analysis generation
 
-AI analysis runs automatically after a transcript is created or reused. Echo Notes inserts the transcript link first and does not wait for the model response. If a transcript already exists and "skip existing transcript" is enabled, running the transcription command again reuses the transcript and generates or updates AI analysis in the background.
+AI analysis runs automatically after a transcript is created or reused. Echo Notes inserts the transcript link first and does not wait for the model response. If "skip existing transcript" is enabled, running the transcription command again reuses only a `status: done` transcript whose source audio path, size, mtime, provider, and model still match, then generates or updates AI analysis in the background.
 
 Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different templates are appended inside the same AI analysis block.
 
