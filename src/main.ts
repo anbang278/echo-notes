@@ -1,4 +1,4 @@
-import { Editor, Notice, Plugin, TFile, type Hotkey, type MarkdownFileInfo } from "obsidian";
+import { App, Editor, Modal, Notice, Plugin, Setting, TFile, type Hotkey, type MarkdownFileInfo } from "obsidian";
 import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
 import { AnalysisService } from "./analysis/analysis-service";
 import {
@@ -26,6 +26,10 @@ import {
 	type EchoNotesSettings
 } from "./settings/settings";
 import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction";
+import {
+	buildTranscriptionUploadPreview,
+	type UploadPreviewAudioFile
+} from "./security/upload-preview";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
 import { TranscriptService } from "./transcript/transcript-service";
 
@@ -49,6 +53,7 @@ interface ProcessAudioResult {
 
 interface ProcessAudioOptions {
 	onTranscriptFileReady?: (transcriptFile: TFile) => Promise<void> | void;
+	allowUploadConfirmation?: boolean;
 }
 
 interface ObsidianCommandManager {
@@ -360,7 +365,7 @@ export default class EchoNotesPlugin extends Plugin {
 					if (file.stat.ctime < this.loadedAt) {
 						return;
 					}
-					void this.processAudioToTranscript(file, undefined)
+					void this.processAudioToTranscript(file, undefined, { allowUploadConfirmation: false })
 						.then((result) => {
 							if (result?.analysisEligible) {
 								this.startAnalysisTask(result.transcriptFile, this.getDefaultAnalysisTemplateForAnalysis());
@@ -485,6 +490,19 @@ export default class EchoNotesPlugin extends Plugin {
 				await notifyTranscriptFileReady(existingTranscript);
 			}
 			return existingTranscript ? { transcriptFile: existingTranscript, analysisEligible: true } : null;
+		}
+
+		if (this.settings.confirmBeforeTranscription) {
+			if (options.allowUploadConfirmation === false) {
+				new Notice("已跳过自动转写：当前开启了手动转写前确认上传。");
+				return null;
+			}
+
+			const confirmed = await this.confirmTranscriptionUpload(audioFile);
+			if (!confirmed) {
+				new Notice(`已取消转写：${audioFile.name}`);
+				return null;
+			}
 		}
 
 		this.processingAudio.add(audioFile.path);
@@ -718,6 +736,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 			const analysisTemplate = this.resolveAnalysisTemplateForAudioMatch(content, audioMatch);
 			const result = await this.processAudioToTranscript(audioFile, file, {
+				allowUploadConfirmation: false,
 				onTranscriptFileReady: async (transcriptFile) => {
 					await this.insertTranscriptLinkIntoFile(file, audioMatch.linkPath, transcriptFile);
 				}
@@ -747,6 +766,12 @@ export default class EchoNotesPlugin extends Plugin {
 
 				return this.linkService.insertTranscriptLinkAfterMatch(content, freshMatch, transcriptLink);
 			});
+		});
+	}
+
+	private async confirmTranscriptionUpload(audioFile: TFile): Promise<boolean> {
+		return new Promise((resolve) => {
+			new TranscriptionUploadConfirmModal(this.app, this.settings, audioFile, resolve).open();
 		});
 	}
 
@@ -782,4 +807,81 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 
 function getErrorMessage(error: unknown): string {
 	return getSanitizedErrorMessage(error);
+}
+
+class TranscriptionUploadConfirmModal extends Modal {
+	private settings: EchoNotesSettings;
+	private audioFile: UploadPreviewAudioFile;
+	private onResolved: (confirmed: boolean) => void;
+	private resolved = false;
+
+	constructor(app: App, settings: EchoNotesSettings, audioFile: UploadPreviewAudioFile, onResolved: (confirmed: boolean) => void) {
+		super(app);
+		this.settings = settings;
+		this.audioFile = audioFile;
+		this.onResolved = onResolved;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("echo-notes-upload-confirm-modal");
+		this.titleEl.setText("确认上传音频");
+
+		contentEl.createEl("p", {
+			text: "Echo Notes 将把以下音频发送给你配置的转写 Provider。确认后才会开始上传。"
+		});
+
+		const preview = buildTranscriptionUploadPreview(this.settings, this.audioFile);
+		const tableEl = contentEl.createDiv({ cls: "echo-notes-upload-preview-table" });
+		for (const row of preview.rows) {
+			const rowEl = tableEl.createDiv({ cls: "echo-notes-upload-preview-row" });
+			rowEl.createDiv({ cls: "echo-notes-upload-preview-label", text: row.label });
+			rowEl.createDiv({ cls: "echo-notes-upload-preview-value", text: row.value });
+		}
+
+		if (preview.warnings.length > 0) {
+			const warningEl = contentEl.createDiv({ cls: "echo-notes-upload-preview-warning" });
+			warningEl.createDiv({ cls: "echo-notes-upload-preview-warning-title", text: "风险提示" });
+			const listEl = warningEl.createEl("ul");
+			for (const warning of preview.warnings) {
+				listEl.createEl("li", { text: warning });
+			}
+		}
+
+		new Setting(contentEl)
+			.addButton((button) =>
+				button
+					.setButtonText("取消")
+					.onClick(() => {
+						this.resolve(false);
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("确认上传")
+					.setCta()
+					.onClick(() => {
+						this.resolve(true);
+					})
+			);
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.resolved) {
+			this.resolved = true;
+			this.onResolved(false);
+		}
+	}
+
+	private resolve(confirmed: boolean): void {
+		if (this.resolved) {
+			return;
+		}
+
+		this.resolved = true;
+		this.onResolved(confirmed);
+		this.close();
+	}
 }

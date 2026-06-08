@@ -62,6 +62,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Avoid transcript filename collisions in a custom output folder by adding a stable source-path hash to generated transcript filenames.
 - Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
 - Standardize transcription provider errors and redact API keys, authorization headers, Base64 audio payloads, and overlong responses before showing or writing failure messages.
+- Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
@@ -97,6 +98,8 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 - Custom OpenAI-compatible endpoint: user configured
 
 Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript files and inline AI analysis results are written inside your Obsidian vault.
+
+If "Confirm before manual transcription upload" is enabled in settings, Echo Notes shows a confirmation dialog before manual transcription uploads. The dialog lists the provider, Base URL, model, file size, and HTTP risk warnings. Automation skips uploads while this confirmation mode is enabled so audio is not sent in the background without user confirmation.
 
 ## Supported Audio Formats
 

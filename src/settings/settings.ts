@@ -79,6 +79,7 @@ export interface EchoNotesSettings {
 	defaultAnalysisTemplateId: AnalysisTemplateId;
 	analysisTemplates: AnalysisTemplateConfig[];
 	skipExistingTranscript: boolean;
+	confirmBeforeTranscription: boolean;
 	autoTranscribeOnAudioLink: boolean;
 	autoTranscribeOnAudioCreated: boolean;
 	officialRecorderStartHotkey: EchoNotesHotkeySetting;
@@ -656,6 +657,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	defaultAnalysisTemplateId: "work-minutes",
 	analysisTemplates: createDefaultAnalysisTemplates(),
 	skipExistingTranscript: true,
+	confirmBeforeTranscription: false,
 	autoTranscribeOnAudioLink: false,
 	autoTranscribeOnAudioCreated: false,
 	officialRecorderStartHotkey: {
@@ -840,6 +842,8 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			? raw.analysisModel.trim()
 			: analysisDefaults.analysisModel;
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
+	settings.confirmBeforeTranscription =
+		typeof raw.confirmBeforeTranscription === "boolean" ? raw.confirmBeforeTranscription : DEFAULT_SETTINGS.confirmBeforeTranscription;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
 	settings.defaultAnalysisTemplateId = normalizeDefaultAnalysisTemplateId(rawDefaultAnalysisTemplateId, settings.analysisTemplates);
 	settings.officialRecorderStartHotkey = normalizeHotkeySetting(

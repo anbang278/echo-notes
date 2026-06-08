@@ -173,6 +173,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("自动化").setHeading();
 
 		new Setting(containerEl)
+			.setName("手动转写前确认上传")
+			.setDesc("开启后，手动转写会先显示 Provider、Base URL、模型和文件大小；自动化转写会跳过需要确认的上传，避免后台发送音频。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.confirmBeforeTranscription)
+					.onChange(async (value) => {
+						this.plugin.settings.confirmBeforeTranscription = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
 			.setName("跳过已存在 transcript")
 			.setDesc("开启后不会重复调用转写，但仍会尝试补充 transcript 链接。")
 			.addToggle((toggle) =>

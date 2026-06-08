@@ -38,6 +38,11 @@ import {
 } from "../src/providers/transcription-provider";
 import { sanitizeSensitiveText } from "../src/security/redaction";
 import {
+	buildTranscriptionUploadPreview,
+	formatFileSize,
+	isInsecureRemoteBaseUrl
+} from "../src/security/upload-preview";
+import {
 	createAnalysisTemplateId,
 	createCustomAnalysisTemplate,
 	ANALYSIS_PROVIDER_DEFAULTS,
@@ -379,6 +384,31 @@ assert.equal(shouldWriteFailedTranscript(new TranscriptionError("unsupported_for
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("missing_api_key", "missing key")), false);
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("rate_limited", "slow down")), true);
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("invalid_model", "bad model")), true);
+assert.equal(formatFileSize(512), "512 B");
+assert.equal(formatFileSize(1536), "1.5 KB");
+assert.equal(formatFileSize(2 * 1024 * 1024), "2 MB");
+assert.equal(isInsecureRemoteBaseUrl("http://api.example.com/v1"), true);
+assert.equal(isInsecureRemoteBaseUrl("https://api.example.com/v1"), false);
+assert.equal(isInsecureRemoteBaseUrl("http://localhost:11434/v1"), false);
+const uploadPreview = buildTranscriptionUploadPreview(
+	{
+		...DEFAULT_SETTINGS,
+		baseUrl: "http://api.example.com/v1",
+		analysisEnabled: true,
+		analysisBaseUrl: "http://analysis.example.com/v1"
+	},
+	{
+		name: "Meeting.m4a",
+		path: "Projects/Meeting.m4a",
+		stat: {
+			size: 1536
+		}
+	}
+);
+assert.equal(uploadPreview.rows.find((row) => row.label === "音频文件")?.value, "Meeting.m4a");
+assert.equal(uploadPreview.rows.find((row) => row.label === "文件大小")?.value, "1.5 KB");
+assert.equal(uploadPreview.rows.find((row) => row.label === "AI 分析模型")?.value, DEFAULT_SETTINGS.analysisModel);
+assert.equal(uploadPreview.warnings.length, 2);
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "Ctrl+S");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "Ctrl+Z");
@@ -432,6 +462,7 @@ assert.equal(normalizedCustomTemplate?.customPrompt, "请输出访谈纪要。")
 assert.deepEqual(normalizedCustomTemplate?.recognitionKeywords, ["访谈纪要"]);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "autoAnalyzeAfterTranscription"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "promptForAnalysisTemplateOnTranscription"), false);
+assert.equal(normalizedSettings.confirmBeforeTranscription, false);
 assert.equal(formatHotkey(normalizedSettings.officialRecorderStartHotkey), "Ctrl+L");
 assert.equal(formatHotkey(normalizedSettings.officialRecorderStopHotkey), "Ctrl+S");
 assert.equal(formatHotkey(normalizedSettings.transcribeAllAudioHotkey), "Ctrl+Z");
@@ -451,6 +482,7 @@ const invalidHotkeySettings = normalizeEchoNotesSettings({
 assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStartHotkey), "Ctrl+L");
 assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStopHotkey), "Ctrl+S");
 assert.equal(formatHotkey(invalidHotkeySettings.transcribeAllAudioHotkey), "Ctrl+Z");
+assert.equal(normalizeEchoNotesSettings({ confirmBeforeTranscription: true }).confirmBeforeTranscription, true);
 const migratedDefaultTemplateSettings = normalizeEchoNotesSettings({ autoAnalysisTemplate: "study-notes" });
 assert.equal(migratedDefaultTemplateSettings.defaultAnalysisTemplateId, "study-notes");
 assert.equal(Object.prototype.hasOwnProperty.call(migratedDefaultTemplateSettings, "autoAnalysisTemplate"), false);
