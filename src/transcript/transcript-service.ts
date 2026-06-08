@@ -1,12 +1,16 @@
-import { App, normalizePath, TFile } from "obsidian";
+import { App, TFile } from "obsidian";
 import type { TranscriptionResult, TranscriptionSegment } from "../providers/transcription-provider";
 import type { EchoNotesSettings } from "../settings/settings";
-import { FileService, getBaseName, getParentPath } from "../obsidian/file-service";
+import { FileService, getParentPath } from "../obsidian/file-service";
 import {
 	renderFailedTranscriptTemplate,
 	renderProgressTranscriptTemplate,
 	renderTranscriptTemplate
 } from "./transcript-template";
+import {
+	getLegacyCustomFolderTranscriptPathForAudioPath,
+	getTranscriptPathForAudioPath
+} from "./transcript-path";
 
 export class TranscriptService {
 	private app: App;
@@ -20,25 +24,23 @@ export class TranscriptService {
 	}
 
 	getTranscriptPath(audioFile: TFile): string {
-		const audioFolder = getParentPath(audioFile.path);
-		const audioBaseName = getBaseName(audioFile.path);
-		const transcriptFileName = `${audioBaseName}.transcript.md`;
-
-		switch (this.settings.outputStrategy) {
-			case "same-folder":
-				return normalizePath(joinPath(audioFolder, transcriptFileName));
-			case "custom-folder":
-				return normalizePath(joinPath(this.settings.customOutputFolder || "Transcripts", transcriptFileName));
-			case "same-name-subfolder":
-			default:
-				return normalizePath(joinPath(audioFolder, audioBaseName, transcriptFileName));
-		}
+		return getTranscriptPathForAudioPath(audioFile.path, this.settings);
 	}
 
 	getTranscriptFile(audioFile: TFile): TFile | null {
 		const path = this.getTranscriptPath(audioFile);
 		const file = this.app.vault.getAbstractFileByPath(path);
-		return file instanceof TFile ? file : null;
+		if (file instanceof TFile) {
+			return file;
+		}
+
+		const legacyPath = this.getLegacyCustomFolderTranscriptPath(audioFile);
+		if (!legacyPath || legacyPath === path) {
+			return null;
+		}
+
+		const legacyFile = this.app.vault.getAbstractFileByPath(legacyPath);
+		return legacyFile instanceof TFile ? legacyFile : null;
 	}
 
 	async writeSuccessTranscript(audioFile: TFile, sourceNote: TFile | undefined, result: TranscriptionResult): Promise<TFile> {
@@ -115,8 +117,8 @@ export class TranscriptService {
 
 		return this.app.vault.create(path, content);
 	}
-}
 
-function joinPath(...parts: string[]): string {
-	return parts.filter(Boolean).join("/");
+	private getLegacyCustomFolderTranscriptPath(audioFile: TFile): string | null {
+		return getLegacyCustomFolderTranscriptPathForAudioPath(audioFile.path, this.settings);
+	}
 }

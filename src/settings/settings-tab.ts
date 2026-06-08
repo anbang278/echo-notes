@@ -132,7 +132,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自定义输出目录")
-			.setDesc("仅在“自定义目录（custom-folder）”策略下使用。")
+			.setDesc("仅在“自定义目录（custom-folder）”策略下使用。为避免不同目录的同名音频互相覆盖，transcript 文件名会追加源路径短 hash。")
 			.addText((text) =>
 				text
 					.setPlaceholder("Transcripts")

@@ -59,6 +59,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Generate a Markdown transcript file with source metadata.
 - Insert a transcript link below the source audio reference.
 - Skip existing transcripts and insert missing transcript links.
+- Avoid transcript filename collisions in a custom output folder by adding a stable source-path hash to generated transcript filenames.
 - Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.

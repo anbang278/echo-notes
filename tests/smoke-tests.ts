@@ -50,6 +50,11 @@ import {
 	renderTranscriptTemplate,
 	renderTranscriptionSegments
 } from "../src/transcript/transcript-template";
+import {
+	createTranscriptFileName,
+	getLegacyCustomFolderTranscriptPathForAudioPath,
+	getTranscriptPathForAudioPath
+} from "../src/transcript/transcript-path";
 
 const sample = [
 	"![[Recording 20260531001942.m4a]]",
@@ -447,6 +452,41 @@ assert.equal(invalidTranscriptionProviderSettings.provider, "aliyun-bailian");
 assert.equal(invalidTranscriptionProviderSettings.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(invalidTranscriptionProviderSettings.model, "qwen3-asr-flash");
 assert.equal(invalidTranscriptionProviderSettings.language, "auto");
+assert.equal(createTranscriptFileName("Projects/A/Meeting.m4a"), "Meeting.transcript.md");
+const hashedTranscriptA = createTranscriptFileName("Projects/A/Meeting.m4a", true);
+const hashedTranscriptB = createTranscriptFileName("Projects/B/Meeting.m4a", true);
+assert.match(hashedTranscriptA, /^Meeting-[a-z0-9]+\.transcript\.md$/);
+assert.match(hashedTranscriptB, /^Meeting-[a-z0-9]+\.transcript\.md$/);
+assert.notEqual(hashedTranscriptA, hashedTranscriptB);
+assert.equal(hashedTranscriptA, createTranscriptFileName("Projects/A/Meeting.m4a", true));
+assert.equal(
+	getTranscriptPathForAudioPath("Projects/A/Meeting.m4a", {
+		outputStrategy: "custom-folder",
+		customOutputFolder: "Transcripts"
+	}),
+	`Transcripts/${hashedTranscriptA}`
+);
+assert.equal(
+	getTranscriptPathForAudioPath("Projects/B/Meeting.m4a", {
+		outputStrategy: "custom-folder",
+		customOutputFolder: "Transcripts"
+	}),
+	`Transcripts/${hashedTranscriptB}`
+);
+assert.equal(
+	getTranscriptPathForAudioPath("Projects/A/Meeting.m4a", {
+		outputStrategy: "same-folder",
+		customOutputFolder: DEFAULT_SETTINGS.customOutputFolder
+	}),
+	"Projects/A/Meeting.transcript.md"
+);
+assert.equal(
+	getLegacyCustomFolderTranscriptPathForAudioPath("Projects/A/Meeting.m4a", {
+		outputStrategy: "custom-folder",
+		customOutputFolder: "Transcripts"
+	}),
+	"Transcripts/Meeting.transcript.md"
+);
 
 assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");
 const customTemplate = createCustomAnalysisTemplate("自定义模板", []);
