@@ -23,6 +23,13 @@ import {
 } from "../src/audio/audio-segmenter";
 import { LinkService } from "../src/obsidian/link-service";
 import {
+	formatProviderCapabilityBytes,
+	getProviderCapabilitySummary,
+	getTranscriptionProviderCapability,
+	OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS,
+	TRANSCRIPTION_PROVIDER_CAPABILITIES
+} from "../src/providers/provider-capabilities";
+import {
 	createAnalysisTemplateId,
 	createCustomAnalysisTemplate,
 	ANALYSIS_PROVIDER_DEFAULTS,
@@ -308,6 +315,26 @@ assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "deepseek-ai/
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.openai.analysisModel, "gpt-4o-mini");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.groq.analysisModel, "llama-3.3-70b-versatile");
+assert.deepEqual(Object.keys(TRANSCRIPTION_PROVIDER_CAPABILITIES), Object.keys(PROVIDER_LABELS));
+assert.equal(formatProviderCapabilityBytes(25 * 1024 * 1024), "25 MB");
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsChunking, true);
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").uploadMode, "base64-data-url");
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").endpointShape, "chat-audio");
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").maxBase64DataUrlBytes, 10 * 1024 * 1024);
+assert.equal(getTranscriptionProviderCapability("siliconflow").maxAudioBytes, 50 * 1024 * 1024);
+assert.equal(getTranscriptionProviderCapability("siliconflow").supportsLanguage, false);
+assert.equal(getTranscriptionProviderCapability("openai").maxAudioBytes, 25 * 1024 * 1024);
+assert.equal(getTranscriptionProviderCapability("openai").supportsLanguage, true);
+assert.equal(getTranscriptionProviderCapability("openai").supportsTimestamp, false);
+assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "openai-audio");
+assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
+assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("openai")).includes("长音频分段：暂不支持"));
+for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
+	const capability = getTranscriptionProviderCapability(providerId);
+	assert.equal(capability.endpointShape, "openai-audio");
+	assert.equal(capability.uploadMode, "multipart");
+	assert.equal(capability.maxAudioBytes, 25 * 1024 * 1024);
+}
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "Ctrl+S");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "Ctrl+Z");

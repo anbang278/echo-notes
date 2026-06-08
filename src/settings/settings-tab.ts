@@ -1,6 +1,10 @@
 import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
+	getProviderCapabilitySummary,
+	getTranscriptionProviderCapability
+} from "../providers/provider-capabilities";
+import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	COPY_LANGUAGE_LABELS,
@@ -51,6 +55,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.display();
 					})
 			);
+
+		this.renderProviderCapability(containerEl);
 
 		new Setting(containerEl)
 			.setName("API Key")
@@ -425,6 +431,35 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 	}
 
+	private renderProviderCapability(containerEl: HTMLElement): void {
+		const providerId = this.plugin.settings.provider;
+		const capability = getTranscriptionProviderCapability(providerId);
+		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
+		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
+		headerEl.createDiv({ cls: "echo-notes-provider-capability-title", text: "当前 Provider 能力" });
+		headerEl.createDiv({
+			cls: "echo-notes-provider-capability-meta",
+			text: `上传方式：${getUploadModeLabel(capability.uploadMode)}；接口形态：${getEndpointShapeLabel(capability.endpointShape)}`
+		});
+
+		const summaryEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-summary" });
+		for (const item of getProviderCapabilitySummary(capability)) {
+			const isUnsupported = item.includes("暂不支持");
+			summaryEl.createSpan({
+				cls: `echo-notes-provider-capability-chip${isUnsupported ? " is-muted" : ""}`,
+				text: item
+			});
+		}
+
+		const modelsEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-note" });
+		modelsEl.createSpan({ cls: "echo-notes-provider-capability-note-label", text: "推荐模型：" });
+		modelsEl.createSpan({ text: capability.recommendedModels.join("、") });
+
+		for (const note of capability.notes) {
+			capabilityEl.createDiv({ cls: "echo-notes-provider-capability-note", text: note });
+		}
+	}
+
 	private renderAnalysisTemplateCard(containerEl: HTMLElement, template: AnalysisTemplateConfig): void {
 		const keywords = template.recognitionKeywords.length > 0 ? template.recognitionKeywords.join("、") : "未设置";
 		const cardEl = containerEl.createDiv({ cls: "echo-notes-template-card" });
@@ -544,6 +579,30 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 function getProviderOptionLabel(value: string, label: string): string {
 	return value === "aliyun-bailian" ? `【推荐】${label}` : label;
+}
+
+function getUploadModeLabel(uploadMode: string): string {
+	switch (uploadMode) {
+		case "multipart":
+			return "multipart";
+		case "base64-data-url":
+			return "Base64 Data URL";
+		default:
+			return uploadMode;
+	}
+}
+
+function getEndpointShapeLabel(endpointShape: string): string {
+	switch (endpointShape) {
+		case "openai-audio":
+			return "/audio/transcriptions";
+		case "chat-audio":
+			return "/chat/completions + input_audio";
+		case "custom":
+			return "专用接口";
+		default:
+			return endpointShape;
+	}
 }
 
 class AnalysisTemplateEditModal extends Modal {

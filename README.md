@@ -59,6 +59,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Generate a Markdown transcript file with source metadata.
 - Insert a transcript link below the source audio reference.
 - Skip existing transcripts and insert missing transcript links.
+- Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
 - Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
@@ -78,7 +79,7 @@ Implemented transcription providers:
 - Ollama, Ollama Open WebUI, Google Gemini, OpenRouter, LM Studio, 302.AI, Anthropic, Mistral AI, Together AI, Fireworks AI, Perplexity AI, DeepSeek, xAI, Novita AI, DeepInfra, SambaNova, Cerebras, and Z.AI as OpenAI-compatible transcription presets
 - 自定义兼容接口（Custom OpenAI-compatible） for custom `/audio/transcriptions` endpoints
 
-Provider defaults can be changed in settings.
+Provider defaults can be changed in settings. The settings tab also shows a capability summary for the selected transcription provider, including upload mode, endpoint shape, size limit, chunking support, language parameter support, timestamp support, and speaker diarization support.
 
 AI analysis uses a separate provider configuration. The default is Alibaba Bailian `deepseek-v4-pro` through an OpenAI-compatible `/chat/completions` endpoint. The analysis provider list mirrors the transcription provider list; optional chat presets must support `{Base URL}/chat/completions`.
 
@@ -110,6 +111,14 @@ Provider limits:
 - SiliconFlow: files over 50 MB are blocked before upload.
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
 - OpenAI-compatible providers: files over 25 MB are blocked before upload.
+
+Capability matrix:
+
+| Provider family | Upload mode | Endpoint shape | Limit | Echo Notes chunking | Language parameter | Timestamp | Speaker diarization |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
+| SiliconFlow `TeleAI/TeleSpeechASR` | multipart | dedicated SiliconFlow endpoint | 50 MB audio file | No | No | No | No |
+| OpenAI-compatible presets and custom endpoints | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
 
 Long-audio chunking currently applies only to Alibaba Bailian `qwen3-asr-flash`. Chunked transcripts include segment headings such as `### Segment 01（00:00-03:00）` so you can match text back to the original recording. If local browser audio decoding fails, Echo Notes writes a failed transcript with the reason.
 

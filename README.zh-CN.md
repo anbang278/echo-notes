@@ -59,6 +59,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 生成带 source metadata 的 Markdown 转写稿。
 - 在原始音频引用下方插入转写稿链接。
 - 跳过已存在的转写稿，并补充缺失链接。
+- 在设置页展示当前转写 Provider 的上传方式、接口形态、文件限制、长音频分段、语言参数、时间戳和说话人分离能力。
 - 在设置页控制 Obsidian 核心插件录音机开关，并为其代理命令配置默认快捷键。
 - 使用独立 AI 分析模型，将转写稿生成通用、学习、产品或角色化工作场景纪要。
 - AI 纪要分析在后台异步执行，完成后直接写回对应转写稿。
@@ -78,7 +79,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - Ollama、Ollama Open WebUI、Google Gemini、OpenRouter、LM Studio、302.AI、Anthropic、Mistral AI、Together AI、Fireworks AI、Perplexity AI、DeepSeek、xAI、Novita AI、DeepInfra、SambaNova、Cerebras、Z.AI：按 OpenAI-compatible 音频转写接口预设
 - 自定义兼容接口（Custom OpenAI-compatible）：用于自定义 `/audio/transcriptions` 端点
 
-服务商的默认 Base URL 和模型都可以在设置页修改。
+服务商的默认 Base URL 和模型都可以在设置页修改。设置页也会展示当前转写 Provider 的能力摘要，包括上传方式、接口形态、大小限制、是否支持长音频分段、语言参数、时间戳和说话人分离。
 
 AI 纪要分析使用独立配置，默认是阿里百炼 `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 列表与转写 Provider 列表保持一致；可选聊天模型预设需要确认支持 `{Base URL}/chat/completions`。
 
@@ -110,6 +111,14 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 - 硅基流动：超过 50 MB 的文件会在上传前被阻止。
 - 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
 - OpenAI-compatible 服务商：超过 25 MB 的文件会在上传前被阻止。
+
+能力矩阵：
+
+| Provider 类型 | 上传方式 | 接口形态 | 限制 | Echo Notes 分段 | 语言参数 | 时间戳 | 说话人分离 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
+| 硅基流动 `TeleAI/TeleSpeechASR` | multipart | SiliconFlow 专用端点 | 音频文件 50 MB | 暂不支持 | 暂不支持 | 暂不支持 | 暂不支持 |
+| OpenAI-compatible 预设和自定义端点 | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
 长音频分段目前只适用于阿里百炼 `qwen3-asr-flash`。分段 transcript 会保留类似 `### 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。如果本地浏览器音频解码失败，Echo Notes 会写入带失败原因的 transcript。
 
