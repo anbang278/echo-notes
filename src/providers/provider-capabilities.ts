@@ -1,4 +1,4 @@
-import type { ProviderId } from "../settings/settings";
+import { isProviderId, type ProviderId } from "../settings/settings";
 
 export type ProviderUploadMode = "multipart" | "base64-data-url";
 
@@ -96,10 +96,8 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<ProviderId, ProviderCap
 };
 
 export function getTranscriptionProviderCapability(providerId: string): ProviderCapability {
-	return (
-		TRANSCRIPTION_PROVIDER_CAPABILITIES[providerId as ProviderId] ??
-		TRANSCRIPTION_PROVIDER_CAPABILITIES["custom-openai-compatible"]
-	);
+	const normalizedProviderId = isProviderId(providerId) ? providerId : "custom-openai-compatible";
+	return TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
 }
 
 export function formatProviderCapabilityBytes(bytes: number): string {

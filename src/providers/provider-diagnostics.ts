@@ -1,5 +1,5 @@
 import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
-import type { EchoNotesSettings, ProviderId } from "../settings/settings";
+import type { EchoNotesSettings } from "../settings/settings";
 import { PROVIDER_LABELS, isProviderId } from "../settings/settings";
 import { getTranscriptionProviderCapability } from "./provider-capabilities";
 
@@ -23,7 +23,7 @@ export function diagnoseTranscriptionProviderSettings(
 ): ProviderDiagnosticResult {
 	const items: ProviderDiagnosticItem[] = [];
 	const providerId = isProviderId(settings.provider) ? settings.provider : "custom-openai-compatible";
-	const providerLabel = PROVIDER_LABELS[providerId as ProviderId] ?? settings.provider;
+	const providerLabel = PROVIDER_LABELS[providerId] ?? settings.provider;
 	const capability = getTranscriptionProviderCapability(providerId);
 	const trimmedApiKey = apiKey.trim();
 	const trimmedBaseUrl = settings.baseUrl.trim();

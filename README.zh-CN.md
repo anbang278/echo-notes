@@ -166,7 +166,7 @@ Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你
 | 停止 Obsidian 核心插件录音机录音 | `Echo Notes: Stop Obsidian core plugin audio recorder` | `Ctrl+S` |
 | 转写当前笔记全部音频 | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
 
-这些快捷键属于 Echo Notes 命令，不会直接改写 Obsidian 核心插件 `audio-recorder:start`、`audio-recorder:stop` 命令的用户热键配置。如果你已经在 Obsidian Hotkeys 中手动设置过同名 Echo Notes 命令，Obsidian 会优先使用你的手动配置。
+这些快捷键属于 Echo Notes 命令，不会直接改写 Obsidian 核心插件 `audio-recorder:start`、`audio-recorder:stop` 命令的用户热键配置。如果你已经在 Obsidian Hotkeys 中手动设置过同名 Echo Notes 命令，Obsidian 会优先使用你的手动配置。如果默认快捷键与你的库或系统快捷键冲突，也可以在 Echo Notes 设置页清空对应快捷键。
 
 ## 配置 AI 纪要分析
 

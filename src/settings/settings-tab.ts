@@ -1,4 +1,4 @@
-import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, type SettingDefinitionItem } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
 	getProviderCapabilitySummary,
@@ -19,6 +19,8 @@ import {
 	PROVIDER_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
+	isAnalysisProviderId,
+	isProviderId,
 	parseHotkeyInput,
 	parseRecognitionKeywordsInput,
 	restoreDefaultAnalysisTemplate,
@@ -39,8 +41,19 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	display(): void {
-		const { containerEl } = this;
+	getSettingDefinitions(): SettingDefinitionItem[] {
+		return [
+			{
+				name: "Echo Notes settings",
+				searchable: false,
+				render: (_setting, group) => {
+					this.renderSettings(group.listEl);
+				}
+			}
+		];
+	}
+
+	private renderSettings(containerEl: HTMLElement): void {
 		containerEl.empty();
 
 		this.renderOfficialRecorderSettings(containerEl);
@@ -55,10 +68,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 					.setValue(this.plugin.settings.provider)
 					.onChange(async (value) => {
+						if (!isProviderId(value)) {
+							return;
+						}
 						this.plugin.settings.provider = value;
-						this.applyProviderDefaults(value as ProviderId);
+						this.applyProviderDefaults(value);
 						await this.plugin.saveSettings();
-						this.display();
+						this.update();
 					})
 			);
 
@@ -134,7 +150,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.outputStrategy = value as OutputStrategy;
 						await this.plugin.saveSettings();
-						this.display();
+						this.update();
 					})
 			);
 
@@ -260,7 +276,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.setValue(recorderEnabled === true)
 					.onChange(async (value) => {
 						await this.plugin.setOfficialAudioRecorderEnabled(value);
-						this.display();
+						this.update();
 					})
 			);
 
@@ -331,7 +347,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await applyHotkey(hotkey);
 						await this.plugin.saveSettings();
 						this.plugin.refreshRegisteredCommands();
-						this.display();
+						this.update();
 					})
 			);
 	}
@@ -348,7 +364,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.analysisEnabled = value;
 						await this.plugin.saveSettings();
-						this.display();
+						this.update();
 					})
 			);
 
@@ -364,10 +380,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 					.setValue(this.plugin.settings.analysisProvider)
 					.onChange(async (value) => {
-						this.plugin.settings.analysisProvider = value as AnalysisProviderId;
-						this.applyAnalysisProviderDefaults(value as AnalysisProviderId);
+						if (!isAnalysisProviderId(value)) {
+							return;
+						}
+						this.plugin.settings.analysisProvider = value;
+						this.applyAnalysisProviderDefaults(value);
 						await this.plugin.saveSettings();
-						this.display();
+						this.update();
 					})
 			);
 
@@ -435,8 +454,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.defaultAnalysisTemplateId = value;
 						await this.plugin.saveSettings();
-						this.display();
-					})
+						this.update();
+					});
 			});
 
 		new Setting(containerEl).setName("分析模板").setHeading();
@@ -457,8 +476,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.analysisTemplates.push(template);
 						await this.plugin.saveSettings();
 						const savedTemplate = this.plugin.settings.analysisTemplates.find((candidate) => candidate.id === template.id) ?? template;
-						this.display();
-						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => this.display()).open();
+						this.update();
+						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => this.update()).open();
 					})
 			);
 	}
@@ -540,7 +559,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		});
 		editButton.type = "button";
 		editButton.addEventListener("click", () => {
-			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.display()).open();
+			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.update()).open();
 		});
 
 		const secondaryButton = actionEl.createEl("button", {
@@ -566,7 +585,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.plugin.settings.analysisTemplates.splice(index, 1, restored);
 		}
 		await this.plugin.saveSettings();
-		this.display();
+		this.update();
 	}
 
 	private async deleteCustomAnalysisTemplate(templateId: string): Promise<void> {
@@ -574,7 +593,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			(candidate) => candidate.id !== templateId
 		);
 		await this.plugin.saveSettings();
-		this.display();
+		this.update();
 	}
 
 	private applyProviderDefaults(provider: ProviderId): void {
@@ -591,12 +610,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getProviderDefaults(): Pick<EchoNotesPlugin["settings"], "baseUrl" | "model" | "language"> {
-		const provider = this.plugin.settings.provider as ProviderId;
+		const provider = isProviderId(this.plugin.settings.provider) ? this.plugin.settings.provider : "aliyun-bailian";
 		return PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS["aliyun-bailian"];
 	}
 
 	private getAnalysisProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
-		const provider = this.plugin.settings.analysisProvider as AnalysisProviderId;
+		const provider = isAnalysisProviderId(this.plugin.settings.analysisProvider)
+			? this.plugin.settings.analysisProvider
+			: "aliyun-bailian";
 		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
 	}
 

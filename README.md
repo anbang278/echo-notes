@@ -182,7 +182,7 @@ That section also registers Echo Notes proxy commands with configurable default 
 | Stop the Obsidian core plugin audio recorder | `Echo Notes: Stop Obsidian core plugin audio recorder` | `Ctrl+S` |
 | Transcribe all audio files in the current note | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
 
-These hotkeys belong to Echo Notes commands. Echo Notes does not directly rewrite user hotkeys for Obsidian core plugin commands `audio-recorder:start` or `audio-recorder:stop`. If you manually override the matching Echo Notes commands in Obsidian Hotkeys, Obsidian uses your manual hotkey settings first.
+These hotkeys belong to Echo Notes commands. Echo Notes does not directly rewrite user hotkeys for Obsidian core plugin commands `audio-recorder:start` or `audio-recorder:stop`. If you manually override the matching Echo Notes commands in Obsidian Hotkeys, Obsidian uses your manual hotkey settings first. You can also clear any Echo Notes default hotkey in Echo Notes settings if it conflicts with your vault or system shortcuts.
 
 ## Configure AI Analysis
 

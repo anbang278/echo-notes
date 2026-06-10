@@ -129,7 +129,6 @@ export default class EchoNotesPlugin extends Plugin {
 			window.clearTimeout(timer);
 		}
 		this.markdownDebounceTimers.clear();
-		this.app.workspace.detachLeavesOfType(ECHO_NOTES_TASK_CENTER_VIEW_TYPE);
 	}
 
 	async loadSettings(): Promise<void> {
@@ -159,7 +158,7 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		await leaf.setViewState({ type: ECHO_NOTES_TASK_CENTER_VIEW_TYPE, active: true });
-		this.app.workspace.revealLeaf(leaf);
+		await this.app.workspace.revealLeaf(leaf);
 	}
 
 	getTaskCenterTasks(): EchoNotesTask[] {

@@ -65,7 +65,7 @@ export interface AnalysisTemplateConfig {
 }
 
 export interface EchoNotesSettings {
-	provider: string;
+	provider: ProviderId;
 	apiKey?: string;
 	baseUrl: string;
 	model: string;
@@ -810,8 +810,9 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
 	const rawProvider = typeof raw.provider === "string" ? raw.provider : "";
 	const hasValidProvider = isProviderId(rawProvider);
-	settings.provider = hasValidProvider ? rawProvider : DEFAULT_SETTINGS.provider;
-	const providerDefaults = PROVIDER_DEFAULTS[settings.provider as ProviderId] ?? PROVIDER_DEFAULTS[DEFAULT_SETTINGS.provider as ProviderId];
+	const fallbackProvider: ProviderId = "aliyun-bailian";
+	settings.provider = hasValidProvider ? rawProvider : fallbackProvider;
+	const providerDefaults = PROVIDER_DEFAULTS[settings.provider];
 	settings.baseUrl =
 		hasValidProvider && typeof raw.baseUrl === "string" && raw.baseUrl.trim()
 			? raw.baseUrl.trim()
