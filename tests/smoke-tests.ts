@@ -303,7 +303,7 @@ const chineseTranscript = renderTranscriptTemplate({
 	result: {
 		text: "会议内容",
 		provider: "siliconflow",
-		model: "TeleAI/TeleSpeechASR"
+		model: "FunAudioLLM/SenseVoiceSmall"
 	},
 	copyLanguage: "zh"
 });
@@ -320,7 +320,7 @@ assert.equal(
 	isReusableTranscriptForAudio(chineseTranscript, {
 		sourceAudio: createSourceAudioMetadata(audioFile as never),
 		provider: "siliconflow",
-		model: "TeleAI/TeleSpeechASR"
+		model: "FunAudioLLM/SenseVoiceSmall"
 	}),
 	true
 );
@@ -328,7 +328,7 @@ assert.equal(
 	isReusableTranscriptForAudio(chineseTranscript, {
 		sourceAudio: { ...createSourceAudioMetadata(audioFile as never), mtime: 1780900000001 },
 		provider: "siliconflow",
-		model: "TeleAI/TeleSpeechASR"
+		model: "FunAudioLLM/SenseVoiceSmall"
 	}),
 	false
 );
@@ -336,7 +336,7 @@ assert.equal(
 	isReusableTranscriptForAudio(chineseTranscript, {
 		sourceAudio: createSourceAudioMetadata(audioFile as never),
 		provider: "openai",
-		model: "TeleAI/TeleSpeechASR"
+		model: "FunAudioLLM/SenseVoiceSmall"
 	}),
 	false
 );
@@ -358,7 +358,7 @@ assert.equal(
 	isReusableTranscriptForAudio(analysisPendingTranscript, {
 		sourceAudio: createSourceAudioMetadata(audioFile as never),
 		provider: "siliconflow",
-		model: "TeleAI/TeleSpeechASR"
+		model: "FunAudioLLM/SenseVoiceSmall"
 	}),
 	true
 );
@@ -653,6 +653,8 @@ assert.equal(DEFAULT_SETTINGS.provider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.model, "qwen3-asr-flash");
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
+assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
+assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall");
 assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.analysisModel, "deepseek-v4-pro");
@@ -672,6 +674,7 @@ assert.equal(getTranscriptionProviderCapability("aliyun-bailian").endpointShape,
 assert.equal(getTranscriptionProviderCapability("aliyun-bailian").maxBase64DataUrlBytes, 10 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("siliconflow").maxAudioBytes, 50 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("siliconflow").supportsLanguage, false);
+assert.deepEqual(getTranscriptionProviderCapability("siliconflow").recommendedModels, ["FunAudioLLM/SenseVoiceSmall"]);
 assert.equal(getTranscriptionProviderCapability("openai").maxAudioBytes, 25 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("openai").supportsLanguage, true);
 assert.equal(getTranscriptionProviderCapability("openai").supportsTimestamp, false);

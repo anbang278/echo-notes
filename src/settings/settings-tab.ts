@@ -76,8 +76,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						this.update();
 					})
-			);
+				);
 
+		this.renderProviderSignup(containerEl);
 		this.renderProviderCapability(containerEl);
 
 		new Setting(containerEl)
@@ -283,23 +284,19 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderHotkeySetting(
 			containerEl,
 			"Obsidian 核心插件录音机开启快捷键",
-			"触发 Echo Notes: Start Obsidian core plugin audio recorder，再调用 audio-recorder:start 命令。",
+			"直接修改 Obsidian 核心命令 audio-recorder:start 的快捷键。",
 			"Ctrl+L",
-			this.plugin.settings.officialRecorderStartHotkey,
-			async (hotkey) => {
-				this.plugin.settings.officialRecorderStartHotkey = hotkey;
-			}
+			this.plugin.getOfficialAudioRecorderStartHotkey(),
+			(hotkey) => this.plugin.setOfficialAudioRecorderStartHotkey(hotkey)
 		);
 
 		this.renderHotkeySetting(
 			containerEl,
 			"Obsidian 核心插件录音机关闭快捷键",
-			"触发 Echo Notes: Stop Obsidian core plugin audio recorder，再调用 audio-recorder:stop 命令。",
+			"直接修改 Obsidian 核心命令 audio-recorder:stop 的快捷键。",
 			"Ctrl+S",
-			this.plugin.settings.officialRecorderStopHotkey,
-			async (hotkey) => {
-				this.plugin.settings.officialRecorderStopHotkey = hotkey;
-			}
+			this.plugin.getOfficialAudioRecorderStopHotkey(),
+			(hotkey) => this.plugin.setOfficialAudioRecorderStopHotkey(hotkey)
 		);
 
 		this.renderHotkeySetting(
@@ -320,7 +317,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		description: string,
 		placeholder: string,
 		currentHotkey: EchoNotesHotkeySetting,
-		applyHotkey: (hotkey: EchoNotesHotkeySetting) => Promise<void>
+		applyHotkey: (hotkey: EchoNotesHotkeySetting) => Promise<boolean | void>
 	): void {
 		let draftValue = formatHotkey(currentHotkey);
 		new Setting(containerEl)
@@ -344,7 +341,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 							return;
 						}
 
-						await applyHotkey(hotkey);
+						const applied = await applyHotkey(hotkey);
+						if (applied === false) {
+							return;
+						}
 						await this.plugin.saveSettings();
 						this.plugin.refreshRegisteredCommands();
 						this.update();
@@ -642,6 +642,25 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			default:
 				return "该服务商的基础地址。新增服务商默认按 OpenAI-compatible 音频转写接口调用 {Base URL}/audio/transcriptions。";
 		}
+	}
+
+	private renderProviderSignup(containerEl: HTMLElement): void {
+		if (this.plugin.settings.provider !== "siliconflow") {
+			return;
+		}
+
+		const desc = document.createDocumentFragment();
+		desc.appendText("硅基流动免费注册链接：");
+		const link = document.createElement("a");
+		link.href = "https://cloud.siliconflow.cn/i/uTf2euFF";
+		link.textContent = "https://cloud.siliconflow.cn/i/uTf2euFF";
+		link.target = "_blank";
+		link.rel = "noopener noreferrer";
+		desc.appendChild(link);
+
+		new Setting(containerEl)
+			.setName("硅基流动注册链接")
+			.setDesc(desc);
 	}
 }
 

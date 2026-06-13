@@ -71,11 +71,6 @@ interface ProcessAudioOptions {
 	forceTranscription?: boolean;
 }
 
-interface ObsidianCommandManager {
-	executeCommandById?: (id: string) => boolean | void;
-	commands?: Record<string, unknown>;
-}
-
 interface InternalPlugin {
 	enabled?: boolean;
 	enable?: (save?: boolean) => Promise<void> | void;
@@ -91,9 +86,16 @@ interface InternalPlugins {
 	setEnable?: (id: string, enabled: boolean) => Promise<void> | void;
 }
 
+interface ObsidianHotkeyManager {
+	getHotkeys?: (commandId: string) => Hotkey[] | undefined;
+	getDefaultHotkeys?: (commandId: string) => Hotkey[] | undefined;
+	setHotkeys?: (commandId: string, hotkeys: Hotkey[]) => void;
+	save?: () => Promise<void> | void;
+}
+
 interface AppWithInternals {
-	commands?: ObsidianCommandManager;
 	internalPlugins?: InternalPlugins;
+	hotkeyManager?: ObsidianHotkeyManager;
 }
 
 export default class EchoNotesPlugin extends Plugin {
@@ -239,6 +241,30 @@ export default class EchoNotesPlugin extends Plugin {
 		return true;
 	}
 
+	getOfficialAudioRecorderStartHotkey(): EchoNotesHotkeySetting {
+		return this.getObsidianCommandHotkey(AUDIO_RECORDER_START_COMMAND_ID, this.settings.officialRecorderStartHotkey);
+	}
+
+	getOfficialAudioRecorderStopHotkey(): EchoNotesHotkeySetting {
+		return this.getObsidianCommandHotkey(AUDIO_RECORDER_STOP_COMMAND_ID, this.settings.officialRecorderStopHotkey);
+	}
+
+	async setOfficialAudioRecorderStartHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
+		const saved = await this.setObsidianCommandHotkey(AUDIO_RECORDER_START_COMMAND_ID, hotkey, "开始录音");
+		if (saved) {
+			this.settings.officialRecorderStartHotkey = cloneHotkey(hotkey);
+		}
+		return saved;
+	}
+
+	async setOfficialAudioRecorderStopHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
+		const saved = await this.setObsidianCommandHotkey(AUDIO_RECORDER_STOP_COMMAND_ID, hotkey, "停止录音");
+		if (saved) {
+			this.settings.officialRecorderStopHotkey = cloneHotkey(hotkey);
+		}
+		return saved;
+	}
+
 	getApiKey(): string {
 		return this.app.secretStorage.getSecret(API_KEY_SECRET_ID) ?? this.settings.apiKey ?? "";
 	}
@@ -272,24 +298,6 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private registerCommands(): void {
 		this.removeRegisteredCommands();
-
-		this.addCommand({
-			id: "start-official-audio-recorder",
-			name: "Start Obsidian core plugin audio recorder",
-			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStartHotkey),
-			callback: () => {
-				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_START_COMMAND_ID, "开始录音");
-			}
-		});
-
-		this.addCommand({
-			id: "stop-official-audio-recorder",
-			name: "Stop Obsidian core plugin audio recorder",
-			hotkeys: this.getCommandHotkeys(this.settings.officialRecorderStopHotkey),
-			callback: () => {
-				this.executeOfficialAudioRecorderCommand(AUDIO_RECORDER_STOP_COMMAND_ID, "停止录音");
-			}
-		});
 
 		this.addCommand({
 			id: "open-task-center",
@@ -345,35 +353,55 @@ export default class EchoNotesPlugin extends Plugin {
 		return cloned ? [cloned] : [];
 	}
 
-	private executeOfficialAudioRecorderCommand(commandId: string, actionLabel: string): void {
-		if (this.isOfficialAudioRecorderEnabled() === false) {
-			new Notice("Obsidian 核心插件录音机未开启，请先在 Echo Notes 设置中打开。");
-			return;
+	private getInternalPlugins(): InternalPlugins | undefined {
+		return (this.app as unknown as AppWithInternals).internalPlugins;
+	}
+
+	private getHotkeyManager(): ObsidianHotkeyManager | undefined {
+		return (this.app as unknown as AppWithInternals).hotkeyManager;
+	}
+
+	private getObsidianCommandHotkey(commandId: string, fallback: EchoNotesHotkeySetting): EchoNotesHotkeySetting {
+		const hotkeyManager = this.getHotkeyManager();
+		const customHotkeys = hotkeyManager?.getHotkeys?.(commandId);
+		if (Array.isArray(customHotkeys)) {
+			return this.firstHotkeyOrNull(customHotkeys);
 		}
 
-		const commandManager = this.getCommandManager();
-		if (commandManager?.commands && !commandManager.commands[commandId]) {
-			new Notice(`找不到 Obsidian 核心插件录音机命令：${commandId}`);
-			return;
+		const defaultHotkeys = hotkeyManager?.getDefaultHotkeys?.(commandId);
+		if (Array.isArray(defaultHotkeys)) {
+			return this.firstHotkeyOrNull(defaultHotkeys);
+		}
+
+		return cloneHotkey(fallback);
+	}
+
+	private firstHotkeyOrNull(hotkeys: Hotkey[]): EchoNotesHotkeySetting {
+		const hotkey = hotkeys[0];
+		return hotkey ? cloneHotkey(hotkey) : null;
+	}
+
+	private async setObsidianCommandHotkey(
+		commandId: string,
+		hotkey: EchoNotesHotkeySetting,
+		actionLabel: string
+	): Promise<boolean> {
+		const hotkeyManager = this.getHotkeyManager();
+		if (typeof hotkeyManager?.setHotkeys !== "function" || typeof hotkeyManager?.save !== "function") {
+			new Notice("当前 Obsidian 版本未暴露快捷键内部 API，请到 Obsidian 快捷键设置中手动修改 Audio recorder。");
+			return false;
 		}
 
 		try {
-			const executed = commandManager?.executeCommandById?.(commandId);
-			if (executed === false || !commandManager?.executeCommandById) {
-				new Notice(`无法执行 Obsidian 核心插件录音机命令：${actionLabel}`);
-			}
+			hotkeyManager.setHotkeys(commandId, this.getCommandHotkeys(hotkey));
+			await hotkeyManager.save();
+			new Notice(`已保存 Obsidian 核心插件录音机${actionLabel}快捷键。`);
+			return true;
 		} catch (error) {
-			new Notice(`Obsidian 核心插件录音机命令执行失败：${getErrorMessage(error)}`);
-			this.log("Obsidian 核心插件录音机命令执行失败", error);
+			new Notice(`保存 Obsidian 核心插件录音机快捷键失败：${getErrorMessage(error)}`);
+			this.log("保存 Obsidian 核心插件录音机快捷键失败", { commandId, error });
+			return false;
 		}
-	}
-
-	private getCommandManager(): ObsidianCommandManager | undefined {
-		return (this.app as unknown as AppWithInternals).commands;
-	}
-
-	private getInternalPlugins(): InternalPlugins | undefined {
-		return (this.app as unknown as AppWithInternals).internalPlugins;
 	}
 
 	private getInternalPlugin(pluginId: string): InternalPlugin | null {

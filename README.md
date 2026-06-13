@@ -67,7 +67,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Open an in-memory Task Center from the ribbon or command palette to inspect transcription and AI analysis status, failures, durations, providers, models, outputs, and retry failed tasks.
 - Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
 - Markdown-link automation skips source notes marked with Echo Notes privacy frontmatter or private tags.
-- Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with configurable default hotkeys for recorder proxy commands.
+- Enable or disable Obsidian's core plugin Audio recorder from Echo Notes settings, with controls that save hotkeys directly to Obsidian's core recorder commands.
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
 - Optionally redact common sensitive fields before sending transcript text to the AI analysis provider.
@@ -84,7 +84,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 
 Implemented transcription providers:
 
-- 硅基流动（SiliconFlow） with `TeleAI/TeleSpeechASR`
+- 【免费】硅基流动（SiliconFlow） with `FunAudioLLM/SenseVoiceSmall`
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
 - OpenAI（OpenAI） with OpenAI-compatible audio transcription
 - Groq（Groq） with OpenAI-compatible audio transcription
@@ -145,7 +145,7 @@ Capability matrix:
 | Provider family | Upload mode | Endpoint shape | Limit | Echo Notes chunking | Language parameter | Timestamp | Speaker diarization |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
-| SiliconFlow `TeleAI/TeleSpeechASR` | multipart | dedicated SiliconFlow endpoint | 50 MB audio file | No | No | No | No |
+| SiliconFlow `FunAudioLLM/SenseVoiceSmall` | multipart | dedicated SiliconFlow endpoint | 50 MB audio file | No | No | No | No |
 | OpenAI-compatible presets and custom endpoints | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
 
 Long-audio chunking currently applies only to Alibaba Bailian `qwen3-asr-flash`. Chunked transcripts include segment headings such as `### Segment 01（00:00-03:00）` so you can match text back to the original recording. If local browser audio decoding fails, Echo Notes writes a failed transcript with the reason.
@@ -164,7 +164,7 @@ Recommended defaults:
 
 | Provider | Base URL | Model |
 | --- | --- | --- |
-| 硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `TeleAI/TeleSpeechASR` |
+| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` |
 | OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` |
 | Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` |
@@ -174,15 +174,15 @@ Recommended defaults:
 
 Echo Notes relies on Obsidian's `Audio recorder` core plugin to create recording files. You can enable or disable that core plugin from the "Obsidian core plugin audio recorder" section at the top of Echo Notes settings.
 
-That section also registers Echo Notes proxy commands with configurable default hotkeys:
+That section can save hotkeys directly to Obsidian's core Audio recorder commands:
 
 | Action | Command | Default hotkey |
 | --- | --- | --- |
-| Start the Obsidian core plugin audio recorder | `Echo Notes: Start Obsidian core plugin audio recorder` | `Ctrl+L` |
-| Stop the Obsidian core plugin audio recorder | `Echo Notes: Stop Obsidian core plugin audio recorder` | `Ctrl+S` |
+| Start the Obsidian core plugin audio recorder | `audio-recorder:start` | `Ctrl+L` |
+| Stop the Obsidian core plugin audio recorder | `audio-recorder:stop` | `Ctrl+S` |
 | Transcribe all audio files in the current note | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
 
-These hotkeys belong to Echo Notes commands. Echo Notes does not directly rewrite user hotkeys for Obsidian core plugin commands `audio-recorder:start` or `audio-recorder:stop`. If you manually override the matching Echo Notes commands in Obsidian Hotkeys, Obsidian uses your manual hotkey settings first. You can also clear any Echo Notes default hotkey in Echo Notes settings if it conflicts with your vault or system shortcuts.
+Echo Notes no longer registers proxy commands for starting or stopping the core recorder. When you click Save, it updates Obsidian's hotkey settings for `audio-recorder:start` or `audio-recorder:stop`; if your Obsidian version does not expose the internal hotkey manager, configure those core commands manually in Obsidian Hotkeys.
 
 ## Configure AI Analysis
 

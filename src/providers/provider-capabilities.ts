@@ -73,8 +73,8 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<ProviderId, ProviderCap
 		supportsStreaming: false,
 		uploadMode: "multipart",
 		endpointShape: "custom",
-		recommendedModels: ["TeleAI/TeleSpeechASR"],
-		notes: ["SiliconFlow TeleSpeechASR 目前由 Echo Notes 走专用 multipart 接口。"]
+		recommendedModels: ["FunAudioLLM/SenseVoiceSmall"],
+		notes: ["SiliconFlow SenseVoiceSmall 目前由 Echo Notes 走专用 multipart 接口。"]
 	},
 	"aliyun-bailian": {
 		maxAudioBytes: null,

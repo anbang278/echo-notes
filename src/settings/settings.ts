@@ -95,7 +95,7 @@ export interface EchoNotesSettings {
 export const PROVIDER_DEFAULTS: Record<ProviderId, Pick<EchoNotesSettings, "baseUrl" | "model" | "language">> = {
 	siliconflow: {
 		baseUrl: "https://api.siliconflow.cn",
-		model: "TeleAI/TeleSpeechASR",
+		model: "FunAudioLLM/SenseVoiceSmall",
 		language: "auto"
 	},
 	"aliyun-bailian": {
@@ -211,7 +211,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderId, Pick<EchoNotesSettings, "base
 };
 
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
-	siliconflow: "硅基流动（SiliconFlow）",
+	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	openai: "OpenAI（OpenAI）",
 	ollama: "Ollama",
