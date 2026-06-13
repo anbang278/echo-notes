@@ -480,6 +480,18 @@ assert.deepEqual(
 		[2, 2, 180, 390]
 	]
 );
+const siliconFlowLongAudioRanges = createAudioSegmentRanges(
+	1250,
+	{ targetSegmentSeconds: 600, minSegmentSeconds: 30 }
+);
+assert.deepEqual(
+	siliconFlowLongAudioRanges.map((range) => [range.index, range.total, range.startSeconds, range.endSeconds]),
+	[
+		[1, 3, 0, 600],
+		[2, 3, 600, 1200],
+		[3, 3, 1200, 1250]
+	]
+);
 
 const chunkPipelineEvents: string[] = [];
 const chunkPipelineChunks = [
@@ -673,6 +685,7 @@ assert.equal(getTranscriptionProviderCapability("aliyun-bailian").uploadMode, "b
 assert.equal(getTranscriptionProviderCapability("aliyun-bailian").endpointShape, "chat-audio");
 assert.equal(getTranscriptionProviderCapability("aliyun-bailian").maxBase64DataUrlBytes, 10 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("siliconflow").maxAudioBytes, 50 * 1024 * 1024);
+assert.equal(getTranscriptionProviderCapability("siliconflow").supportsChunking, true);
 assert.equal(getTranscriptionProviderCapability("siliconflow").supportsLanguage, false);
 assert.deepEqual(getTranscriptionProviderCapability("siliconflow").recommendedModels, ["FunAudioLLM/SenseVoiceSmall"]);
 assert.equal(getTranscriptionProviderCapability("openai").maxAudioBytes, 25 * 1024 * 1024);
@@ -680,6 +693,7 @@ assert.equal(getTranscriptionProviderCapability("openai").supportsLanguage, true
 assert.equal(getTranscriptionProviderCapability("openai").supportsTimestamp, false);
 assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "openai-audio");
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
+assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("siliconflow")).includes("长音频分段：支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("openai")).includes("长音频分段：暂不支持"));
 for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
 	const capability = getTranscriptionProviderCapability(providerId);
@@ -733,6 +747,7 @@ assert.equal(networkError.code, "network_error");
 assert.doesNotMatch(networkError.message, /networksecret/);
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("unsupported_format", "bad format")), false);
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("missing_api_key", "missing key")), false);
+assert.equal(shouldWriteFailedTranscript(new TranscriptionError("file_too_large", "too large")), true);
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("rate_limited", "slow down")), true);
 assert.equal(shouldWriteFailedTranscript(new TranscriptionError("invalid_model", "bad model")), true);
 assert.equal(formatFileSize(512), "512 B");

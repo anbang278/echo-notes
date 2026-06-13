@@ -89,13 +89,16 @@ export function createAudioSegmentRanges(
 	}));
 }
 
-export async function createWavAudioSegments(sourceAudioBuffer: ArrayBuffer): Promise<WavAudioSegment[]> {
+export async function createWavAudioSegments(
+	sourceAudioBuffer: ArrayBuffer,
+	options: AudioSegmentRangeOptions = {}
+): Promise<WavAudioSegment[]> {
 	const decodedAudio = await decodeAudio(sourceAudioBuffer);
 	const ranges = createAudioSegmentRanges(
 		decodedAudio.duration,
 		{
-			targetSegmentSeconds: LONG_AUDIO_TARGET_SEGMENT_SECONDS,
-			minSegmentSeconds: LONG_AUDIO_MIN_SEGMENT_SECONDS
+			targetSegmentSeconds: options.targetSegmentSeconds ?? LONG_AUDIO_TARGET_SEGMENT_SECONDS,
+			minSegmentSeconds: options.minSegmentSeconds ?? LONG_AUDIO_MIN_SEGMENT_SECONDS
 		},
 		(targetSeconds) =>
 			findLowEnergyBoundary(decodedAudio, targetSeconds, {

@@ -130,6 +130,7 @@ export function shouldWriteFailedTranscript(error: unknown): boolean {
 
 	return (
 		error.code === "audio_decode_error" ||
+		error.code === "file_too_large" ||
 		error.code === "authentication_failed" ||
 		error.code === "rate_limited" ||
 		error.code === "quota_exceeded" ||

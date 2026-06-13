@@ -35,6 +35,7 @@ import {
 
 export class EchoNotesSettingTab extends PluginSettingTab {
 	private plugin: EchoNotesPlugin;
+	private settingsContainerEl: HTMLElement | null = null;
 
 	constructor(app: App, plugin: EchoNotesPlugin) {
 		super(app, plugin);
@@ -53,7 +54,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		];
 	}
 
+	display(): void {
+		this.renderSettings(this.containerEl);
+	}
+
 	private renderSettings(containerEl: HTMLElement): void {
+		this.settingsContainerEl = containerEl;
 		containerEl.empty();
 
 		this.renderOfficialRecorderSettings(containerEl);
@@ -74,9 +80,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.provider = value;
 						this.applyProviderDefaults(value);
 						await this.plugin.saveSettings();
-						this.update();
+						this.refreshSettings();
 					})
-				);
+			);
 
 		this.renderProviderSignup(containerEl);
 		this.renderProviderCapability(containerEl);
@@ -151,7 +157,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.outputStrategy = value as OutputStrategy;
 						await this.plugin.saveSettings();
-						this.update();
+						this.refreshSettings();
 					})
 			);
 
@@ -277,7 +283,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.setValue(recorderEnabled === true)
 					.onChange(async (value) => {
 						await this.plugin.setOfficialAudioRecorderEnabled(value);
-						this.update();
+						this.refreshSettings();
 					})
 			);
 
@@ -347,7 +353,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						}
 						await this.plugin.saveSettings();
 						this.plugin.refreshRegisteredCommands();
-						this.update();
+						this.refreshSettings();
 					})
 			);
 	}
@@ -364,7 +370,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.analysisEnabled = value;
 						await this.plugin.saveSettings();
-						this.update();
+						this.refreshSettings();
 					})
 			);
 
@@ -386,7 +392,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.analysisProvider = value;
 						this.applyAnalysisProviderDefaults(value);
 						await this.plugin.saveSettings();
-						this.update();
+						this.refreshSettings();
 					})
 			);
 
@@ -454,7 +460,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.defaultAnalysisTemplateId = value;
 						await this.plugin.saveSettings();
-						this.update();
+						this.refreshSettings();
 					});
 			});
 
@@ -476,8 +482,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.analysisTemplates.push(template);
 						await this.plugin.saveSettings();
 						const savedTemplate = this.plugin.settings.analysisTemplates.find((candidate) => candidate.id === template.id) ?? template;
-						this.update();
-						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => this.update()).open();
+						this.refreshSettings();
+						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => this.refreshSettings()).open();
 					})
 			);
 	}
@@ -559,7 +565,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		});
 		editButton.type = "button";
 		editButton.addEventListener("click", () => {
-			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.update()).open();
+			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.refreshSettings()).open();
 		});
 
 		const secondaryButton = actionEl.createEl("button", {
@@ -585,7 +591,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.plugin.settings.analysisTemplates.splice(index, 1, restored);
 		}
 		await this.plugin.saveSettings();
-		this.update();
+		this.refreshSettings();
 	}
 
 	private async deleteCustomAnalysisTemplate(templateId: string): Promise<void> {
@@ -593,7 +599,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			(candidate) => candidate.id !== templateId
 		);
 		await this.plugin.saveSettings();
-		this.update();
+		this.refreshSettings();
+	}
+
+	private refreshSettings(): void {
+		this.renderSettings(this.settingsContainerEl ?? this.containerEl);
 	}
 
 	private applyProviderDefaults(provider: ProviderId): void {

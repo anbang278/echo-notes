@@ -1,5 +1,11 @@
 import { App, requestUrl } from "obsidian";
+import { runAudioChunkPipeline } from "../audio/audio-chunk-pipeline";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
+import {
+	createWavAudioSegments,
+	formatSegmentTimeRange,
+	type WavAudioSegment
+} from "../audio/audio-segmenter";
 import type { EchoNotesSettings } from "../settings/settings";
 import {
 	createHttpTranscriptionError,
@@ -11,9 +17,16 @@ import {
 } from "./transcription-provider";
 
 const SILICONFLOW_MAX_AUDIO_BYTES = 50 * 1024 * 1024;
+const SILICONFLOW_LONG_AUDIO_TARGET_SEGMENT_SECONDS = 600;
 
 interface SiliconFlowTranscriptionResponse {
 	text?: string;
+}
+
+interface SiliconFlowSegmentResult {
+	text: string;
+	traceId?: string;
+	raw: SiliconFlowTranscriptionResponse;
 }
 
 export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
@@ -40,11 +53,88 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
 		}
 
+		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
 		if (input.audioFile.stat.size > SILICONFLOW_MAX_AUDIO_BYTES) {
-			throw new TranscriptionError("file_too_large", "Audio file exceeds SiliconFlow 50MB limit.");
+			return this.transcribeLongAudio(audioBuffer, input);
 		}
 
-		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
+		const result = await this.transcribeAudioBuffer(
+			audioBuffer,
+			getAudioMimeType(input.audioFile),
+			input.audioFile.name
+		);
+
+		return {
+			text: result.text,
+			provider: this.id,
+			model: this.settings.model,
+			traceId: result.traceId,
+			raw: result.raw
+		};
+	}
+
+	private async transcribeLongAudio(
+		audioBuffer: ArrayBuffer,
+		input: TranscriptionInput
+	): Promise<TranscriptionResult> {
+		const pipelineResult = await runAudioChunkPipeline<WavAudioSegment, SiliconFlowTranscriptionResponse>({
+			onProgress: input.onProgress,
+			createChunks: () => this.createLongAudioChunks(audioBuffer),
+			transcribeChunk: async (chunk) => {
+				this.assertChunkWithinMultipartLimit(chunk);
+				const result = await this.transcribeAudioBuffer(
+					chunk.audioBuffer,
+					chunk.mimeType,
+					buildSegmentFileName(input.audioFile.name, chunk)
+				);
+				return {
+					text: result.text,
+					traceId: result.traceId,
+					raw: result.raw
+				};
+			}
+		});
+
+		return {
+			text: pipelineResult.text,
+			provider: this.id,
+			model: this.settings.model,
+			traceId: pipelineResult.traceId,
+			segments: pipelineResult.segments,
+			raw: {
+				segments: pipelineResult.rawSegments
+			}
+		};
+	}
+
+	private async createLongAudioChunks(audioBuffer: ArrayBuffer): Promise<WavAudioSegment[]> {
+		try {
+			return await createWavAudioSegments(audioBuffer, {
+				targetSegmentSeconds: SILICONFLOW_LONG_AUDIO_TARGET_SEGMENT_SECONDS
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new TranscriptionError("audio_decode_error", `音频解码失败，无法进行硅基流动长音频分段转写：${message}`);
+		}
+	}
+
+	private assertChunkWithinMultipartLimit(chunk: WavAudioSegment): void {
+		if (chunk.audioBuffer.byteLength <= SILICONFLOW_MAX_AUDIO_BYTES) {
+			return;
+		}
+
+		throw new TranscriptionError(
+			"file_too_large",
+			`长音频分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）仍超过 SiliconFlow 50MB 单段上传限制。`
+		);
+	}
+
+	private async transcribeAudioBuffer(
+		audioBuffer: ArrayBuffer,
+		mimeType: string,
+		fileName: string
+	): Promise<SiliconFlowSegmentResult> {
+		const apiKey = this.apiKey.trim();
 		const boundary = `----EchoNotesBoundary${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
 		const body = buildMultipartBody(boundary, [
 			{
@@ -53,8 +143,8 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			},
 			{
 				name: "file",
-				fileName: input.audioFile.name,
-				contentType: getAudioMimeType(input.audioFile),
+				fileName,
+				contentType: mimeType,
 				value: audioBuffer
 			}
 		]);
@@ -86,8 +176,6 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 
 			return {
 				text: data.text,
-				provider: this.id,
-				model: this.settings.model,
 				traceId,
 				raw: data
 			};
@@ -99,6 +187,12 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			throw createNetworkTranscriptionError("SiliconFlow", error);
 		}
 	}
+}
+
+function buildSegmentFileName(sourceFileName: string, chunk: WavAudioSegment): string {
+	const extensionIndex = sourceFileName.lastIndexOf(".");
+	const basename = extensionIndex > 0 ? sourceFileName.slice(0, extensionIndex) : sourceFileName;
+	return `${basename}.segment-${chunk.index.toString().padStart(2, "0")}.wav`;
 }
 
 type MultipartPart =
@@ -130,12 +224,12 @@ function buildMultipartBody(boundary: string, parts: MultipartPart[]): ArrayBuff
 		}
 
 		chunks.push(
-				encoder.encode(
-					`--${boundary}\r\n` +
+			encoder.encode(
+				`--${boundary}\r\n` +
 					`Content-Disposition: form-data; name="${escapeHeaderValue(part.name)}"; filename="${escapeHeaderValue(part.fileName)}"; filename*=UTF-8''${encodeURIComponent(part.fileName)}\r\n` +
 					`Content-Type: ${part.contentType}\r\n\r\n`
-				)
-			);
+			)
+		);
 		chunks.push(new Uint8Array(part.value));
 		chunks.push(encoder.encode("\r\n"));
 	}

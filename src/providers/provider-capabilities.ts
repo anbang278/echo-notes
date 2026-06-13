@@ -66,7 +66,7 @@ const openAICompatibleCapabilities = Object.fromEntries(
 export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<ProviderId, ProviderCapability> = {
 	siliconflow: {
 		maxAudioBytes: SILICONFLOW_MAX_AUDIO_BYTES,
-		supportsChunking: false,
+		supportsChunking: true,
 		supportsLanguage: false,
 		supportsTimestamp: false,
 		supportsSpeakerDiarization: false,
@@ -74,7 +74,10 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<ProviderId, ProviderCap
 		uploadMode: "multipart",
 		endpointShape: "custom",
 		recommendedModels: ["FunAudioLLM/SenseVoiceSmall"],
-		notes: ["SiliconFlow SenseVoiceSmall 目前由 Echo Notes 走专用 multipart 接口。"]
+		notes: [
+			"SiliconFlow SenseVoiceSmall 目前由 Echo Notes 走专用 multipart 接口。",
+			"如果原音频超过 50 MB，Echo Notes 会在本地解码并切成 16 kHz mono WAV 分段逐段上传。"
+		]
 	},
 	"aliyun-bailian": {
 		maxAudioBytes: null,

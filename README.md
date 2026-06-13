@@ -136,7 +136,7 @@ You can also use tags such as `#echo-notes-private`, `#echo-notes-no-auto`, `#ec
 
 Provider limits:
 
-- SiliconFlow: files over 50 MB are blocked before upload.
+- SiliconFlow: files up to 50 MB are uploaded directly. Larger files are decoded locally, converted into 16 kHz mono WAV segments of about 10 minutes each, transcribed in order, and written back to the same transcript draft.
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
 - OpenAI-compatible providers: files over 25 MB are blocked before upload.
 
@@ -145,10 +145,10 @@ Capability matrix:
 | Provider family | Upload mode | Endpoint shape | Limit | Echo Notes chunking | Language parameter | Timestamp | Speaker diarization |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
-| SiliconFlow `FunAudioLLM/SenseVoiceSmall` | multipart | dedicated SiliconFlow endpoint | 50 MB audio file | No | No | No | No |
+| SiliconFlow `FunAudioLLM/SenseVoiceSmall` | multipart | dedicated SiliconFlow endpoint | 50 MB audio file per upload | Yes | No | No | No |
 | OpenAI-compatible presets and custom endpoints | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
 
-Long-audio chunking currently applies only to Alibaba Bailian `qwen3-asr-flash`. Chunked transcripts include segment headings such as `### Segment 01（00:00-03:00）` so you can match text back to the original recording. If local browser audio decoding fails, Echo Notes writes a failed transcript with the reason.
+Long-audio chunking currently applies to Alibaba Bailian `qwen3-asr-flash` and SiliconFlow `FunAudioLLM/SenseVoiceSmall`. Chunked transcripts include segment headings such as `## Segment 01（00:00-03:00）` so you can match text back to the original recording. If local browser audio decoding fails, Echo Notes writes a failed transcript with the reason.
 
 ## Configure a Transcription Provider
 
@@ -359,7 +359,7 @@ npm run build
 
 - Speaker diarization is not supported.
 - Timestamped transcript segments are not supported.
-- Universal large-file chunking across all providers is not supported yet. The shared AudioChunkPipeline core exists, but provider coverage currently applies only to Alibaba Bailian `qwen3-asr-flash`.
+- Universal large-file chunking across all providers is not supported yet. The shared AudioChunkPipeline core currently covers Alibaba Bailian `qwen3-asr-flash` and SiliconFlow `FunAudioLLM/SenseVoiceSmall`.
 - Local Whisper is not supported.
 - AI analysis does not yet support long-text chunking.
 - Task Center is currently an in-memory status panel. Persistent queues, pause/cancel controls, and restart-safe resume are not supported yet.
