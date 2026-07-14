@@ -9,6 +9,7 @@ import {
 	type ProviderDiagnosticItem,
 	type ProviderDiagnosticSeverity
 } from "../providers/provider-diagnostics";
+import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
@@ -17,6 +18,7 @@ import {
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
+	TRANSCRIPTION_LANGUAGE_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
 	isAnalysisProviderId,
@@ -89,7 +91,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("API Key")
-			.setDesc("用于调用当前服务商的 API Key，会保存到 Obsidian SecretStorage。")
+			.setDesc("用于调用当前服务商的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage，切换 Provider 不会复用或发送其他服务商的密钥。")
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
@@ -127,17 +129,48 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName("Language")
-			.setDesc("转写语言。保持 auto 表示由 Provider 自动识别。")
-			.addText((text) =>
-				text
-					.setPlaceholder("auto")
-					.setValue(this.plugin.settings.language)
+			.setName("默认转写语言")
+			.setDesc(`${this.getTranscriptionLanguageDescription()} 如需 cmn、yue、fr、de 等其他代码，请使用下方自定义语言代码。`)
+			.addDropdown((dropdown) => {
+				for (const [value, label] of Object.entries(TRANSCRIPTION_LANGUAGE_LABELS)) {
+					dropdown.addOption(value, label);
+				}
+				const currentLanguage = this.plugin.settings.language || "auto";
+				if (!Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, currentLanguage)) {
+					dropdown.addOption(currentLanguage, `自定义：${currentLanguage}`);
+				}
+				return dropdown
+					.setValue(currentLanguage)
 					.onChange(async (value) => {
-						this.plugin.settings.language = value.trim() || "auto";
+						this.plugin.settings.language = value || "auto";
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("自定义语言代码")
+			.setDesc("可填写当前 Provider 支持的任意语言代码。保存后会覆盖上方预设；清空不会改变当前语言。")
+			.addText((text) => {
+				const currentLanguage = this.plugin.settings.language;
+				const customLanguage = Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, currentLanguage)
+					? ""
+					: currentLanguage;
+				let draftValue = customLanguage;
+				text
+					.setPlaceholder("例如 cmn、yue、fr")
+					.setValue(customLanguage)
+					.onChange((value) => {
+						draftValue = value;
+					});
+				text.inputEl.addEventListener("blur", () => {
+					const value = draftValue.trim();
+					if (!value || value === this.plugin.settings.language) {
+						return;
+					}
+					this.plugin.settings.language = value;
+					void this.plugin.saveSettings().then(() => this.refreshSettings());
+				});
+			});
 
 		this.renderProviderDiagnostics(containerEl);
 
@@ -229,7 +262,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别 Markdown 音频链接")
-			.setDesc("监听笔记变更，发现新增音频链接后自动转写并补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
+			.setDesc("监听笔记变更，发现新增音频链接后将音频后台上传到当前转写 Provider，并自动生成转写稿和补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioLink)
@@ -241,7 +274,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别新音频文件")
-			.setDesc("监听 Vault 新增音频文件，自动生成 transcript，不回写来源笔记。")
+			.setDesc("监听 Vault 新增音频文件，并在后台上传到当前转写 Provider 以自动生成 transcript；该模式没有来源笔记隐私标记，也不会回写来源笔记。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioCreated)
@@ -290,8 +323,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderHotkeySetting(
 			containerEl,
 			"Obsidian 核心插件录音机开启快捷键",
-			"直接修改 Obsidian 核心命令 audio-recorder:start 的快捷键。",
-			"Ctrl+L",
+			"直接修改 Obsidian 核心命令 audio-recorder:start 的快捷键。Echo Notes 不预设快捷键，避免覆盖已有操作。",
+			"例如 Ctrl+L",
 			this.plugin.getOfficialAudioRecorderStartHotkey(),
 			(hotkey) => this.plugin.setOfficialAudioRecorderStartHotkey(hotkey)
 		);
@@ -299,8 +332,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderHotkeySetting(
 			containerEl,
 			"Obsidian 核心插件录音机关闭快捷键",
-			"直接修改 Obsidian 核心命令 audio-recorder:stop 的快捷键。",
-			"Ctrl+S",
+			"直接修改 Obsidian 核心命令 audio-recorder:stop 的快捷键。Echo Notes 不预设快捷键，避免覆盖已有操作。",
+			"例如 Ctrl+S",
 			this.plugin.getOfficialAudioRecorderStopHotkey(),
 			(hotkey) => this.plugin.setOfficialAudioRecorderStopHotkey(hotkey)
 		);
@@ -308,8 +341,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderHotkeySetting(
 			containerEl,
 			"转写当前笔记全部音频快捷键",
-			"触发 Echo Notes: Transcribe all audio files in current note。清空输入可不设置默认快捷键。",
-			"Ctrl+Z",
+			"触发 Echo Notes: Transcribe all audio files in current note。默认留空，请选择不与撤销等系统操作冲突的组合。",
+			"例如 Mod+Shift+T",
 			this.plugin.settings.transcribeAllAudioHotkey,
 			async (hotkey) => {
 				this.plugin.settings.transcribeAllAudioHotkey = hotkey;
@@ -398,7 +431,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 API Key")
-			.setDesc("用于调用当前分析 Provider 的 API Key，会独立保存到 Obsidian SecretStorage。")
+			.setDesc("用于调用当前分析 Provider 的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage。")
 			.addText((text) => {
 				text.inputEl.type = "password";
 				text
@@ -434,6 +467,46 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		new Setting(containerEl)
+			.setName("分析配置自检")
+			.setDesc("本地检查分析 API Key、Base URL、HTTPS 和模型；不会发送转写稿，也不会调用 Provider。")
+			.addButton((button) =>
+				button.setButtonText("检查分析配置").onClick(() => {
+					const result = diagnoseAnalysisProviderSettings(this.plugin.settings, this.plugin.getAnalysisApiKey());
+					new ProviderDiagnosticsModal(this.app, result.providerLabel, result.canAttemptAnalysis, result.items).open();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("长文本分块分析")
+			.setDesc("超过分块字符数时，先逐块提取，再汇总为一份去重后的最终纪要；会产生多次模型调用。")
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.analysisLongTextEnabled).onChange(async (value) => {
+					this.plugin.settings.analysisLongTextEnabled = value;
+					await this.plugin.saveSettings();
+					this.refreshSettings();
+				})
+			);
+
+		if (this.plugin.settings.analysisLongTextEnabled) {
+			new Setting(containerEl)
+				.setName("分析分块字符数")
+				.setDesc("范围 4,000～100,000。默认 24,000；值越小兼容性越高，但调用次数和成本越高。")
+				.addText((text) =>
+					text
+						.setPlaceholder("24000")
+						.setValue(String(this.plugin.settings.analysisChunkCharacters))
+						.onChange(async (value) => {
+							const parsed = Number(value);
+							if (!Number.isFinite(parsed)) {
+								return;
+							}
+							this.plugin.settings.analysisChunkCharacters = Math.min(100000, Math.max(4000, Math.round(parsed)));
+							await this.plugin.saveSettings();
+						})
+				);
+		}
 
 		new Setting(containerEl)
 			.setName("AI 分析前脱敏 transcript")
@@ -652,6 +725,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			default:
 				return "该服务商的基础地址。新增服务商默认按 OpenAI-compatible 音频转写接口调用 {Base URL}/audio/transcriptions。";
 		}
+	}
+
+	private getTranscriptionLanguageDescription(): string {
+		const capability = getTranscriptionProviderCapability(this.plugin.settings.provider);
+		if (!capability.supportsLanguage) {
+			return "默认 ASR 转写语言。当前 Provider 不支持语言参数，此设置不会传给 Provider，仍由模型自动识别。";
+		}
+
+		return "默认 ASR 转写语言。支持语言参数的 Provider 会随请求发送该值；auto 表示由 Provider 自动识别。";
 	}
 
 	private renderProviderSignup(containerEl: HTMLElement): void {

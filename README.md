@@ -53,10 +53,11 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 
 ## Features
 
-- Configure a transcription provider, API key, base URL, model, and language in Obsidian settings.
+- Configure a transcription provider, API key, base URL, model, and default transcription language in Obsidian settings.
 - Transcribe the selected audio link in the current note.
 - Scan and transcribe all supported audio links in the current note.
 - Generate a Markdown transcript file with source metadata.
+- Protect user edits and AI analysis during subsequent progress updates or retranscription by replacing only the Echo Notes managed transcript block. Existing legacy transcripts are backed up once before migration to the managed format.
 - Insert a transcript link below the source audio reference.
 - Skip reusable existing transcripts and insert missing transcript links; reuse requires matching source audio path, size, mtime, transcription provider, model, and `status: done`.
 - Avoid transcript filename collisions in a custom output folder by adding a stable source-path hash to generated transcript filenames.
@@ -71,6 +72,8 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Analyze transcript Markdown files with a separate AI model using built-in general, learning, product, and role-based work templates.
 - Run AI analysis in the background and write the result back into the matching transcript.
 - Optionally redact common sensitive fields before sending transcript text to the AI analysis provider.
+- Run a local AI analysis configuration check for API key, Base URL, HTTPS, and model before sending transcript text.
+- Split long transcripts into configurable chunks, analyze each chunk in order, and run a final synthesis pass that deduplicates conclusions, actions, risks, and open questions.
 - Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose one or more AI analysis templates from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a name, version, recognition keywords, system prompt, and custom prompt.
@@ -82,13 +85,13 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 
 ## Providers
 
-Implemented transcription providers:
+Transcription provider presets:
 
 - 【免费】硅基流动（SiliconFlow） with `FunAudioLLM/SenseVoiceSmall`
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
 - OpenAI（OpenAI） with OpenAI-compatible audio transcription
 - Groq（Groq） with OpenAI-compatible audio transcription
-- Ollama, Ollama Open WebUI, Google Gemini, OpenRouter, LM Studio, 302.AI, Anthropic, Mistral AI, Together AI, Fireworks AI, Perplexity AI, DeepSeek, xAI, Novita AI, DeepInfra, SambaNova, Cerebras, and Z.AI as OpenAI-compatible transcription presets
+- Ollama, Ollama Open WebUI, Google Gemini, OpenRouter, LM Studio, 302.AI, Anthropic, Mistral AI, Together AI, Fireworks AI, Perplexity AI, DeepSeek, xAI, Novita AI, DeepInfra, SambaNova, Cerebras, and Z.AI as provider-dependent OpenAI-compatible presets. These presets work only when the configured service actually implements `/audio/transcriptions`.
 - 自定义兼容接口（Custom OpenAI-compatible） for custom `/audio/transcriptions` endpoints
 
 Provider defaults can be changed in settings. The settings tab also shows a capability summary for the selected transcription provider, including upload mode, endpoint shape, size limit, chunking support, language parameter support, timestamp support, and speaker diarization support.
@@ -108,7 +111,7 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 - AI analysis default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - Custom OpenAI-compatible endpoint: user configured
 
-Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately with Obsidian `SecretStorage`. Transcript files and inline AI analysis results are written inside your Obsidian vault.
+Transcription uploads the selected audio file to the configured transcription provider. AI analysis uploads the transcript text to the configured analysis provider. Transcription and analysis API keys are stored separately per Provider with Obsidian `SecretStorage`, so switching providers does not reuse another provider's key. Transcript files and inline AI analysis results are written inside your Obsidian vault.
 
 If "Confirm before manual transcription upload" is enabled in settings, Echo Notes shows a confirmation dialog before manual transcription uploads. The dialog lists the provider, Base URL, model, file size, and HTTP risk warnings. Automation skips uploads while this confirmation mode is enabled so audio is not sent in the background without user confirmation.
 
@@ -150,6 +153,8 @@ Capability matrix:
 
 Long-audio chunking currently applies to Alibaba Bailian `qwen3-asr-flash` and SiliconFlow `FunAudioLLM/SenseVoiceSmall`. Chunked transcripts include segment headings such as `## Segment 01（00:00-03:00）` so you can match text back to the original recording. If local browser audio decoding fails, Echo Notes writes a failed transcript with the reason.
 
+Default transcription language is sent only to providers that support a language parameter, such as Alibaba Bailian and OpenAI-compatible endpoints. SiliconFlow's official transcription API documents only `file` and `model`, so Echo Notes does not send a non-standard language field to SiliconFlow; that provider still auto-detects the audio language.
+
 ## Configure a Transcription Provider
 
 1. Open Obsidian settings.
@@ -157,30 +162,30 @@ Long-audio chunking currently applies to Alibaba Bailian `qwen3-asr-flash` and S
 3. Choose a transcription provider.
 4. Confirm or edit Base URL and Model.
 5. Enter the provider API key.
-6. Keep Language as `auto`, or set a provider-supported language code.
+6. Choose the default transcription language. `zh` is the default for providers that support language parameters; SiliconFlow keeps auto-detection.
 7. Choose the copy language for inserted links and generated template labels.
 
 Recommended defaults:
 
-| Provider | Base URL | Model |
-| --- | --- | --- |
-| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` |
-| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` |
-| OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` |
-| Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` |
-| 自定义兼容接口（Custom OpenAI-compatible） | your endpoint | `whisper-1` |
+| Provider | Base URL | Model | Default language |
+| --- | --- | --- | --- |
+| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
+| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
+| OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` | `zh` |
+| Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` | `zh` |
+| 自定义兼容接口（Custom OpenAI-compatible） | your endpoint | `whisper-1` | `zh` |
 
 ## Configure the Obsidian Core Plugin Audio Recorder
 
 Echo Notes relies on Obsidian's `Audio recorder` core plugin to create recording files. You can enable or disable that core plugin from the "Obsidian core plugin audio recorder" section at the top of Echo Notes settings.
 
-That section can save hotkeys directly to Obsidian's core Audio recorder commands:
+That section can save hotkeys directly to Obsidian's core Audio recorder commands. Echo Notes does not assign default hotkeys, so it will not override common actions such as Save or Undo:
 
-| Action | Command | Default hotkey |
+| Action | Command | Hotkey |
 | --- | --- | --- |
-| Start the Obsidian core plugin audio recorder | `audio-recorder:start` | `Ctrl+L` |
-| Stop the Obsidian core plugin audio recorder | `audio-recorder:stop` | `Ctrl+S` |
-| Transcribe all audio files in the current note | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
+| Start the Obsidian core plugin audio recorder | `audio-recorder:start` | User configured |
+| Stop the Obsidian core plugin audio recorder | `audio-recorder:stop` | User configured |
+| Transcribe all audio files in the current note | `Echo Notes: Transcribe all audio files in current note` | User configured |
 
 Echo Notes no longer registers proxy commands for starting or stopping the core recorder. When you click Save, it updates Obsidian's hotkey settings for `audio-recorder:start` or `audio-recorder:stop`; if your Obsidian version does not expose the internal hotkey manager, configure those core commands manually in Obsidian Hotkeys.
 
@@ -191,9 +196,11 @@ Echo Notes no longer registers proxy commands for starting or stopping the core 
 3. Keep the default provider as `Alibaba Bailian`, or choose another provider that supports OpenAI-compatible Chat Completions.
 4. Keep Base URL as `https://dashscope.aliyuncs.com/compatible-mode/v1` and Model as `deepseek-v4-pro`, or edit them. Switching providers fills that provider's editable default Base URL and model.
 5. Enter the separate analysis API key.
-6. Optionally enable transcript redaction before AI analysis if the transcript may contain sensitive personal, customer, company, address, or amount fields.
-7. Choose the default analysis template used when no keyword is found near the audio link.
-8. Edit, enable, disable, restore, or add templates in the analysis template settings.
+6. Run "Check analysis configuration" to validate the API key, Base URL, HTTPS, and model locally.
+7. Keep long-text chunking enabled for large meetings or interviews. The default chunk size is 24,000 characters and can be adjusted between 4,000 and 100,000.
+8. Optionally enable transcript redaction before AI analysis if the transcript may contain sensitive personal, customer, company, address, or amount fields.
+9. Choose the default analysis template used when no keyword is found near the audio link.
+10. Edit, enable, disable, restore, or add templates in the analysis template settings.
 
 Built-in templates:
 
@@ -345,6 +352,8 @@ npm test
 npm run build
 ```
 
+Development requires Node.js 22 or newer.
+
 ## Install for Local Testing
 
 1. Use a dedicated test vault.
@@ -361,5 +370,5 @@ npm run build
 - Timestamped transcript segments are not supported.
 - Universal large-file chunking across all providers is not supported yet. The shared AudioChunkPipeline core currently covers Alibaba Bailian `qwen3-asr-flash` and SiliconFlow `FunAudioLLM/SenseVoiceSmall`.
 - Local Whisper is not supported.
-- AI analysis does not yet support long-text chunking.
+- Long-text analysis uses sequential chunk extraction plus a final synthesis call. It increases model calls and cost, and does not yet resume from a partially completed chunk sequence after restart.
 - Task Center is currently an in-memory status panel. Persistent queues, pause/cancel controls, and restart-safe resume are not supported yet.

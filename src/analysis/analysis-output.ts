@@ -5,6 +5,7 @@ import {
 	type CopyLanguage
 } from "../settings/settings";
 import type { AnalysisResult } from "./analysis-provider";
+import { TRANSCRIPT_MANAGED_START } from "../transcript/transcript-content";
 
 export const ANALYSIS_LINKS_START = "<!-- echo-notes-analysis-links:start -->";
 export const ANALYSIS_LINKS_END = "<!-- echo-notes-analysis-links:end -->";
@@ -117,7 +118,9 @@ function getTranscriptAnalysisItemEnd(templateId: AnalysisTemplateId): string {
 
 function insertAnalysisSection(content: string, section: string, insertBeforeHeading?: string | string[]): string {
 	const trimmedSection = section.trim();
-	const insertionIndex = insertBeforeHeading ? findHeadingIndex(content, insertBeforeHeading) : -1;
+	const managedSectionIndex = content.indexOf(TRANSCRIPT_MANAGED_START);
+	const headingIndex = insertBeforeHeading ? findHeadingIndex(content, insertBeforeHeading) : -1;
+	const insertionIndex = managedSectionIndex !== -1 ? managedSectionIndex : headingIndex;
 	if (insertionIndex === -1) {
 		const trimmedContent = content.trimEnd();
 		return trimmedContent ? `${trimmedContent}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;

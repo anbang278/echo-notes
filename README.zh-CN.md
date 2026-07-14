@@ -53,10 +53,11 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 ## 功能
 
-- 在 Obsidian 设置页配置转写服务商、API Key、Base URL、模型和语言。
+- 在 Obsidian 设置页配置转写服务商、API Key、Base URL、模型和默认转写语言。
 - 转写当前笔记中选中的音频链接。
 - 扫描并转写当前笔记中的全部支持音频链接。
 - 生成带 source metadata 的 Markdown 转写稿。
+- 后续分段更新或重新转写只替换 Echo Notes 托管区块，保留人工批注、AI 分析和自定义 frontmatter；旧版转写稿首次迁移前会自动创建一次备份。
 - 在原始音频引用下方插入转写稿链接。
 - 跳过可复用的已存在转写稿，并补充缺失链接；复用要求源音频路径、大小、mtime、转写 Provider、模型和 `status: done` 全部匹配。
 - 自定义输出目录下会为 transcript 文件名追加稳定的源路径短 hash，避免不同目录的同名音频互相覆盖。
@@ -66,9 +67,11 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 使用共享 AudioChunkPipeline 核心处理长音频准备、分段进度事件、逐段转写、文本合并、trace id 汇总、raw segment 收集，并释放已完成分段的音频 buffer。
 - 可从 Ribbon 或命令面板打开内存型任务中心，查看转写和 AI 分析状态、失败原因、耗时、Provider、模型、输出文件，并重试失败任务。
 - 可选开启手动上传前确认：上传前预览 Provider、Base URL、模型、文件大小和 HTTP 风险；开启后自动化会跳过需要确认的上传。
-- 在设置页控制 Obsidian 核心插件录音机开关，并为其代理命令配置默认快捷键。
+- 在设置页控制 Obsidian 核心插件录音机开关，并按需配置核心命令快捷键；插件不预设快捷键。
 - 使用独立 AI 分析模型，将转写稿生成通用、学习、产品或角色化工作场景纪要。
 - AI 纪要分析在后台异步执行，完成后直接写回对应转写稿。
+- 可在发送转写稿前本地检查分析 API Key、Base URL、HTTPS 和模型配置，不调用 Provider。
+- 长转写稿可按可配置字符数分块，逐块提取后再进行最终汇总，合并重复结论、行动项、风险和待确认问题。
 - 可对当前打开的转写稿手动选择一个已启用 AI 分析模板并生成纪要。
 - AI 纪要分析会优先读取来源笔记 frontmatter 指定的模板，其次读取来源笔记 tags，再根据录音链接上下三行的识别关键字自动选择分析模板，未命中时使用默认模板。
 - 支持配置分析模板名称、识别关键字、系统提示词和自定义提示词。
@@ -78,13 +81,13 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 ## 服务商
 
-已实现的转写服务商：
+转写服务商预设：
 
-- 硅基流动（SiliconFlow）：默认模型 `TeleAI/TeleSpeechASR`
+- 【免费】硅基流动（SiliconFlow）：默认模型 `FunAudioLLM/SenseVoiceSmall`
 - 阿里百炼（Alibaba Bailian）：默认模型 `qwen3-asr-flash`
 - OpenAI（OpenAI）：使用 OpenAI-compatible 音频转写接口
 - Groq（Groq）：使用 OpenAI-compatible 音频转写接口
-- Ollama、Ollama Open WebUI、Google Gemini、OpenRouter、LM Studio、302.AI、Anthropic、Mistral AI、Together AI、Fireworks AI、Perplexity AI、DeepSeek、xAI、Novita AI、DeepInfra、SambaNova、Cerebras、Z.AI：按 OpenAI-compatible 音频转写接口预设
+- Ollama、Ollama Open WebUI、Google Gemini、OpenRouter、LM Studio、302.AI、Anthropic、Mistral AI、Together AI、Fireworks AI、Perplexity AI、DeepSeek、xAI、Novita AI、DeepInfra、SambaNova、Cerebras、Z.AI：Provider-dependent 的 OpenAI-compatible 预设，仅在所配置服务真实实现 `/audio/transcriptions` 时可用
 - 自定义兼容接口（Custom OpenAI-compatible）：用于自定义 `/audio/transcriptions` 端点
 
 服务商的默认 Base URL 和模型都可以在设置页修改。设置页也会展示当前转写 Provider 的能力摘要，包括上传方式、接口形态、大小限制、是否支持长音频分段、语言参数、时间戳和说话人分离。
@@ -104,7 +107,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - 自定义兼容接口：由用户自行配置
 
-转写会把所选音频上传到你配置的转写服务商。AI 纪要分析会把转写稿文本上传到你配置的分析服务商。转写 API Key 和分析 API Key 都使用 Obsidian `SecretStorage` 独立保存。转写稿和写回的 AI 纪要内容会保存在你的 Obsidian Vault。
+转写会把所选音频上传到你配置的转写服务商。AI 纪要分析会把转写稿文本上传到你配置的分析服务商。转写 API Key 和分析 API Key 都会按 Provider 隔离保存到 Obsidian `SecretStorage`，切换 Provider 不会复用其他服务商的密钥。转写稿和写回的 AI 纪要内容会保存在你的 Obsidian Vault。
 
 如果在设置页开启“手动转写前确认上传”，Echo Notes 会在手动转写上传前显示确认弹窗，列出 Provider、Base URL、模型、文件大小和 HTTP 风险提示。开启该模式后，自动化转写会跳过需要确认的上传，避免后台未经确认发送音频。
 
@@ -120,7 +123,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 
 服务商限制：
 
-- 硅基流动：超过 50 MB 的文件会在上传前被阻止。
+- 硅基流动：不超过 50 MB 的文件直接上传；更大的文件会先在本地解码并转换为约 10 分钟一段的 16 kHz mono WAV，再按顺序逐段转写。
 - 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
 - OpenAI-compatible 服务商：超过 25 MB 的文件会在上传前被阻止。
 
@@ -129,10 +132,12 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 | Provider 类型 | 上传方式 | 接口形态 | 限制 | Echo Notes 分段 | 语言参数 | 时间戳 | 说话人分离 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
-| 硅基流动 `TeleAI/TeleSpeechASR` | multipart | SiliconFlow 专用端点 | 音频文件 50 MB | 暂不支持 | 暂不支持 | 暂不支持 | 暂不支持 |
+| 硅基流动 `FunAudioLLM/SenseVoiceSmall` | multipart | SiliconFlow 专用端点 | 单段音频 50 MB | 支持 | 暂不支持 | 暂不支持 | 暂不支持 |
 | OpenAI-compatible 预设和自定义端点 | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
-长音频分段目前只适用于阿里百炼 `qwen3-asr-flash`。分段 transcript 会保留类似 `### 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。如果本地浏览器音频解码失败，Echo Notes 会写入带失败原因的 transcript。
+长音频分段目前适用于阿里百炼 `qwen3-asr-flash` 和硅基流动 `FunAudioLLM/SenseVoiceSmall`。分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。如果本地浏览器音频解码失败，Echo Notes 会写入带失败原因的 transcript。
+
+默认转写语言只会发送给支持语言参数的 Provider，例如阿里百炼和 OpenAI-compatible 接口。SiliconFlow 官方转写接口只声明 `file` 和 `model`，因此 Echo Notes 不会向它发送非标准语言字段，仍由模型自动识别。
 
 ## 配置转写服务商
 
@@ -141,32 +146,32 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 3. 选择转写服务商。
 4. 确认或修改 Base URL 与 Model。
 5. 输入该服务商的 API Key。
-6. Language 可以保持 `auto`，也可以填写服务商支持的语言代码。
+6. 选择默认转写语言。支持语言参数的 Provider 默认使用 `zh`；SiliconFlow 保持自动识别。
 7. 在“文案语言”中选择中文或英文，控制回写链接和生成文稿中的固定文案。
 
 推荐默认值：
 
-| 服务商 | Base URL | Model |
-| --- | --- | --- |
-| 硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `TeleAI/TeleSpeechASR` |
-| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` |
-| OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` |
-| Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` |
-| 自定义兼容接口（Custom OpenAI-compatible） | 你的接口地址 | `whisper-1` |
+| 服务商 | Base URL | Model | 默认语言 |
+| --- | --- | --- | --- |
+| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
+| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
+| OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` | `zh` |
+| Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` | `zh` |
+| 自定义兼容接口（Custom OpenAI-compatible） | 你的接口地址 | `whisper-1` | `zh` |
 
 ## 配置 Obsidian 核心插件录音机
 
 Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你可以在 Echo Notes 设置页顶部的“Obsidian 核心插件录音机”区域开启或关闭该 Core plugin。
 
-该区域还会注册 Echo Notes 代理命令，并为代理命令设置默认快捷键：
+该区域可以直接保存 Obsidian 核心录音机命令的快捷键。Echo Notes 不预设快捷键，避免覆盖保存、撤销等常用操作：
 
-| 动作 | 命令 | 默认快捷键 |
+| 动作 | 命令 | 快捷键 |
 | --- | --- | --- |
-| 开始 Obsidian 核心插件录音机录音 | `Echo Notes: Start Obsidian core plugin audio recorder` | `Ctrl+L` |
-| 停止 Obsidian 核心插件录音机录音 | `Echo Notes: Stop Obsidian core plugin audio recorder` | `Ctrl+S` |
-| 转写当前笔记全部音频 | `Echo Notes: Transcribe all audio files in current note` | `Ctrl+Z` |
+| 开始 Obsidian 核心插件录音机录音 | `audio-recorder:start` | 用户自行配置 |
+| 停止 Obsidian 核心插件录音机录音 | `audio-recorder:stop` | 用户自行配置 |
+| 转写当前笔记全部音频 | `Echo Notes: Transcribe all audio files in current note` | 用户自行配置 |
 
-这些快捷键属于 Echo Notes 命令，不会直接改写 Obsidian 核心插件 `audio-recorder:start`、`audio-recorder:stop` 命令的用户热键配置。如果你已经在 Obsidian Hotkeys 中手动设置过同名 Echo Notes 命令，Obsidian 会优先使用你的手动配置。如果默认快捷键与你的库或系统快捷键冲突，也可以在 Echo Notes 设置页清空对应快捷键。
+保存录音机快捷键时，Echo Notes 会直接更新 Obsidian 核心插件 `audio-recorder:start`、`audio-recorder:stop` 命令的用户热键配置；如果当前 Obsidian 版本未暴露内部 hotkey manager，请在 Obsidian Hotkeys 中手动配置。
 
 ## 配置 AI 纪要分析
 
@@ -175,8 +180,10 @@ Echo Notes 依赖 Obsidian `Audio recorder` Core plugin 生成录音文件。你
 3. 分析 Base URL 默认是 `https://dashscope.aliyuncs.com/compatible-mode/v1`。
 4. 分析模型默认是 `deepseek-v4-pro`。切换分析 Provider 时，会自动填入该服务商可编辑的默认 Base URL 和模型。
 5. 输入独立的分析 API Key。
-6. 设置默认分析模板。录音链接上下三行未命中关键字时，会使用该模板。
-7. 在“分析模板”中编辑、启用、禁用、恢复或新增模板。
+6. 执行“检查分析配置”，本地验证 API Key、Base URL、HTTPS 和模型。
+7. 长会议或访谈建议保持“长文本分块分析”开启。默认每块 24,000 字符，可在 4,000～100,000 之间调整。
+8. 设置默认分析模板。录音链接上下三行未命中关键字时，会使用该模板。
+9. 在“分析模板”中编辑、启用、禁用、恢复或新增模板。
 
 内置模板：
 
@@ -303,6 +310,8 @@ npm test
 npm run build
 ```
 
+开发环境要求 Node.js 22 或更高版本。
+
 ## 本地测试安装
 
 1. 使用独立测试 Vault。
@@ -319,5 +328,5 @@ npm run build
 - 不支持带时间戳的分段转写。
 - 暂不支持所有 Provider 通用的大文件自动切片；共享 AudioChunkPipeline 核心已存在，但 Provider 覆盖目前仍只适用于阿里百炼 `qwen3-asr-flash`。
 - 不支持本地 Whisper。
-- AI 纪要分析暂不支持长文本分块。
+- 长文本分析采用“逐块提取 + 最终汇总”，会增加模型调用次数和成本；Obsidian 重启后暂不支持从已完成分块继续。
 - 任务中心目前是内存型状态面板，暂不支持持久化队列、暂停/取消和重启后续跑。

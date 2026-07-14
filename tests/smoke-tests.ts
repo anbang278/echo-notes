@@ -49,6 +49,9 @@ import {
 } from "../src/providers/transcription-provider";
 import { redactAnalysisInputText } from "../src/security/content-redaction";
 import { sanitizeSensitiveText } from "../src/security/redaction";
+import { getAnalysisApiKeySecretId, getTranscriptionApiKeySecretId } from "../src/security/provider-secrets";
+import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
+import { splitAnalysisText, estimateAnalysisTextTokens } from "../src/analysis/analysis-chunking";
 import {
 	buildTranscriptionUploadPreview,
 	formatFileSize,
@@ -68,7 +71,8 @@ import {
 	normalizeEchoNotesSettings,
 	parseHotkeyInput,
 	PROVIDER_DEFAULTS,
-	PROVIDER_LABELS
+	PROVIDER_LABELS,
+	TRANSCRIPTION_LANGUAGE_LABELS
 } from "../src/settings/settings";
 import {
 	renderFailedTranscriptTemplate,
@@ -85,6 +89,12 @@ import {
 	createSourceAudioMetadata,
 	isReusableTranscriptForAudio
 } from "../src/transcript/transcript-source-metadata";
+import {
+	TRANSCRIPT_MANAGED_END,
+	TRANSCRIPT_MANAGED_START,
+	createTranscriptBackupPath,
+	mergeManagedTranscriptDocument
+} from "../src/transcript/transcript-content";
 import {
 	markTranscriptAnalysisDone,
 	markTranscriptAnalysisFailed,
@@ -308,6 +318,8 @@ const chineseTranscript = renderTranscriptTemplate({
 	copyLanguage: "zh"
 });
 
+assert.match(chineseTranscript, new RegExp(TRANSCRIPT_MANAGED_START));
+assert.match(chineseTranscript, new RegExp(TRANSCRIPT_MANAGED_END));
 assert.match(chineseTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(chineseTranscript, /原始录音：!\[\[Recording 20260531001942\]\]/);
 assert.match(chineseTranscript, /来源笔记：\[\[Daily\]\]/);
@@ -339,6 +351,66 @@ assert.equal(
 		model: "FunAudioLLM/SenseVoiceSmall"
 	}),
 	false
+);
+
+const existingManagedTranscript = [
+	"---",
+	"type: audio-transcript",
+	"provider: \"old-provider\"",
+	"model: \"old-model\"",
+	"status: done",
+	"custom_user_field: \"keep-me\"",
+	"analysis_status: \"analysis_done\"",
+	"---",
+	"",
+	TRANSCRIPT_ANALYSIS_START,
+	"# 纪要分析 Recording",
+	"",
+	"已有分析内容",
+	TRANSCRIPT_ANALYSIS_END,
+	"",
+	TRANSCRIPT_MANAGED_START,
+	"# 转写稿 Recording",
+	"",
+	"旧转写正文",
+	TRANSCRIPT_MANAGED_END,
+	"",
+	"用户手工批注"
+].join("\n");
+const nextManagedTranscript = [
+	"---",
+	"type: audio-transcript",
+	"provider: \"new-provider\"",
+	"model: \"new-model\"",
+	"status: transcribing",
+	"---",
+	"",
+	TRANSCRIPT_MANAGED_START,
+	"# 转写稿 Recording",
+	"",
+	"新转写正文",
+	TRANSCRIPT_MANAGED_END,
+	""
+].join("\n");
+const mergedManagedTranscript = mergeManagedTranscriptDocument(existingManagedTranscript, nextManagedTranscript);
+assert.ok(mergedManagedTranscript);
+assert.match(mergedManagedTranscript, /provider: "new-provider"/);
+assert.match(mergedManagedTranscript, /model: "new-model"/);
+assert.match(mergedManagedTranscript, /status: transcribing/);
+assert.match(mergedManagedTranscript, /custom_user_field: "keep-me"/);
+assert.match(mergedManagedTranscript, /analysis_status: "analysis_done"/);
+assert.match(mergedManagedTranscript, /已有分析内容/);
+assert.match(mergedManagedTranscript, /用户手工批注/);
+assert.match(mergedManagedTranscript, /新转写正文/);
+assert.doesNotMatch(mergedManagedTranscript, /旧转写正文/);
+assert.equal(mergeManagedTranscriptDocument("legacy transcript", nextManagedTranscript), null);
+assert.equal(
+	createTranscriptBackupPath("Folder/Meeting.transcript.md", "20260713-145810"),
+	"Folder/Meeting.transcript.backup-20260713-145810.md"
+);
+assert.equal(
+	createTranscriptBackupPath("Folder/Meeting.transcript.md", "20260713-145810", 2),
+	"Folder/Meeting.transcript.backup-20260713-145810-2.md"
 );
 
 const analysisPendingTranscript = markTranscriptAnalysisPending(chineseTranscript, {
@@ -664,9 +736,15 @@ assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(PROVIDER_L
 assert.equal(DEFAULT_SETTINGS.provider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.model, "qwen3-asr-flash");
+assert.equal(DEFAULT_SETTINGS.language, "zh");
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
+assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall");
+assert.equal(PROVIDER_DEFAULTS.siliconflow.language, "auto");
+assert.equal(PROVIDER_DEFAULTS.openai.language, "zh");
+assert.equal(PROVIDER_DEFAULTS["custom-openai-compatible"].language, "zh");
+assert.equal(TRANSCRIPTION_LANGUAGE_LABELS.zh, "中文（zh）");
 assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.analysisModel, "deepseek-v4-pro");
@@ -702,10 +780,60 @@ for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
 	assert.equal(capability.maxAudioBytes, 25 * 1024 * 1024);
 }
 const sensitiveErrorText = [
-	"Authorization: Bearer sk-testsecret123456",
-	'{"api_key":"sk-jsonsecret123456"}',
+	"Authorization: Bearer sk-exampletestsecret123456",
+	'{"api_key":"sk-examplejsonsecret123456"}',
 	"data:audio/wav;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
 ].join("\n");
+assert.equal(getTranscriptionApiKeySecretId("aliyun-bailian"), "echo-notes-transcription-api-key:aliyun-bailian");
+assert.equal(
+	getTranscriptionApiKeySecretId("custom-openai-compatible"),
+	"echo-notes-transcription-api-key:custom-openai-compatible"
+);
+assert.equal(getAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key:openai");
+const missingAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		analysisBaseUrl: "",
+		analysisModel: ""
+	},
+	""
+);
+assert.equal(missingAnalysisDiagnostics.canAttemptAnalysis, false);
+assert.ok(missingAnalysisDiagnostics.items.some((item) => item.severity === "error" && item.title === "分析 API Key 缺失"));
+assert.ok(missingAnalysisDiagnostics.items.some((item) => item.severity === "error" && item.title === "分析 Base URL 缺失"));
+assert.ok(missingAnalysisDiagnostics.items.some((item) => item.severity === "error" && item.title === "分析模型缺失"));
+const insecureAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		analysisProvider: "custom-openai-compatible",
+		analysisBaseUrl: "http://analysis.acme.cn/v1",
+		analysisModel: "custom-model"
+	},
+	"sk-valid"
+);
+assert.equal(insecureAnalysisDiagnostics.canAttemptAnalysis, false);
+assert.ok(insecureAnalysisDiagnostics.items.some((item) => item.severity === "error" && item.title === "分析地址使用未加密 HTTP"));
+const validAnalysisDiagnostics = diagnoseAnalysisProviderSettings(DEFAULT_SETTINGS, "sk-valid");
+assert.equal(validAnalysisDiagnostics.canAttemptAnalysis, true);
+const insecureTranscriptionDiagnostics = diagnoseTranscriptionProviderSettings(
+	{ ...DEFAULT_SETTINGS, baseUrl: "http://api.acme.cn/v1" },
+	"sk-valid"
+);
+assert.equal(insecureTranscriptionDiagnostics.canAttemptTranscription, false);
+assert.equal(DEFAULT_SETTINGS.analysisLongTextEnabled, true);
+assert.equal(DEFAULT_SETTINGS.analysisChunkCharacters, 24000);
+assert.equal(normalizeEchoNotesSettings({ analysisChunkCharacters: 1000 }).analysisChunkCharacters, 4000);
+assert.equal(normalizeEchoNotesSettings({ analysisChunkCharacters: 200000 }).analysisChunkCharacters, 100000);
+assert.equal(normalizeEchoNotesSettings({ analysisLongTextEnabled: false }).analysisLongTextEnabled, false);
+assert.equal(estimateAnalysisTextTokens("中文分析 text"), Math.ceil("中文分析 text".length / 2));
+const analysisChunks = splitAnalysisText(
+	["第一段内容".repeat(8), "第二段内容".repeat(8), "第三段内容".repeat(8)].join("\n\n"),
+	{ maxCharacters: 40, overlapCharacters: 8 }
+);
+assert.ok(analysisChunks.length >= 3);
+assert.deepEqual(analysisChunks.map((chunk) => chunk.index), analysisChunks.map((_chunk, index) => index + 1));
+assert.ok(analysisChunks.every((chunk) => chunk.total === analysisChunks.length));
+assert.ok(analysisChunks.every((chunk) => chunk.text.length <= 48));
 const sanitizedErrorText = sanitizeSensitiveText(sensitiveErrorText);
 assert.doesNotMatch(sanitizedErrorText, /testsecret/);
 assert.doesNotMatch(sanitizedErrorText, /jsonsecret/);
@@ -799,16 +927,35 @@ const warningProviderDiagnostics = diagnoseTranscriptionProviderSettings(
 );
 assert.equal(warningProviderDiagnostics.canAttemptTranscription, false);
 assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "error" && item.title === "Base URL 仍是示例地址"));
-assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "warning" && item.title === "Base URL 使用未加密 HTTP"));
+assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "error" && item.title === "Base URL 使用未加密 HTTP"));
 assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "info" && item.title === "模型不在推荐列表中"));
 assert.ok(warningProviderDiagnostics.items.some((item) => item.severity === "info" && item.title === "OpenAI-compatible 音频端点"));
 const validProviderDiagnostics = diagnoseTranscriptionProviderSettings(DEFAULT_SETTINGS, "sk-valid");
 assert.equal(validProviderDiagnostics.canAttemptTranscription, true);
 assert.equal(validProviderDiagnostics.providerLabel, PROVIDER_LABELS["aliyun-bailian"]);
 assert.equal(validProviderDiagnostics.items.some((item) => item.severity === "error"), false);
-assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "Ctrl+L");
-assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "Ctrl+S");
-assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "Ctrl+Z");
+const unsupportedLanguageDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		provider: "siliconflow",
+		baseUrl: PROVIDER_DEFAULTS.siliconflow.baseUrl,
+		model: PROVIDER_DEFAULTS.siliconflow.model,
+		language: "zh"
+	},
+	"sk-valid"
+);
+assert.equal(unsupportedLanguageDiagnostics.canAttemptTranscription, true);
+assert.ok(
+	unsupportedLanguageDiagnostics.items.some(
+		(item) =>
+			item.severity === "warning" &&
+			item.title === "当前 Provider 不支持语言参数" &&
+			/不会传给当前 Provider/.test(item.detail)
+	)
+);
+assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "");
+assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "");
+assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "");
 assert.deepEqual(parseHotkeyInput("Control + L"), { modifiers: ["Ctrl"], key: "L" });
 assert.deepEqual(parseHotkeyInput("Cmd+Shift+P"), { modifiers: ["Meta", "Shift"], key: "P" });
 assert.equal(parseHotkeyInput("not a hotkey"), undefined);
@@ -863,9 +1010,9 @@ assert.deepEqual(normalizedCustomTemplate?.recognitionKeywords, ["访谈纪要"]
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "autoAnalyzeAfterTranscription"), false);
 assert.equal(Object.prototype.hasOwnProperty.call(normalizedSettings, "promptForAnalysisTemplateOnTranscription"), false);
 assert.equal(normalizedSettings.confirmBeforeTranscription, false);
-assert.equal(formatHotkey(normalizedSettings.officialRecorderStartHotkey), "Ctrl+L");
-assert.equal(formatHotkey(normalizedSettings.officialRecorderStopHotkey), "Ctrl+S");
-assert.equal(formatHotkey(normalizedSettings.transcribeAllAudioHotkey), "Ctrl+Z");
+assert.equal(formatHotkey(normalizedSettings.officialRecorderStartHotkey), "");
+assert.equal(formatHotkey(normalizedSettings.officialRecorderStopHotkey), "");
+assert.equal(formatHotkey(normalizedSettings.transcribeAllAudioHotkey), "");
 const customHotkeySettings = normalizeEchoNotesSettings({
 	officialRecorderStartHotkey: "Control + L",
 	officialRecorderStopHotkey: "Cmd+Shift+P",
@@ -879,9 +1026,9 @@ const invalidHotkeySettings = normalizeEchoNotesSettings({
 	officialRecorderStopHotkey: { modifiers: ["Ctrl", "Bad"], key: "S" },
 	transcribeAllAudioHotkey: { modifiers: ["Ctrl"], key: "has space" }
 });
-assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStartHotkey), "Ctrl+L");
-assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStopHotkey), "Ctrl+S");
-assert.equal(formatHotkey(invalidHotkeySettings.transcribeAllAudioHotkey), "Ctrl+Z");
+assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStartHotkey), "");
+assert.equal(formatHotkey(invalidHotkeySettings.officialRecorderStopHotkey), "");
+assert.equal(formatHotkey(invalidHotkeySettings.transcribeAllAudioHotkey), "");
 assert.equal(normalizeEchoNotesSettings({ confirmBeforeTranscription: true }).confirmBeforeTranscription, true);
 const migratedDefaultTemplateSettings = normalizeEchoNotesSettings({ autoAnalysisTemplate: "study-notes" });
 assert.equal(migratedDefaultTemplateSettings.defaultAnalysisTemplateId, "study-notes");
@@ -923,7 +1070,8 @@ const invalidTranscriptionProviderSettings = normalizeEchoNotesSettings({
 assert.equal(invalidTranscriptionProviderSettings.provider, "aliyun-bailian");
 assert.equal(invalidTranscriptionProviderSettings.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(invalidTranscriptionProviderSettings.model, "qwen3-asr-flash");
-assert.equal(invalidTranscriptionProviderSettings.language, "auto");
+assert.equal(invalidTranscriptionProviderSettings.language, "zh");
+assert.equal(normalizeEchoNotesSettings({ provider: "aliyun-bailian", language: "cmn" }).language, "cmn");
 assert.equal(createTranscriptFileName("Projects/A/Meeting.m4a"), "Meeting.transcript.md");
 const hashedTranscriptA = createTranscriptFileName("Projects/A/Meeting.m4a", true);
 const hashedTranscriptB = createTranscriptFileName("Projects/B/Meeting.m4a", true);
@@ -1141,6 +1289,15 @@ assert.match(workAnalysisBlock, /^#### 细节$/m);
 assert.match(workAnalysisBlock, /```mermaid\n# code fence heading should stay unchanged\n```/);
 assert.doesNotMatch(workAnalysisBlock, /^# 工作纪要$/m);
 assert.doesNotMatch(workAnalysisBlock, /^## 摘要$/m);
+
+const transcriptWithManagedAnalysis = insertOrReplaceTranscriptAnalysis(
+	chineseTranscript,
+	workAnalysisBlock,
+	"work-minutes",
+	"纪要分析 Recording",
+	"转写稿 Recording"
+);
+assert.ok(transcriptWithManagedAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) < transcriptWithManagedAnalysis.indexOf(TRANSCRIPT_MANAGED_START));
 
 const transcriptWithFrontmatter = [
 	"---",

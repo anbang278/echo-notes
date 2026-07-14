@@ -26,6 +26,41 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 	}
 
 	async analyze(input: AnalysisInput): Promise<AnalysisResult> {
+		return this.requestAnalysis(input);
+	}
+
+	async analyzeChunk(input: AnalysisInput, chunkIndex: number, totalChunks: number): Promise<AnalysisResult> {
+		return this.requestAnalysis({
+			...input,
+			transcriptText: [
+				`这是长转写稿的第 ${chunkIndex}/${totalChunks} 个分块。`,
+				"请提取本分块中的事实、关键结论、行动项、风险、开放问题和重要原文；不要输出总览，不要补充其他分块的信息。",
+				"",
+				input.transcriptText
+			].join("\n")
+		});
+	}
+
+	async synthesizeChunks(input: AnalysisInput, chunkResults: AnalysisResult[]): Promise<AnalysisResult> {
+		const chunkText = chunkResults
+			.map((result, index) => `## 分块 ${index + 1}\n\n${result.text.slice(0, 12000)}`)
+			.join("\n\n");
+		const result = await this.requestAnalysis({
+			...input,
+			transcriptText: [
+				"以下内容是同一份长转写稿各分块的结构化提取结果。",
+				"请按原模板要求生成一份完整、去重、跨分块一致的最终纪要；合并重复行动项，保留冲突与待确认信息，不要提及分块处理过程。",
+				"",
+				chunkText
+			].join("\n")
+		});
+		return {
+			...result,
+			traceId: uniqueTraceIds([...chunkResults.map((chunk) => chunk.traceId), result.traceId])
+		};
+	}
+
+	private async requestAnalysis(input: AnalysisInput): Promise<AnalysisResult> {
 		const apiKey = this.apiKey.trim();
 		if (!apiKey) {
 			throw new AnalysisError("missing_api_key", `请先在 Echo Notes 设置中配置 ${this.name} 分析 API Key。`);
@@ -91,6 +126,11 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 			throw new AnalysisError("network_error", `${this.name} 分析 API 调用失败：${message}`);
 		}
 	}
+}
+
+function uniqueTraceIds(traceIds: Array<string | undefined>): string | undefined {
+	const values = Array.from(new Set(traceIds.map((value) => value?.trim()).filter((value): value is string => Boolean(value))));
+	return values.length > 0 ? values.join(", ") : undefined;
 }
 
 function readTraceId(headers: Record<string, string>): string | undefined {

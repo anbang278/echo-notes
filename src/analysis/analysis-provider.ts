@@ -21,6 +21,11 @@ export interface AnalysisProvider {
 	analyze(input: AnalysisInput): Promise<AnalysisResult>;
 }
 
+export interface ChunkedAnalysisProvider extends AnalysisProvider {
+	analyzeChunk(input: AnalysisInput, chunkIndex: number, totalChunks: number): Promise<AnalysisResult>;
+	synthesizeChunks(input: AnalysisInput, chunkResults: AnalysisResult[]): Promise<AnalysisResult>;
+}
+
 export type AnalysisErrorCode = "missing_api_key" | "api_error" | "invalid_response" | "network_error";
 
 export class AnalysisError extends Error {

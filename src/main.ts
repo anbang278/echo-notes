@@ -1,6 +1,9 @@
 import { App, Editor, Modal, Notice, Plugin, Setting, TFile, type Hotkey, type MarkdownFileInfo } from "obsidian";
 import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
+import type { AnalysisResult, ChunkedAnalysisProvider } from "./analysis/analysis-provider";
 import { AnalysisService } from "./analysis/analysis-service";
+import { diagnoseAnalysisProviderSettings } from "./analysis/analysis-diagnostics";
+import { splitAnalysisText, estimateAnalysisTextTokens } from "./analysis/analysis-chunking";
 import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
@@ -15,6 +18,7 @@ import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
+import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
 import {
 	shouldWriteFailedTranscript,
 	TranscriptionError,
@@ -30,6 +34,7 @@ import {
 } from "./settings/settings";
 import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction";
 import { redactAnalysisInputText } from "./security/content-redaction";
+import { getAnalysisApiKeySecretId, getTranscriptionApiKeySecretId } from "./security/provider-secrets";
 import {
 	buildTranscriptionUploadPreview,
 	type UploadPreviewAudioFile
@@ -44,8 +49,8 @@ import {
 } from "./transcript/transcript-analysis-metadata";
 import { TranscriptService } from "./transcript/transcript-service";
 
-const API_KEY_SECRET_ID = "echo-notes-api-key";
-const ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
+const LEGACY_API_KEY_SECRET_ID = "echo-notes-api-key";
+const LEGACY_ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
 const AUDIO_RECORDER_PLUGIN_ID = "audio-recorder";
 const AUDIO_RECORDER_START_COMMAND_ID = "audio-recorder:start";
 const AUDIO_RECORDER_STOP_COMMAND_ID = "audio-recorder:stop";
@@ -107,7 +112,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private analysisService: AnalysisService;
 	private taskCenter = new TaskCenterStore();
 	private editorService = new EditorService();
-	private processingAudio = new Set<string>();
+	private processingAudio = new Map<string, Promise<ProcessAudioResult | null>>();
 	private processingAnalyses = new Set<string>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
@@ -266,11 +271,11 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	getApiKey(): string {
-		return this.app.secretStorage.getSecret(API_KEY_SECRET_ID) ?? this.settings.apiKey ?? "";
+		return this.app.secretStorage.getSecret(getTranscriptionApiKeySecretId(this.settings.provider)) ?? this.settings.apiKey ?? "";
 	}
 
 	async saveApiKey(apiKey: string): Promise<void> {
-		this.app.secretStorage.setSecret(API_KEY_SECRET_ID, apiKey);
+		this.app.secretStorage.setSecret(getTranscriptionApiKeySecretId(this.settings.provider), apiKey);
 		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
 			await this.saveSettings();
@@ -278,11 +283,11 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	getAnalysisApiKey(): string {
-		return this.app.secretStorage.getSecret(ANALYSIS_API_KEY_SECRET_ID) ?? this.settings.analysisApiKey ?? "";
+		return this.app.secretStorage.getSecret(getAnalysisApiKeySecretId(this.settings.analysisProvider)) ?? this.settings.analysisApiKey ?? "";
 	}
 
 	async saveAnalysisApiKey(apiKey: string): Promise<void> {
-		this.app.secretStorage.setSecret(ANALYSIS_API_KEY_SECRET_ID, apiKey);
+		this.app.secretStorage.setSecret(getAnalysisApiKeySecretId(this.settings.analysisProvider), apiKey);
 		if (this.settings.analysisApiKey !== undefined) {
 			delete this.settings.analysisApiKey;
 			await this.saveSettings();
@@ -419,31 +424,37 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {
-		const legacyApiKey = this.settings.apiKey?.trim();
-		if (!legacyApiKey) {
+		const targetSecretId = getTranscriptionApiKeySecretId(this.settings.provider);
+		const storedLegacyApiKey = this.app.secretStorage.getSecret(LEGACY_API_KEY_SECRET_ID)?.trim() ?? "";
+		const settingsLegacyApiKey = this.settings.apiKey?.trim() ?? "";
+		const legacyApiKey = settingsLegacyApiKey || storedLegacyApiKey;
+		if (legacyApiKey && !this.app.secretStorage.getSecret(targetSecretId)) {
+			this.app.secretStorage.setSecret(targetSecretId, legacyApiKey);
+		}
+		if (storedLegacyApiKey) {
+			this.app.secretStorage.setSecret(LEGACY_API_KEY_SECRET_ID, "");
+		}
+		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
-			return;
+			await this.saveData(this.settings);
 		}
-
-		if (!this.app.secretStorage.getSecret(API_KEY_SECRET_ID)) {
-			this.app.secretStorage.setSecret(API_KEY_SECRET_ID, legacyApiKey);
-		}
-		delete this.settings.apiKey;
-		await this.saveData(this.settings);
 	}
 
 	private async migrateAnalysisApiKeyToSecretStorage(): Promise<void> {
-		const legacyApiKey = this.settings.analysisApiKey?.trim();
-		if (!legacyApiKey) {
+		const targetSecretId = getAnalysisApiKeySecretId(this.settings.analysisProvider);
+		const storedLegacyApiKey = this.app.secretStorage.getSecret(LEGACY_ANALYSIS_API_KEY_SECRET_ID)?.trim() ?? "";
+		const settingsLegacyApiKey = this.settings.analysisApiKey?.trim() ?? "";
+		const legacyApiKey = settingsLegacyApiKey || storedLegacyApiKey;
+		if (legacyApiKey && !this.app.secretStorage.getSecret(targetSecretId)) {
+			this.app.secretStorage.setSecret(targetSecretId, legacyApiKey);
+		}
+		if (storedLegacyApiKey) {
+			this.app.secretStorage.setSecret(LEGACY_ANALYSIS_API_KEY_SECRET_ID, "");
+		}
+		if (this.settings.analysisApiKey !== undefined) {
 			delete this.settings.analysisApiKey;
-			return;
+			await this.saveData(this.settings);
 		}
-
-		if (!this.app.secretStorage.getSecret(ANALYSIS_API_KEY_SECRET_ID)) {
-			this.app.secretStorage.setSecret(ANALYSIS_API_KEY_SECRET_ID, legacyApiKey);
-		}
-		delete this.settings.analysisApiKey;
-		await this.saveData(this.settings);
 	}
 
 	private registerAutomation(): void {
@@ -596,6 +607,32 @@ export default class EchoNotesPlugin extends Plugin {
 		sourceNote: TFile | undefined,
 		options: ProcessAudioOptions = {}
 	): Promise<ProcessAudioResult | null> {
+		const inFlightTranscription = this.processingAudio.get(audioFile.path);
+		if (inFlightTranscription) {
+			new Notice(`音频正在转写中：${audioFile.name}`);
+			const result = await inFlightTranscription;
+			if (result) {
+				await options.onTranscriptFileReady?.(result.transcriptFile);
+			}
+			return result;
+		}
+
+		const processingPromise = this.performAudioToTranscript(audioFile, sourceNote, options);
+		this.processingAudio.set(audioFile.path, processingPromise);
+		try {
+			return await processingPromise;
+		} finally {
+			if (this.processingAudio.get(audioFile.path) === processingPromise) {
+				this.processingAudio.delete(audioFile.path);
+			}
+		}
+	}
+
+	private async performAudioToTranscript(
+		audioFile: TFile,
+		sourceNote: TFile | undefined,
+		options: ProcessAudioOptions
+	): Promise<ProcessAudioResult | null> {
 		let notifiedTranscriptPath: string | null = null;
 		const notifyTranscriptFileReady = async (transcriptFile: TFile): Promise<void> => {
 			if (notifiedTranscriptPath === transcriptFile.path) {
@@ -603,7 +640,17 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			notifiedTranscriptPath = transcriptFile.path;
-			await options.onTranscriptFileReady?.(transcriptFile);
+			try {
+				await options.onTranscriptFileReady?.(transcriptFile);
+			} catch (error) {
+				const message = getErrorMessage(error);
+				new Notice(`转写稿已生成，但来源笔记链接回写失败：${message}`);
+				this.log("来源笔记链接回写失败，不影响转写结果", {
+					transcriptPath: transcriptFile.path,
+					sourcePath: sourceNote?.path,
+					error
+				});
+			}
 		};
 
 		const transcriptionTaskId = createTaskId("transcription", audioFile.path);
@@ -645,14 +692,6 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 		}
 
-		if (this.processingAudio.has(audioFile.path)) {
-			new Notice(`音频正在转写中：${audioFile.name}`);
-			if (existingTranscript) {
-				await notifyTranscriptFileReady(existingTranscript);
-			}
-			return existingTranscript ? { transcriptFile: existingTranscript, analysisEligible: true } : null;
-		}
-
 		if (this.settings.confirmBeforeTranscription) {
 			if (options.allowUploadConfirmation === false) {
 				new Notice("已跳过自动转写：当前开启了手动转写前确认上传。");
@@ -688,9 +727,12 @@ export default class EchoNotesPlugin extends Plugin {
 				run: () => this.retryTranscriptionTask(audioFile.path, sourceNote?.path, options.audioLinkPath)
 			}
 		});
-		this.processingAudio.add(audioFile.path);
 		let completedSegments: TranscriptionSegment[] = [];
 		try {
+			const diagnostics = diagnoseTranscriptionProviderSettings(this.settings, this.getApiKey());
+			if (!diagnostics.canAttemptTranscription) {
+				throw new Error(diagnostics.items.filter((item) => item.severity === "error").map((item) => item.detail).join("；"));
+			}
 			new Notice(`开始转写：${audioFile.name}`);
 			const provider = createTranscriptionProvider(this.app, this.settings, this.getApiKey());
 			const handleProgress = async (progress: TranscriptionProgress): Promise<void> => {
@@ -818,8 +860,6 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			return null;
-		} finally {
-			this.processingAudio.delete(audioFile.path);
 		}
 	}
 
@@ -1005,16 +1045,53 @@ export default class EchoNotesPlugin extends Plugin {
 				return;
 			}
 
+			const diagnostics = diagnoseAnalysisProviderSettings(
+				this.settings,
+				this.getAnalysisApiKey(),
+				transcriptText.length
+			);
+			if (!diagnostics.canAttemptAnalysis) {
+				throw new Error(diagnostics.items.filter((item) => item.severity === "error").map((item) => item.detail).join("；"));
+			}
 			const provider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
 			const analysisTranscriptText = this.settings.redactTranscriptBeforeAnalysis
 				? redactAnalysisInputText(transcriptText)
 				: transcriptText;
-			const result = await provider.analyze({
+			const analysisInput = {
 				template,
 				transcriptTitle: transcriptFile.basename,
 				transcriptText: analysisTranscriptText,
 				copyLanguage: this.settings.copyLanguage
-			});
+			};
+			const chunks = this.settings.analysisLongTextEnabled
+				? splitAnalysisText(analysisTranscriptText, {
+						maxCharacters: this.settings.analysisChunkCharacters,
+						overlapCharacters: 400
+					})
+				: [];
+			const maxAnalysisChunks = 20;
+			if (chunks.length > maxAnalysisChunks) {
+				throw new Error(
+					`转写稿将产生 ${chunks.length} 个分析分块，超过安全上限 ${maxAnalysisChunks}。请提高分块字符数、缩短转写稿或拆分文件后重试。`
+				);
+			}
+			if (!this.settings.analysisLongTextEnabled && analysisTranscriptText.length > this.settings.analysisChunkCharacters) {
+				throw new Error("转写稿超过单次分析安全长度，且长文本分块已关闭。请开启长文本分块分析或拆分转写稿。");
+			}
+			let result: AnalysisResult;
+			if (chunks.length > 1 && isChunkedAnalysisProvider(provider)) {
+				const chunkResults: AnalysisResult[] = [];
+				for (const chunk of chunks) {
+					this.taskCenter.updateTask(analysisTaskId, {
+						stage: `正在分析长文本分块 ${chunk.index}/${chunk.total}（约 ${estimateAnalysisTextTokens(chunk.text)} tokens）`
+					});
+					chunkResults.push(await provider.analyzeChunk({ ...analysisInput, transcriptText: chunk.text }, chunk.index, chunk.total));
+				}
+				this.taskCenter.updateTask(analysisTaskId, { stage: `正在汇总 ${chunks.length} 个分析分块` });
+				result = await provider.synthesizeChunks(analysisInput, chunkResults);
+			} else {
+				result = await provider.analyze(analysisInput);
+			}
 			await this.analysisService.writeAnalysisToTranscript(
 				transcriptFile,
 				template,
@@ -1079,13 +1156,21 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const timer = window.setTimeout(() => {
 			this.markdownDebounceTimers.delete(file.path);
-			void this.handleAutoMarkdownFile(file);
+			void this.handleAutoMarkdownFile(file).catch((error) => {
+				this.log("Markdown 音频链接自动化扫描失败", { path: file.path, error });
+				new Notice(`Echo Notes 自动化扫描失败：${getErrorMessage(error)}`);
+			});
 		}, 1000);
 		this.markdownDebounceTimers.set(file.path, timer);
 	}
 
 	private async handleAutoMarkdownFile(file: TFile): Promise<void> {
 		if (!this.settings.autoTranscribeOnAudioLink || !this.isScannableMarkdown(file)) {
+			return;
+		}
+		const currentFile = this.app.vault.getAbstractFileByPath(file.path);
+		if (!(currentFile instanceof TFile) || currentFile !== file) {
+			this.log("跳过已移动或删除的 Markdown 文件", file.path);
 			return;
 		}
 
@@ -1197,6 +1282,17 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 
 function getErrorMessage(error: unknown): string {
 	return getSanitizedErrorMessage(error);
+}
+
+function isChunkedAnalysisProvider(provider: unknown): provider is ChunkedAnalysisProvider {
+	return (
+		typeof provider === "object" &&
+		provider !== null &&
+		"analyzeChunk" in provider &&
+		typeof provider.analyzeChunk === "function" &&
+		"synthesizeChunks" in provider &&
+		typeof provider.synthesizeChunks === "function"
+	);
 }
 
 function getPathBasename(path: string): string {

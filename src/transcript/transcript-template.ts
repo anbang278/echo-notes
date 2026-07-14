@@ -7,6 +7,7 @@ import {
 	renderSourceAudioMetadata,
 	type SourceAudioMetadata
 } from "./transcript-source-metadata";
+import { TRANSCRIPT_MANAGED_END, TRANSCRIPT_MANAGED_START } from "./transcript-content";
 
 export interface TranscriptTemplateInput {
 	app: App;
@@ -63,10 +64,12 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 		`trace_id: "${escapeYaml(input.result.traceId ?? "")}"`,
 		"---",
 		"",
+		TRANSCRIPT_MANAGED_START,
 		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderTranscriptionBody(input.result, input.copyLanguage),
+		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
 }
@@ -97,11 +100,13 @@ export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateIn
 		`trace_id: "${escapeYaml(input.traceId ?? "")}"`,
 		"---",
 		"",
+		TRANSCRIPT_MANAGED_START,
 		`# ${copy.failedTitle}`,
 		"",
 		copy.errorReasonLabel,
 		"",
 		input.error,
+		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
 }
@@ -125,12 +130,14 @@ export function renderProgressTranscriptTemplate(input: ProgressTranscriptTempla
 			status: "transcribing"
 		}),
 		"",
+		TRANSCRIPT_MANAGED_START,
 		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
 		`> ${copy.transcribingNotice}`,
 		"",
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderSegmentsOrEmpty(input.segments, input.copyLanguage),
+		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
 }
@@ -170,6 +177,7 @@ function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInpu
 			traceId: input.traceId
 		}),
 		"",
+		TRANSCRIPT_MANAGED_START,
 		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
 		`> ${copy.partialFailureNotice}`,
 		"",
@@ -180,6 +188,7 @@ function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInpu
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderSegmentsOrEmpty(input.segments ?? [], input.copyLanguage),
+		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
 }

@@ -60,9 +60,9 @@ export function diagnoseTranscriptionProviderSettings(
 
 		if (isInsecureRemoteBaseUrl(trimmedBaseUrl)) {
 			items.push({
-				severity: "warning",
+				severity: "error",
 				title: "Base URL 使用未加密 HTTP",
-				detail: "该地址不是本地地址，音频可能通过未加密连接发送。建议使用 HTTPS。"
+				detail: "该地址不是本地地址，禁止通过未加密连接发送音频。请改用 HTTPS。"
 			});
 		}
 	}
@@ -85,7 +85,7 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "warning",
 			title: "当前 Provider 不支持语言参数",
-			detail: "Language 设置可能不会被该 Provider 使用。建议保持 auto，或确认服务商文档。"
+			detail: "默认转写语言不会传给当前 Provider，实际仍由模型自动识别。建议保持 auto，或切换到支持语言参数的 Provider。"
 		});
 	}
 

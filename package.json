@@ -1,6 +1,6 @@
 {
 	"name": "echo-notes",
-	"version": "0.2.34",
+	"version": "0.2.35",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
@@ -19,13 +19,16 @@
 	],
 	"author": "anbang278",
 	"license": "MIT",
+	"engines": {
+		"node": ">=22"
+	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@types/node": "^22.15.30",
+		"@types/node": "^22.20.1",
 		"esbuild": "^0.25.5",
-		"eslint": "^10.4.1",
-		"obsidian": "latest",
+		"eslint": "^10.7.0",
+		"obsidian": "^1.13.1",
 		"typescript": "^5.8.3",
-		"typescript-eslint": "^8.60.1"
+		"typescript-eslint": "^8.63.0"
 	}
 }

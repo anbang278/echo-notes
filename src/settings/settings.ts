@@ -80,6 +80,8 @@ export interface EchoNotesSettings {
 	analysisModel: string;
 	analysisEnabled: boolean;
 	redactTranscriptBeforeAnalysis: boolean;
+	analysisLongTextEnabled: boolean;
+	analysisChunkCharacters: number;
 	defaultAnalysisTemplateId: AnalysisTemplateId;
 	analysisTemplates: AnalysisTemplateConfig[];
 	skipExistingTranscript: boolean;
@@ -101,112 +103,112 @@ export const PROVIDER_DEFAULTS: Record<ProviderId, Pick<EchoNotesSettings, "base
 	"aliyun-bailian": {
 		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		model: "qwen3-asr-flash",
-		language: "auto"
+		language: "zh"
 	},
 	openai: {
 		baseUrl: "https://api.openai.com/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	ollama: {
 		baseUrl: "http://localhost:11434/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"ollama-open-webui": {
 		baseUrl: "http://localhost:3000/api",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"google-gemini": {
 		baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	openrouter: {
 		baseUrl: "https://openrouter.ai/api/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"lm-studio": {
 		baseUrl: "http://localhost:1234/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	groq: {
 		baseUrl: "https://api.groq.com/openai/v1",
 		model: "whisper-large-v3-turbo",
-		language: "auto"
+		language: "zh"
 	},
 	"302-ai": {
 		baseUrl: "https://api.302.ai/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	anthropic: {
 		baseUrl: "https://api.anthropic.com/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"mistral-ai": {
 		baseUrl: "https://api.mistral.ai/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"together-ai": {
 		baseUrl: "https://api.together.xyz/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"fireworks-ai": {
 		baseUrl: "https://api.fireworks.ai/inference/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"perplexity-ai": {
 		baseUrl: "https://api.perplexity.ai",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	deepseek: {
 		baseUrl: "https://api.deepseek.com/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	xai: {
 		baseUrl: "https://api.x.ai/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"novita-ai": {
 		baseUrl: "https://api.novita.ai/v3/openai",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	deepinfra: {
 		baseUrl: "https://api.deepinfra.com/v1/openai",
 		model: "openai/whisper-large-v3",
-		language: "auto"
+		language: "zh"
 	},
 	sambanova: {
 		baseUrl: "https://api.sambanova.ai/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	cerebras: {
 		baseUrl: "https://api.cerebras.ai/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"z-ai": {
 		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	},
 	"custom-openai-compatible": {
 		baseUrl: "https://example.com/v1",
 		model: "whisper-1",
-		language: "auto"
+		language: "zh"
 	}
 };
 
@@ -239,6 +241,14 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
 export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
 	zh: "中文",
 	en: "English"
+};
+
+export const TRANSCRIPTION_LANGUAGE_LABELS: Record<string, string> = {
+	auto: "自动识别（auto）",
+	zh: "中文（zh）",
+	en: "English（en）",
+	ja: "日本語（ja）",
+	ko: "한국어（ko）"
 };
 
 export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNotesSettings, "analysisBaseUrl" | "analysisModel">> = {
@@ -649,7 +659,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	provider: "aliyun-bailian",
 	baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 	model: "qwen3-asr-flash",
-	language: "auto",
+	language: "zh",
 	outputStrategy: "same-name-subfolder",
 	customOutputFolder: "Transcripts",
 	insertStyle: "linkOnly",
@@ -659,24 +669,18 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	analysisModel: "deepseek-v4-pro",
 	analysisEnabled: false,
 	redactTranscriptBeforeAnalysis: false,
+	analysisLongTextEnabled: true,
+	analysisChunkCharacters: 24000,
 	defaultAnalysisTemplateId: "work-minutes",
 	analysisTemplates: createDefaultAnalysisTemplates(),
 	skipExistingTranscript: true,
 	confirmBeforeTranscription: false,
 	autoTranscribeOnAudioLink: false,
 	autoTranscribeOnAudioCreated: false,
-	officialRecorderStartHotkey: {
-		modifiers: ["Ctrl"],
-		key: "L"
-	},
-	officialRecorderStopHotkey: {
-		modifiers: ["Ctrl"],
-		key: "S"
-	},
-	transcribeAllAudioHotkey: {
-		modifiers: ["Ctrl"],
-		key: "Z"
-	},
+	// Community plugins must not claim default hotkeys. Users can opt in from settings.
+	officialRecorderStartHotkey: null,
+	officialRecorderStopHotkey: null,
+	transcribeAllAudioHotkey: null,
 	verboseLog: false
 };
 
@@ -852,6 +856,16 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		typeof raw.redactTranscriptBeforeAnalysis === "boolean"
 			? raw.redactTranscriptBeforeAnalysis
 			: DEFAULT_SETTINGS.redactTranscriptBeforeAnalysis;
+	settings.analysisLongTextEnabled =
+		typeof raw.analysisLongTextEnabled === "boolean"
+			? raw.analysisLongTextEnabled
+			: DEFAULT_SETTINGS.analysisLongTextEnabled;
+	settings.analysisChunkCharacters = normalizePositiveInteger(
+		raw.analysisChunkCharacters,
+		DEFAULT_SETTINGS.analysisChunkCharacters,
+		4000,
+		100000
+	);
 	settings.confirmBeforeTranscription =
 		typeof raw.confirmBeforeTranscription === "boolean" ? raw.confirmBeforeTranscription : DEFAULT_SETTINGS.confirmBeforeTranscription;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
@@ -1116,6 +1130,14 @@ export function cloneHotkey(hotkey: EchoNotesHotkeySetting): EchoNotesHotkeySett
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+function normalizePositiveInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+	if (!Number.isFinite(parsed)) {
+		return fallback;
+	}
+	return Math.min(maximum, Math.max(minimum, Math.round(parsed)));
 }
 
 function normalizeHotkeySetting(value: unknown, fallback: EchoNotesHotkeySetting): EchoNotesHotkeySetting {

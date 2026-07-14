@@ -25,7 +25,15 @@ export class FileService {
 			if (existing) {
 				throw new Error(`无法创建文件夹，路径已被文件占用：${currentPath}`);
 			}
-			await this.app.vault.createFolder(currentPath);
+			try {
+				await this.app.vault.createFolder(currentPath);
+			} catch (error) {
+				const createdByConcurrentTask = this.app.vault.getAbstractFileByPath(currentPath);
+				if (createdByConcurrentTask instanceof TFolder) {
+					continue;
+				}
+				throw error;
+			}
 		}
 	}
 }

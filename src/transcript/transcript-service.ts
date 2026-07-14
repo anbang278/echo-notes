@@ -15,6 +15,7 @@ import {
 	createSourceAudioMetadata,
 	isReusableTranscriptForAudio
 } from "./transcript-source-metadata";
+import { createTranscriptBackupPath, mergeManagedTranscriptDocument } from "./transcript-content";
 
 export class TranscriptService {
 	private app: App;
@@ -128,7 +129,27 @@ export class TranscriptService {
 
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing instanceof TFile) {
-			await this.app.vault.process(existing, () => content);
+			const existingContent = await this.app.vault.cachedRead(existing);
+			const mergedContent = mergeManagedTranscriptDocument(existingContent, content);
+			if (mergedContent !== null) {
+				await this.app.vault.process(existing, (currentContent) =>
+					mergeManagedTranscriptDocument(currentContent, content) ?? currentContent
+				);
+				return existing;
+			}
+
+			await this.createLegacyTranscriptBackup(path, existingContent);
+			let changedAfterBackup = false;
+			await this.app.vault.process(existing, (currentContent) => {
+				if (currentContent !== existingContent) {
+					changedAfterBackup = true;
+					return currentContent;
+				}
+				return content;
+			});
+			if (changedAfterBackup) {
+				throw new Error(`transcript 在备份后发生变化，已取消覆盖以保护用户内容：${path}`);
+			}
 			return existing;
 		}
 		if (existing) {
@@ -138,7 +159,33 @@ export class TranscriptService {
 		return this.app.vault.create(path, content);
 	}
 
+	private async createLegacyTranscriptBackup(path: string, content: string): Promise<TFile> {
+		const timestamp = formatBackupTimestamp(new Date());
+		for (let attempt = 0; attempt < 100; attempt += 1) {
+			const backupPath = createTranscriptBackupPath(path, timestamp, attempt);
+			if (this.app.vault.getAbstractFileByPath(backupPath)) {
+				continue;
+			}
+			return this.app.vault.create(backupPath, content);
+		}
+
+		throw new Error(`无法为旧版 transcript 创建唯一备份：${path}`);
+	}
+
 	private getLegacyCustomFolderTranscriptPath(audioFile: TFile): string | null {
 		return getLegacyCustomFolderTranscriptPathForAudioPath(audioFile.path, this.settings);
 	}
+}
+
+function formatBackupTimestamp(date: Date): string {
+	const pad = (value: number): string => value.toString().padStart(2, "0");
+	return [
+		date.getFullYear(),
+		pad(date.getMonth() + 1),
+		pad(date.getDate()),
+		"-",
+		pad(date.getHours()),
+		pad(date.getMinutes()),
+		pad(date.getSeconds())
+	].join("");
 }
