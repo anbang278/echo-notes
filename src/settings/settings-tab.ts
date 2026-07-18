@@ -10,6 +10,7 @@ import {
 	type ProviderDiagnosticSeverity
 } from "../providers/provider-diagnostics";
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
+import { getSanitizedErrorMessage } from "../security/redaction";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
@@ -89,16 +90,24 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderProviderSignup(containerEl);
 		this.renderProviderCapability(containerEl);
 
-		new Setting(containerEl)
+		const apiKeySetting = new Setting(containerEl)
 			.setName("API Key")
-			.setDesc("用于调用当前服务商的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage，切换 Provider 不会复用或发送其他服务商的密钥。")
-			.addText((text) => {
+			.setDesc("用于调用当前服务商的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage，切换 Provider 不会复用或发送其他服务商的密钥。");
+		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, this.plugin.getApiKey());
+		apiKeySetting.addText((text) => {
 				text.inputEl.type = "password";
 				text
 					.setPlaceholder("sk-...")
 					.setValue(this.plugin.getApiKey())
 					.onChange(async (value) => {
-						await this.plugin.saveApiKey(value.trim());
+						try {
+							const apiKey = value.trim();
+							await this.plugin.saveApiKey(apiKey);
+							this.setSecretSaveStatus(apiKeyStatusEl, apiKey ? "saved" : "cleared");
+						} catch (error) {
+							this.setSecretSaveStatus(apiKeyStatusEl, "failed");
+							new Notice(`API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+						}
 					});
 			});
 
@@ -429,16 +438,27 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
-		new Setting(containerEl)
+		const analysisApiKeySetting = new Setting(containerEl)
 			.setName("分析 API Key")
-			.setDesc("用于调用当前分析 Provider 的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage。")
-			.addText((text) => {
+			.setDesc("用于调用当前分析 Provider 的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage。");
+		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
+			analysisApiKeySetting,
+			this.plugin.getAnalysisApiKey()
+		);
+		analysisApiKeySetting.addText((text) => {
 				text.inputEl.type = "password";
 				text
 					.setPlaceholder("sk-...")
 					.setValue(this.plugin.getAnalysisApiKey())
 					.onChange(async (value) => {
-						await this.plugin.saveAnalysisApiKey(value.trim());
+						try {
+							const apiKey = value.trim();
+							await this.plugin.saveAnalysisApiKey(apiKey);
+							this.setSecretSaveStatus(analysisApiKeyStatusEl, apiKey ? "saved" : "cleared");
+						} catch (error) {
+							this.setSecretSaveStatus(analysisApiKeyStatusEl, "failed");
+							new Notice(`分析 API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+						}
 					});
 			});
 
@@ -677,6 +697,32 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private refreshSettings(): void {
 		this.renderSettings(this.settingsContainerEl ?? this.containerEl);
+	}
+
+	private createSecretSaveStatus(setting: Setting, apiKey: string): HTMLElement {
+		const statusEl = setting.descEl.createDiv({ cls: "echo-notes-secret-save-status" });
+		this.setSecretSaveStatus(statusEl, apiKey ? "saved" : "empty");
+		return statusEl;
+	}
+
+	private setSecretSaveStatus(statusEl: HTMLElement, status: "empty" | "saved" | "cleared" | "failed"): void {
+		statusEl.removeClass("is-success", "is-error");
+		switch (status) {
+			case "saved":
+				statusEl.addClass("is-success");
+				statusEl.setText("已安全保存");
+				break;
+			case "cleared":
+				statusEl.addClass("is-success");
+				statusEl.setText("已清除");
+				break;
+			case "failed":
+				statusEl.addClass("is-error");
+				statusEl.setText("保存失败");
+				break;
+			default:
+				statusEl.setText("未保存 API Key");
+		}
 	}
 
 	private applyProviderDefaults(provider: ProviderId): void {

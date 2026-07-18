@@ -1,3 +1,18 @@
+.echo-notes-secret-save-status {
+	margin-top: 4px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.35;
+}
+
+.echo-notes-secret-save-status.is-success {
+	color: var(--color-green);
+}
+
+.echo-notes-secret-save-status.is-error {
+	color: var(--color-red);
+}
+
 .echo-notes-provider-diagnostics-modal p {
 	margin-top: 0;
 	color: var(--text-muted);

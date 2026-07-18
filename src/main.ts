@@ -34,7 +34,11 @@ import {
 } from "./settings/settings";
 import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction";
 import { redactAnalysisInputText } from "./security/content-redaction";
-import { getAnalysisApiKeySecretId, getTranscriptionApiKeySecretId } from "./security/provider-secrets";
+import {
+	getAnalysisApiKeySecretId,
+	getTranscriptionApiKeySecretId,
+	migrateLegacySecret
+} from "./security/provider-secrets";
 import {
 	buildTranscriptionUploadPreview,
 	type UploadPreviewAudioFile
@@ -275,7 +279,12 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	async saveApiKey(apiKey: string): Promise<void> {
-		this.app.secretStorage.setSecret(getTranscriptionApiKeySecretId(this.settings.provider), apiKey);
+		try {
+			this.app.secretStorage.setSecret(getTranscriptionApiKeySecretId(this.settings.provider), apiKey);
+		} catch (error) {
+			this.log("API Key 保存失败", error);
+			throw new Error(`无法写入 Obsidian SecretStorage：${getSanitizedErrorMessage(error)}`, { cause: error });
+		}
 		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
 			await this.saveSettings();
@@ -287,7 +296,12 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	async saveAnalysisApiKey(apiKey: string): Promise<void> {
-		this.app.secretStorage.setSecret(getAnalysisApiKeySecretId(this.settings.analysisProvider), apiKey);
+		try {
+			this.app.secretStorage.setSecret(getAnalysisApiKeySecretId(this.settings.analysisProvider), apiKey);
+		} catch (error) {
+			this.log("分析 API Key 保存失败", error);
+			throw new Error(`无法写入 Obsidian SecretStorage：${getSanitizedErrorMessage(error)}`, { cause: error });
+		}
 		if (this.settings.analysisApiKey !== undefined) {
 			delete this.settings.analysisApiKey;
 			await this.saveSettings();
@@ -425,15 +439,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {
 		const targetSecretId = getTranscriptionApiKeySecretId(this.settings.provider);
-		const storedLegacyApiKey = this.app.secretStorage.getSecret(LEGACY_API_KEY_SECRET_ID)?.trim() ?? "";
-		const settingsLegacyApiKey = this.settings.apiKey?.trim() ?? "";
-		const legacyApiKey = settingsLegacyApiKey || storedLegacyApiKey;
-		if (legacyApiKey && !this.app.secretStorage.getSecret(targetSecretId)) {
-			this.app.secretStorage.setSecret(targetSecretId, legacyApiKey);
-		}
-		if (storedLegacyApiKey) {
-			this.app.secretStorage.setSecret(LEGACY_API_KEY_SECRET_ID, "");
-		}
+		migrateLegacySecret(this.app.secretStorage, LEGACY_API_KEY_SECRET_ID, targetSecretId, this.settings.apiKey);
 		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
 			await this.saveData(this.settings);
@@ -442,15 +448,12 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private async migrateAnalysisApiKeyToSecretStorage(): Promise<void> {
 		const targetSecretId = getAnalysisApiKeySecretId(this.settings.analysisProvider);
-		const storedLegacyApiKey = this.app.secretStorage.getSecret(LEGACY_ANALYSIS_API_KEY_SECRET_ID)?.trim() ?? "";
-		const settingsLegacyApiKey = this.settings.analysisApiKey?.trim() ?? "";
-		const legacyApiKey = settingsLegacyApiKey || storedLegacyApiKey;
-		if (legacyApiKey && !this.app.secretStorage.getSecret(targetSecretId)) {
-			this.app.secretStorage.setSecret(targetSecretId, legacyApiKey);
-		}
-		if (storedLegacyApiKey) {
-			this.app.secretStorage.setSecret(LEGACY_ANALYSIS_API_KEY_SECRET_ID, "");
-		}
+		migrateLegacySecret(
+			this.app.secretStorage,
+			LEGACY_ANALYSIS_API_KEY_SECRET_ID,
+			targetSecretId,
+			this.settings.analysisApiKey
+		);
 		if (this.settings.analysisApiKey !== undefined) {
 			delete this.settings.analysisApiKey;
 			await this.saveData(this.settings);

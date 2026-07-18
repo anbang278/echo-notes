@@ -49,7 +49,12 @@ import {
 } from "../src/providers/transcription-provider";
 import { redactAnalysisInputText } from "../src/security/content-redaction";
 import { sanitizeSensitiveText } from "../src/security/redaction";
-import { getAnalysisApiKeySecretId, getTranscriptionApiKeySecretId } from "../src/security/provider-secrets";
+import {
+	getAnalysisApiKeySecretId,
+	getTranscriptionApiKeySecretId,
+	migrateLegacySecret,
+	type SecretStorageLike
+} from "../src/security/provider-secrets";
 import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
 import { splitAnalysisText, estimateAnalysisTextTokens } from "../src/analysis/analysis-chunking";
 import {
@@ -784,12 +789,66 @@ const sensitiveErrorText = [
 	'{"api_key":"sk-examplejsonsecret123456"}',
 	"data:audio/wav;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
 ].join("\n");
-assert.equal(getTranscriptionApiKeySecretId("aliyun-bailian"), "echo-notes-transcription-api-key:aliyun-bailian");
+assert.equal(getTranscriptionApiKeySecretId("aliyun-bailian"), "echo-notes-transcription-api-key-aliyun-bailian");
 assert.equal(
 	getTranscriptionApiKeySecretId("custom-openai-compatible"),
-	"echo-notes-transcription-api-key:custom-openai-compatible"
+	"echo-notes-transcription-api-key-custom-openai-compatible"
 );
-assert.equal(getAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key:openai");
+assert.equal(getAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key-openai");
+const providerIds = Object.keys(PROVIDER_LABELS) as Array<keyof typeof PROVIDER_LABELS>;
+const transcriptionSecretIds = providerIds.map(getTranscriptionApiKeySecretId);
+const analysisSecretIds = providerIds.map(getAnalysisApiKeySecretId);
+for (const secretId of [...transcriptionSecretIds, ...analysisSecretIds]) {
+	assert.match(secretId, /^[a-z0-9-]+$/);
+}
+assert.equal(new Set(transcriptionSecretIds).size, providerIds.length);
+assert.equal(new Set(analysisSecretIds).size, providerIds.length);
+assert.equal(transcriptionSecretIds.some((secretId) => analysisSecretIds.includes(secretId)), false);
+
+class MemorySecretStorage implements SecretStorageLike {
+	readonly writes: Array<{ id: string; secret: string }> = [];
+
+	constructor(
+		private readonly secrets: Map<string, string>,
+		private readonly failOnId?: string
+	) {}
+
+	getSecret(id: string): string | null {
+		return this.secrets.get(id) ?? null;
+	}
+
+	setSecret(id: string, secret: string): void {
+		if (id === this.failOnId) {
+			throw new Error("SecretStorage write failed");
+		}
+		this.writes.push({ id, secret });
+		this.secrets.set(id, secret);
+	}
+}
+
+const legacyTranscriptionSecretId = "echo-notes-api-key";
+const migratedTranscriptionSecretId = getTranscriptionApiKeySecretId("aliyun-bailian");
+const migrationStorage = new MemorySecretStorage(new Map([[legacyTranscriptionSecretId, "legacy-key"]]));
+migrateLegacySecret(migrationStorage, legacyTranscriptionSecretId, migratedTranscriptionSecretId);
+assert.equal(migrationStorage.getSecret(migratedTranscriptionSecretId), "legacy-key");
+assert.equal(migrationStorage.getSecret(legacyTranscriptionSecretId), "");
+assert.deepEqual(migrationStorage.writes.map(({ id }) => id), [migratedTranscriptionSecretId, legacyTranscriptionSecretId]);
+
+const failedMigrationStorage = new MemorySecretStorage(
+	new Map([[legacyTranscriptionSecretId, "legacy-key"]]),
+	migratedTranscriptionSecretId
+);
+assert.throws(
+	() => migrateLegacySecret(failedMigrationStorage, legacyTranscriptionSecretId, migratedTranscriptionSecretId),
+	/SecretStorage write failed/
+);
+assert.equal(failedMigrationStorage.getSecret(legacyTranscriptionSecretId), "legacy-key");
+assert.equal(failedMigrationStorage.writes.length, 0);
+
+const settingsMigrationStorage = new MemorySecretStorage(new Map());
+const migratedAnalysisSecretId = getAnalysisApiKeySecretId("openai");
+migrateLegacySecret(settingsMigrationStorage, "echo-notes-analysis-api-key", migratedAnalysisSecretId, " settings-key ");
+assert.equal(settingsMigrationStorage.getSecret(migratedAnalysisSecretId), "settings-key");
 const missingAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
 	{
 		...DEFAULT_SETTINGS,
