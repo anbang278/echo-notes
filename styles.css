@@ -540,6 +540,15 @@
 	overflow-wrap: anywhere;
 }
 
+.echo-notes-realtime-ribbon.is-active {
+	color: var(--text-on-accent);
+	background: var(--interactive-accent);
+}
+
+.echo-notes-realtime-status {
+	cursor: pointer;
+}
+
 @media (max-width: 720px) {
 	.echo-notes-upload-preview-row {
 		grid-template-columns: 1fr;

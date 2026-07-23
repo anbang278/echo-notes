@@ -7,7 +7,8 @@ import {
 	formatSegmentTimeRange,
 	type WavAudioSegment
 } from "../audio/audio-segmenter";
-import type { EchoNotesSettings } from "../settings/settings";
+import type { TranscriptionConfig } from "../settings/settings";
+import { resolveProviderTranscriptionPolicy } from "./transcription-policy";
 import {
 	createHttpTranscriptionError,
 	createNetworkTranscriptionError,
@@ -43,10 +44,10 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 	name = "阿里百炼";
 
 	private app: App;
-	private settings: EchoNotesSettings;
+	private settings: TranscriptionConfig;
 	private apiKey: string;
 
-	constructor(app: App, settings: EchoNotesSettings, apiKey: string) {
+	constructor(app: App, settings: TranscriptionConfig, apiKey: string) {
 		this.app = app;
 		this.settings = settings;
 		this.apiKey = apiKey;
@@ -109,7 +110,14 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 
 	private async createLongAudioChunks(audioBuffer: ArrayBuffer): Promise<WavAudioSegment[]> {
 		try {
-			return await createWavAudioSegments(audioBuffer);
+			const policy = resolveProviderTranscriptionPolicy({
+				provider: "aliyun-bailian",
+				model: this.settings.model
+			});
+			return await createWavAudioSegments(audioBuffer, {
+				targetSegmentSeconds: policy.targetSegmentSeconds,
+				minSegmentSeconds: policy.minSegmentSeconds
+			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			throw new TranscriptionError("audio_decode_error", `音频解码失败，无法进行长音频分段转写：${message}`);

@@ -3,7 +3,8 @@ import { formatSegmentTimeRange } from "../audio/audio-segmenter";
 import type {
 	TranscriptionResult,
 	TranscriptionSegment,
-	TranscriptionUtterance
+	TranscriptionUtterance,
+	StreamingTranscriptionState
 } from "../providers/transcription-provider";
 import {
 	getLocalizedCopy,
@@ -37,6 +38,8 @@ export interface FailedTranscriptTemplateInput {
 	error: string;
 	traceId?: string;
 	segments?: TranscriptionSegment[];
+	streamingState?: StreamingTranscriptionState;
+	speakerLabelStyle?: AgentPlanSpeakerLabelStyle;
 	copyLanguage: CopyLanguage;
 }
 
@@ -48,6 +51,8 @@ export interface ProgressTranscriptTemplateInput {
 	provider: string;
 	model: string;
 	segments: TranscriptionSegment[];
+	streamingState?: StreamingTranscriptionState;
+	speakerLabelStyle?: AgentPlanSpeakerLabelStyle;
 	copyLanguage: CopyLanguage;
 }
 
@@ -88,7 +93,10 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 }
 
 export function renderFailedTranscriptTemplate(input: FailedTranscriptTemplateInput): string {
-	if (input.segments && input.segments.length > 0) {
+	if (
+		(input.segments && input.segments.length > 0) ||
+		input.streamingState?.text.trim()
+	) {
 		return renderInterruptedTranscriptTemplate(input);
 	}
 
@@ -145,11 +153,11 @@ export function renderProgressTranscriptTemplate(input: ProgressTranscriptTempla
 		"",
 		TRANSCRIPT_MANAGED_START,
 		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
-		`> ${copy.transcribingNotice}`,
+		`> ${renderProgressNotice(input, copy.transcribingNotice)}`,
 		"",
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
-		renderSegmentsOrEmpty(input.segments, input.copyLanguage),
+		renderProgressBody(input),
 		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
@@ -235,7 +243,7 @@ function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInpu
 		"",
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
-		renderSegmentsOrEmpty(input.segments ?? [], input.copyLanguage),
+		renderInterruptedBody(input),
 		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
@@ -329,6 +337,76 @@ function renderSegmentsOrEmpty(segments: TranscriptionSegment[], copyLanguage: C
 	}
 
 	return getLocalizedCopy(copyLanguage).emptySegmentText;
+}
+
+function renderProgressNotice(input: ProgressTranscriptTemplateInput, fallback: string): string {
+	const state = input.streamingState;
+	if (state?.realtime) {
+		const elapsed = formatProgressTime(state.processedSeconds);
+		const utteranceCount = state.utterances?.length ?? 0;
+		return input.copyLanguage === "en"
+			? `Realtime recording: ${elapsed}, ${state.connectionStatus ?? "connecting"}${utteranceCount > 0 ? `, ${utteranceCount} stable utterances written` : ""}.`
+			: `正在实时录音：${elapsed}，${state.connectionStatus ?? "正在连接 AgentPlan"}${utteranceCount > 0 ? `，已写入 ${utteranceCount} 个确定分句` : ""}。`;
+	}
+	if (!state || state.totalSeconds <= 0) {
+		return fallback;
+	}
+
+	const processed = formatProgressTime(state.processedSeconds);
+	const total = formatProgressTime(state.totalSeconds);
+	const utteranceCount = state.utterances?.length ?? 0;
+	return input.copyLanguage === "en"
+		? `Transcription is running: ${processed} / ${total} sent${utteranceCount > 0 ? `, ${utteranceCount} stable utterances written` : ""}.`
+		: `音频正在转写：已发送 ${processed} / ${total}${utteranceCount > 0 ? `，已写入 ${utteranceCount} 个确定分句` : ""}。`;
+}
+
+function renderProgressBody(input: ProgressTranscriptTemplateInput): string {
+	const state = input.streamingState;
+	const provisional = state?.provisionalText?.trim();
+	let stable: string;
+	if (state?.utterances && state.utterances.length > 0) {
+		stable = renderTranscriptionUtterances(
+			state.utterances,
+			input.copyLanguage,
+			input.speakerLabelStyle ?? "speaker-with-time"
+		);
+	} else if (state?.text.trim()) {
+		stable = state.text.trim();
+	} else {
+		stable = renderSegmentsOrEmpty(input.segments, input.copyLanguage);
+	}
+	if (!provisional) {
+		return stable;
+	}
+	const provisionalBlock = input.copyLanguage === "en"
+		? `> [!info] Recognizing\n> ${provisional.replace(/\n/g, "\n> ")}`
+		: `> [!info] 正在识别\n> ${provisional.replace(/\n/g, "\n> ")}`;
+	return `${stable}\n\n${provisionalBlock}`;
+}
+
+function renderInterruptedBody(input: FailedTranscriptTemplateInput): string {
+	const state = input.streamingState;
+	if (state?.utterances && state.utterances.length > 0) {
+		return renderTranscriptionUtterances(
+			state.utterances,
+			input.copyLanguage,
+			input.speakerLabelStyle ?? "speaker-with-time"
+		);
+	}
+	if (state?.text.trim()) {
+		return state.text.trim();
+	}
+	return renderSegmentsOrEmpty(input.segments ?? [], input.copyLanguage);
+}
+
+function formatProgressTime(seconds: number): string {
+	const safeSeconds = Math.max(0, Math.floor(seconds));
+	const hours = Math.floor(safeSeconds / 3600);
+	const minutes = Math.floor((safeSeconds % 3600) / 60);
+	const remainingSeconds = safeSeconds % 60;
+	return hours > 0
+		? `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`
+		: `${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
 function escapeYaml(value: string): string {

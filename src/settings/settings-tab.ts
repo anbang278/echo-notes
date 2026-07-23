@@ -1,4 +1,13 @@
-import { App, Modal, Notice, Platform, PluginSettingTab, Setting, type SettingDefinitionItem } from "obsidian";
+import {
+	App,
+	FileSystemAdapter,
+	Modal,
+	Notice,
+	Platform,
+	PluginSettingTab,
+	Setting,
+	type SettingDefinitionItem
+} from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
 	getProviderCapabilitySummary,
@@ -14,16 +23,20 @@ import { getSanitizedErrorMessage } from "../security/redaction";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
+	AGENTPLAN_ANALYSIS_BASE_URL,
+	AGENTPLAN_ANALYSIS_MODELS,
 	COPY_LANGUAGE_LABELS,
 	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
+	OFFLINE_TRANSCRIPTION_PROVIDER_LABELS,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
+	SILICONFLOW_TRANSCRIPTION_MODELS,
 	TRANSCRIPTION_LANGUAGE_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
 	isAnalysisProviderId,
-	isProviderId,
+	isOfflineTranscriptionProviderId,
 	normalizeTranscriptionLanguageForProvider,
 	parseHotkeyInput,
 	parseRecognitionKeywordsInput,
@@ -34,8 +47,9 @@ import {
 	type CopyLanguage,
 	type EchoNotesHotkeySetting,
 	type InsertStyle,
+	type OfflineTranscriptionProviderId,
 	type OutputStrategy,
-	type TranscriptionProviderId
+	type TranscriptionConfig
 } from "./settings";
 
 export class EchoNotesSettingTab extends PluginSettingTab {
@@ -67,154 +81,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.settingsContainerEl = containerEl;
 		containerEl.empty();
 
-		this.renderOfficialRecorderSettings(containerEl);
-
-		new Setting(containerEl).setName("Provider").setHeading();
-
-		new Setting(containerEl)
-			.setName("Provider")
-			.setDesc("选择用于音频转写的服务商。切换后会自动填入该 Provider 的默认 Base URL 和模型。")
-			.addDropdown((dropdown) =>
-				Object.entries(PROVIDER_LABELS)
-					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
-					.setValue(this.plugin.settings.provider)
-					.onChange(async (value) => {
-						if (!isProviderId(value)) {
-							return;
-						}
-						this.plugin.settings.provider = value;
-						this.applyProviderDefaults(value);
-						await this.plugin.saveSettings();
-						this.refreshSettings();
-					})
-			);
-
-		this.renderProviderSignup(containerEl);
-		this.renderProviderCapability(containerEl);
-
-		const apiKeySetting = new Setting(containerEl)
-			.setName("API Key")
-			.setDesc("用于调用当前服务商的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage，切换 Provider 不会复用或发送其他服务商的密钥。");
-		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, this.plugin.getApiKey());
-		apiKeySetting.addText((text) => {
-				text.inputEl.type = "password";
-				text
-					.setPlaceholder("sk-...")
-					.setValue(this.plugin.getApiKey())
-					.onChange(async (value) => {
-						try {
-							const apiKey = value.trim();
-							await this.plugin.saveApiKey(apiKey);
-							this.setSecretSaveStatus(apiKeyStatusEl, apiKey ? "saved" : "cleared");
-						} catch (error) {
-							this.setSecretSaveStatus(apiKeyStatusEl, "failed");
-							new Notice(`API Key 保存失败：${getSanitizedErrorMessage(error)}`);
-						}
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("Base URL")
-			.setDesc(this.getBaseUrlDescription())
-			.addText((text) =>
-				text
-					.setPlaceholder(this.getProviderDefaults().baseUrl)
-					.setValue(this.plugin.settings.baseUrl)
-					.onChange(async (value) => {
-						this.plugin.settings.baseUrl = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Model")
-			.setDesc("转写模型名称。")
-			.addText((text) =>
-				text
-					.setPlaceholder(this.getProviderDefaults().model)
-					.setValue(this.plugin.settings.model)
-					.onChange(async (value) => {
-						this.plugin.settings.model = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("默认转写语言")
-			.setDesc(`${this.getTranscriptionLanguageDescription()} 如需 cmn、yue、fr、de 等其他代码，请使用下方自定义语言代码。`)
-			.addDropdown((dropdown) => {
-				for (const [value, label] of Object.entries(TRANSCRIPTION_LANGUAGE_LABELS)) {
-					dropdown.addOption(value, label);
-				}
-				const currentLanguage = this.plugin.settings.language || "auto";
-				if (!Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, currentLanguage)) {
-					dropdown.addOption(currentLanguage, `自定义：${currentLanguage}`);
-				}
-				return dropdown
-					.setValue(currentLanguage)
-					.onChange(async (value) => {
-						const normalizedLanguage = normalizeTranscriptionLanguageForProvider(
-							this.plugin.settings.provider,
-							value || "auto"
-						);
-						this.plugin.settings.language = normalizedLanguage;
-						await this.plugin.saveSettings();
-						if (normalizedLanguage !== value) {
-							new Notice("AgentPlan 说话人分离仅支持 auto 或中文，已自动切换为 auto。");
-							this.refreshSettings();
-						}
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("自定义语言代码")
-			.setDesc("可填写当前 Provider 支持的任意语言代码。保存后会覆盖上方预设；清空不会改变当前语言。")
-			.addText((text) => {
-				const currentLanguage = this.plugin.settings.language;
-				const customLanguage = Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, currentLanguage)
-					? ""
-					: currentLanguage;
-				let draftValue = customLanguage;
-				text
-					.setPlaceholder("例如 cmn、yue、fr")
-					.setValue(customLanguage)
-					.onChange((value) => {
-						draftValue = value;
-					});
-				text.inputEl.addEventListener("blur", () => {
-					const value = draftValue.trim();
-					if (!value || value === this.plugin.settings.language) {
-						return;
-					}
-					const normalizedLanguage = normalizeTranscriptionLanguageForProvider(
-						this.plugin.settings.provider,
-						value
-					);
-					this.plugin.settings.language = normalizedLanguage;
-					if (normalizedLanguage !== value) {
-						new Notice("AgentPlan 说话人分离仅支持 auto 或中文，已自动切换为 auto。");
-					}
-					void this.plugin.saveSettings().then(() => this.refreshSettings());
-				});
-			});
-
-		if (this.plugin.settings.provider === "volcengine-agentplan") {
-			new Setting(containerEl)
-				.setName("说话人标签样式")
-				.setDesc("AgentPlan 始终启用说话人聚类。可只标记说话人，或同时显示每轮发言的起止时间；单人录音也会显示“说话人 1”。")
-				.addDropdown((dropdown) =>
-					dropdown
-						.addOption("speaker", "仅说话人")
-						.addOption("speaker-with-time", "说话人＋时间")
-						.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle)
-						.onChange(async (value) => {
-							this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
-							await this.plugin.saveSettings();
-						})
-				);
-		}
-
-		this.renderProviderDiagnostics(containerEl);
+		this.renderTranscriptionSettings(containerEl);
 
 		this.renderAnalysisSettings(containerEl);
 
@@ -336,7 +203,255 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.verboseLog = value;
 						await this.plugin.saveSettings();
 					})
+		);
+	}
+
+	private renderTranscriptionSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("音频转写").setHeading();
+
+		new Setting(containerEl)
+			.setName("转写模式")
+			.setDesc("实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 Vault 中已有的音频文件。")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOption("realtime", "实时转写")
+					.addOption("offline", "离线转写")
+					.setValue(this.plugin.settings.transcriptionMode)
+					.onChange(async (value) => {
+						this.plugin.settings.transcriptionMode = value === "realtime" ? "realtime" : "offline";
+						await this.plugin.saveSettings();
+						this.refreshSettings();
+					})
 			);
+
+		const config = this.getSelectedTranscriptionConfig();
+		const isRealtime = this.plugin.settings.transcriptionMode === "realtime";
+
+		new Setting(containerEl)
+			.setName("Provider")
+			.setDesc(
+				isRealtime
+					? "实时转写目前固定使用火山引擎 AgentPlan。"
+					: "选择用于已有音频文件转写的服务商；AgentPlan 仅在实时模式中使用。"
+			)
+			.addDropdown((dropdown) => {
+				if (isRealtime) {
+					return dropdown
+						.addOption("volcengine-agentplan", PROVIDER_LABELS["volcengine-agentplan"])
+						.setValue("volcengine-agentplan")
+						.setDisabled(true);
+				}
+
+				for (const [value, label] of Object.entries(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
+					dropdown.addOption(value, getProviderOptionLabel(value, label));
+				}
+				return dropdown
+					.setValue(config.provider)
+					.onChange(async (value) => {
+						if (!isOfflineTranscriptionProviderId(value)) {
+							return;
+						}
+						this.plugin.settings.offlineTranscription.provider = value;
+						this.applyOfflineProviderDefaults(value);
+						await this.plugin.saveSettings();
+						this.refreshSettings();
+					});
+			});
+
+		this.renderProviderSignup(containerEl);
+		this.renderProviderCapability(containerEl);
+
+		const apiKey = this.plugin.getApiKey(config.provider);
+		const apiKeySetting = new Setting(containerEl)
+			.setName(isRealtime ? "AgentPlan 专属 API Key" : "API Key")
+			.setDesc("密钥按 Provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
+		apiKeySetting.addText((text) => {
+			text.inputEl.type = "password";
+			text
+				.setPlaceholder("sk-...")
+				.setValue(apiKey)
+				.onChange(async (value) => {
+					try {
+						const nextApiKey = value.trim();
+						await this.plugin.saveApiKey(config.provider, nextApiKey);
+						this.setSecretSaveStatus(apiKeyStatusEl, nextApiKey ? "saved" : "cleared");
+					} catch (error) {
+						this.setSecretSaveStatus(apiKeyStatusEl, "failed");
+						new Notice(`API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+					}
+				});
+		});
+
+		new Setting(containerEl)
+			.setName("Base URL")
+			.setDesc(this.getBaseUrlDescription())
+			.addText((text) => {
+				text
+					.setPlaceholder(this.getProviderDefaults().baseUrl)
+					.setValue(config.baseUrl)
+					.setDisabled(isRealtime);
+				if (!isRealtime) {
+					text.onChange(async (value) => {
+						this.plugin.settings.offlineTranscription.baseUrl = value.trim();
+						await this.plugin.saveSettings();
+					});
+				}
+				return text;
+			});
+
+		if (!isRealtime && config.provider === "siliconflow") {
+			const isOfficialModel = SILICONFLOW_TRANSCRIPTION_MODELS.some((model) => model === config.model);
+			new Setting(containerEl)
+				.setName("Model")
+				.setDesc("可选择硅基流动官方转写模型，或在下方填写未来新增的自定义模型 ID。")
+				.addDropdown((dropdown) => {
+					for (const model of SILICONFLOW_TRANSCRIPTION_MODELS) {
+						dropdown.addOption(model, model);
+					}
+					dropdown.addOption("__custom__", "自定义模型");
+					return dropdown
+						.setValue(isOfficialModel ? config.model : "__custom__")
+						.onChange(async (value) => {
+							if (value === "__custom__") {
+								this.refreshSettings();
+								return;
+							}
+							this.plugin.settings.offlineTranscription.model = value;
+							await this.plugin.saveSettings();
+							this.refreshSettings();
+						});
+				});
+
+			new Setting(containerEl)
+				.setName("自定义转写模型")
+				.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的 Provider API Key。")
+				.addText((text) =>
+					text
+						.setPlaceholder("例如未来新增的 organization/model-id")
+						.setValue(isOfficialModel ? "" : config.model)
+						.onChange(async (value) => {
+							const nextModel = value.trim();
+							if (!nextModel) {
+								return;
+							}
+							this.plugin.settings.offlineTranscription.model = nextModel;
+							await this.plugin.saveSettings();
+						})
+				);
+		} else {
+			new Setting(containerEl)
+				.setName("Model")
+				.setDesc(isRealtime ? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。" : "离线转写模型名称。")
+				.addText((text) => {
+					text
+						.setPlaceholder(this.getProviderDefaults().model)
+						.setValue(config.model)
+						.setDisabled(isRealtime);
+					if (!isRealtime) {
+						text.onChange(async (value) => {
+							this.plugin.settings.offlineTranscription.model = value.trim();
+							await this.plugin.saveSettings();
+						});
+					}
+					return text;
+				});
+		}
+
+		new Setting(containerEl)
+			.setName("默认转写语言")
+			.setDesc(`${this.getTranscriptionLanguageDescription()} 如需其他代码，可使用下方自定义语言代码。`)
+			.addDropdown((dropdown) => {
+				for (const [value, label] of Object.entries(TRANSCRIPTION_LANGUAGE_LABELS)) {
+					dropdown.addOption(value, label);
+				}
+				if (!Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, config.language)) {
+					dropdown.addOption(config.language, `自定义：${config.language}`);
+				}
+				return dropdown
+					.setValue(config.language || "auto")
+					.onChange(async (value) => {
+						config.language = normalizeTranscriptionLanguageForProvider(config.provider, value || "auto");
+						await this.plugin.saveSettings();
+						if (config.language !== value) {
+							new Notice("AgentPlan 说话人分离仅支持 auto 或中文，已自动切换为 auto。");
+							this.refreshSettings();
+						}
+					});
+			});
+
+		if (!isRealtime) {
+			new Setting(containerEl)
+				.setName("自定义语言代码")
+				.setDesc("填写当前离线 Provider 支持的语言代码；清空不会改变当前语言。")
+				.addText((text) => {
+					const customLanguage = Object.prototype.hasOwnProperty.call(
+						TRANSCRIPTION_LANGUAGE_LABELS,
+						config.language
+					)
+						? ""
+						: config.language;
+					let draftValue = customLanguage;
+					text.setPlaceholder("例如 cmn、yue、fr").setValue(customLanguage).onChange((value) => {
+						draftValue = value;
+					});
+					text.inputEl.addEventListener("blur", () => {
+						const value = draftValue.trim();
+						if (!value || value === config.language) {
+							return;
+						}
+						config.language = value;
+						void this.plugin.saveSettings().then(() => this.refreshSettings());
+					});
+				});
+		}
+
+		if (isRealtime) {
+			new Setting(containerEl)
+				.setName("说话人标签样式")
+				.setDesc("AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。")
+				.addDropdown((dropdown) =>
+					dropdown
+						.addOption("speaker", "仅说话人")
+						.addOption("speaker-with-time", "说话人＋时间")
+						.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle)
+						.onChange(async (value) => {
+							this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
+							await this.plugin.saveSettings();
+						})
+				);
+
+			const devices = this.plugin.getCachedAudioInputDevices();
+			new Setting(containerEl)
+				.setName("麦克风")
+				.setDesc("默认使用系统输入设备。刷新设备时会申请麦克风权限；已选设备失效时自动回退系统默认。")
+				.addDropdown((dropdown) => {
+					dropdown.addOption("", "系统默认麦克风");
+					for (const device of devices) {
+						dropdown.addOption(device.deviceId, device.label || `麦克风 ${dropdown.selectEl.options.length}`);
+					}
+					return dropdown
+						.setValue(this.plugin.settings.realtimeTranscription.inputDeviceId)
+						.onChange(async (value) => {
+							this.plugin.settings.realtimeTranscription.inputDeviceId = value;
+							await this.plugin.saveSettings();
+						});
+				})
+				.addButton((button) =>
+					button.setButtonText("刷新麦克风").onClick(async () => {
+						try {
+							await this.plugin.refreshAudioInputDevices();
+							this.refreshSettings();
+						} catch (error) {
+							new Notice(`读取麦克风失败：${getSanitizedErrorMessage(error)}`);
+						}
+					})
+				);
+		} else {
+			this.renderOfficialRecorderSettings(containerEl);
+		}
+
+		this.renderProviderDiagnostics(containerEl);
 	}
 
 	private renderOfficialRecorderSettings(containerEl: HTMLElement): void {
@@ -455,7 +570,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Provider")
-			.setDesc("用于对转写稿生成纪要的服务商。仅转写 Provider 不会出现在此列表中，默认使用阿里百炼。")
+			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
 					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
@@ -471,9 +586,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
+		const isAgentPlanAnalysis = this.plugin.settings.analysisProvider === "volcengine-agentplan";
+		if (isAgentPlanAnalysis) {
+			this.renderAgentPlanAnalysisSignup(containerEl);
+		}
+
 		const analysisApiKeySetting = new Setting(containerEl)
-			.setName("分析 API Key")
-			.setDesc("用于调用当前分析 Provider 的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage。");
+			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API Key" : "分析 API Key")
+			.setDesc(
+				isAgentPlanAnalysis
+					? "必须使用 AgentPlan 控制台创建的专属 API Key；与实时转写密钥按用途隔离保存在 Obsidian SecretStorage。"
+					: "用于调用当前分析 Provider 的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage。"
+			);
 		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
 			analysisApiKeySetting,
 			this.plugin.getAnalysisApiKey()
@@ -497,21 +621,52 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Base URL")
-			.setDesc("OpenAI-compatible Chat Completions 基础地址。请确认所选 Provider 支持 {Base URL}/chat/completions。")
-			.addText((text) =>
+			.setDesc(
+				isAgentPlanAnalysis
+					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
+					: "OpenAI-compatible Chat Completions 基础地址。请确认所选 Provider 支持 {Base URL}/chat/completions。"
+			)
+			.addText((text) => {
 				text
 					.setPlaceholder(this.getAnalysisProviderDefaults().analysisBaseUrl)
 					.setValue(this.plugin.settings.analysisBaseUrl)
-					.onChange(async (value) => {
+					.setDisabled(isAgentPlanAnalysis);
+				if (!isAgentPlanAnalysis) {
+					text.onChange(async (value) => {
 						this.plugin.settings.analysisBaseUrl = value.trim();
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+				}
+				return text;
+			});
 
-		new Setting(containerEl)
+		const analysisModelSetting = new Setting(containerEl)
 			.setName("分析模型")
-			.setDesc("用于生成纪要分析的文本模型。")
-			.addText((text) =>
+			.setDesc(
+				isAgentPlanAnalysis
+					? "选择 AgentPlan 套餐当前支持的文本生成模型；Kimi K3 仅 Medium 及以上套餐可用。"
+					: "用于生成纪要分析的文本模型。"
+			);
+		if (isAgentPlanAnalysis) {
+			analysisModelSetting.addDropdown((dropdown) => {
+				for (const option of AGENTPLAN_ANALYSIS_MODELS) {
+					dropdown.addOption(option.id, option.label);
+				}
+				if (!AGENTPLAN_ANALYSIS_MODELS.some((option) => option.id === this.plugin.settings.analysisModel)) {
+					dropdown.addOption(
+						this.plugin.settings.analysisModel,
+						`当前自定义模型：${this.plugin.settings.analysisModel}`
+					);
+				}
+				return dropdown
+					.setValue(this.plugin.settings.analysisModel)
+					.onChange(async (value) => {
+						this.plugin.settings.analysisModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+		} else {
+			analysisModelSetting.addText((text) =>
 				text
 					.setPlaceholder(this.getAnalysisProviderDefaults().analysisModel)
 					.setValue(this.plugin.settings.analysisModel)
@@ -520,6 +675,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+		}
 
 		new Setting(containerEl)
 			.setName("分析配置自检")
@@ -615,7 +771,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderProviderCapability(containerEl: HTMLElement): void {
-		const providerId = this.plugin.settings.provider;
+		const providerId = this.getSelectedTranscriptionConfig().provider;
 		const capability = getTranscriptionProviderCapability(providerId);
 		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
 		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
@@ -651,10 +807,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				button
 					.setButtonText("检查转写配置")
 					.onClick(() => {
-					const result = diagnoseTranscriptionProviderSettings(this.plugin.settings, this.plugin.getApiKey(), {
-						isMobile: Platform.isMobile
+					const config = this.getSelectedTranscriptionConfig();
+					const result = diagnoseTranscriptionProviderSettings(config, this.plugin.getApiKey(config.provider), {
+						isMobile: Platform.isMobile,
+						isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter,
+						usage: this.plugin.settings.transcriptionMode
 					});
-						new ProviderDiagnosticsModal(this.app, result.providerLabel, result.canAttemptTranscription, result.items).open();
+					new ProviderDiagnosticsModal(
+						this.app,
+						result.providerLabel,
+						result.canAttemptTranscription,
+						result.items
+					).open();
 					})
 			);
 	}
@@ -760,11 +924,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private applyProviderDefaults(provider: TranscriptionProviderId): void {
+	private applyOfflineProviderDefaults(provider: OfflineTranscriptionProviderId): void {
 		const defaults = PROVIDER_DEFAULTS[provider];
-		this.plugin.settings.baseUrl = defaults.baseUrl;
-		this.plugin.settings.model = defaults.model;
-		this.plugin.settings.language = defaults.language;
+		this.plugin.settings.offlineTranscription.baseUrl = defaults.baseUrl;
+		this.plugin.settings.offlineTranscription.model = defaults.model;
+		this.plugin.settings.offlineTranscription.language = defaults.language;
 	}
 
 	private applyAnalysisProviderDefaults(provider: AnalysisProviderId): void {
@@ -773,9 +937,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.plugin.settings.analysisModel = defaults.analysisModel;
 	}
 
-	private getProviderDefaults(): Pick<EchoNotesPlugin["settings"], "baseUrl" | "model" | "language"> {
-		const provider = isProviderId(this.plugin.settings.provider) ? this.plugin.settings.provider : "aliyun-bailian";
+	private getProviderDefaults(): Omit<TranscriptionConfig, "provider"> {
+		const provider = this.getSelectedTranscriptionConfig().provider;
 		return PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS["aliyun-bailian"];
+	}
+
+	private getSelectedTranscriptionConfig(): TranscriptionConfig {
+		return this.plugin.settings.transcriptionMode === "realtime"
+			? this.plugin.settings.realtimeTranscription
+			: this.plugin.settings.offlineTranscription;
 	}
 
 	private getAnalysisProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
@@ -786,9 +956,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getBaseUrlDescription(): string {
-		switch (this.plugin.settings.provider) {
+		switch (this.getSelectedTranscriptionConfig().provider) {
 			case "volcengine-agentplan":
-				return "AgentPlan ASR 单流高准确率 WebSocket 端点；仅支持 Obsidian 桌面端。";
+				return "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
 				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
 			case "openai":
@@ -811,7 +981,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getTranscriptionLanguageDescription(): string {
-		const capability = getTranscriptionProviderCapability(this.plugin.settings.provider);
+		const capability = getTranscriptionProviderCapability(this.getSelectedTranscriptionConfig().provider);
 		if (!capability.supportsLanguage) {
 			return "默认 ASR 转写语言。当前 Provider 不支持语言参数，此设置不会传给 Provider，仍由模型自动识别。";
 		}
@@ -819,8 +989,26 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		return "默认 ASR 转写语言。支持语言参数的 Provider 会随请求发送该值；auto 表示由 Provider 自动识别。";
 	}
 
+	private renderAgentPlanAnalysisSignup(containerEl: HTMLElement): void {
+		const desc = document.createDocumentFragment();
+		desc.appendText(`Echo Notes 将通过 ${AGENTPLAN_ANALYSIS_BASE_URL}/chat/completions 调用纪要分析。请使用`);
+		const keyLink = document.createElement("a");
+		keyLink.href =
+			"https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan";
+		keyLink.textContent = "AgentPlan 专属 API Key";
+		keyLink.target = "_blank";
+		keyLink.rel = "noopener noreferrer";
+		desc.appendChild(keyLink);
+		desc.appendText("，并遵守 AgentPlan 对 AI 工具使用场景的套餐限制。");
+
+		new Setting(containerEl)
+			.setName("AgentPlan 文本模型接入")
+			.setDesc(desc);
+	}
+
 	private renderProviderSignup(containerEl: HTMLElement): void {
-		if (this.plugin.settings.provider === "volcengine-agentplan") {
+		const provider = this.getSelectedTranscriptionConfig().provider;
+		if (provider === "volcengine-agentplan") {
 			const desc = document.createDocumentFragment();
 			desc.appendText("请在火山方舟 AgentPlan 控制台创建专属 API Key：");
 			const link = document.createElement("a");
@@ -834,7 +1022,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		if (this.plugin.settings.provider !== "siliconflow") {
+		if (provider !== "siliconflow") {
 			return;
 		}
 

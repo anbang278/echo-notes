@@ -20,6 +20,17 @@ export interface TranscriptionUtterance {
 	endSeconds?: number;
 }
 
+export interface StreamingTranscriptionState {
+	text: string;
+	utterances?: TranscriptionUtterance[];
+	provisionalText?: string;
+	realtime?: boolean;
+	connectionStatus?: string;
+	processedSeconds: number;
+	totalSeconds: number;
+	traceId?: string;
+}
+
 export type TranscriptionProgress =
 	| {
 			type: "long-audio-preparing";
@@ -39,6 +50,30 @@ export type TranscriptionProgress =
 			type: "segment-completed";
 			segment: TranscriptionSegment;
 			segments: TranscriptionSegment[];
+	  }
+	| {
+			type: "segment-retrying";
+			segment?: TranscriptionSegmentRange;
+			attempt: number;
+			maxAttempts: number;
+			delayMs: number;
+			httpStatus?: number;
+			segments: TranscriptionSegment[];
+	  }
+	| {
+			type: "segment-split";
+			segment: TranscriptionSegmentRange;
+			replacementSegments: TranscriptionSegmentRange[];
+			totalSegments: number;
+			segments: TranscriptionSegment[];
+	  }
+	| {
+			type: "streaming-result";
+			text: StreamingTranscriptionState["text"];
+			utterances?: StreamingTranscriptionState["utterances"];
+			processedSeconds: StreamingTranscriptionState["processedSeconds"];
+			totalSeconds: StreamingTranscriptionState["totalSeconds"];
+			traceId?: StreamingTranscriptionState["traceId"];
 	  };
 
 export interface TranscriptionInput {
@@ -81,12 +116,14 @@ export type TranscriptionErrorCode =
 export class TranscriptionError extends Error {
 	code: TranscriptionErrorCode;
 	traceId?: string;
+	httpStatus?: number;
 
-	constructor(code: TranscriptionErrorCode, message: string, traceId?: string) {
+	constructor(code: TranscriptionErrorCode, message: string, traceId?: string, httpStatus?: number) {
 		super(sanitizeSensitiveText(message));
 		this.name = "TranscriptionError";
 		this.code = code;
 		this.traceId = traceId;
+		this.httpStatus = httpStatus;
 	}
 }
 
@@ -98,7 +135,12 @@ export function createHttpTranscriptionError(
 ): TranscriptionError {
 	const code = classifyHttpTranscriptionError(status, responseText);
 	const sanitizedResponse = sanitizeSensitiveText(responseText || "No response body.");
-	return new TranscriptionError(code, `${providerName} API 请求失败：HTTP ${status} ${sanitizedResponse}`, traceId);
+	return new TranscriptionError(
+		code,
+		`${providerName} API 请求失败：HTTP ${status} ${sanitizedResponse}`,
+		traceId,
+		status
+	);
 }
 
 export function createNetworkTranscriptionError(providerName: string, error: unknown): TranscriptionError {

@@ -1,5 +1,11 @@
 import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
-import { ANALYSIS_PROVIDER_LABELS, isAnalysisProviderId, type EchoNotesSettings } from "../settings/settings";
+import {
+	AGENTPLAN_ANALYSIS_BASE_URL,
+	AGENTPLAN_ANALYSIS_MODELS,
+	ANALYSIS_PROVIDER_LABELS,
+	isAnalysisProviderId,
+	type EchoNotesSettings
+} from "../settings/settings";
 
 export type AnalysisDiagnosticSeverity = "error" | "warning" | "info";
 
@@ -40,6 +46,42 @@ export function diagnoseAnalysisProviderSettings(
 	if (!model) {
 		items.push({ severity: "error", title: "分析模型缺失", detail: "请填写分析模型名称。" });
 	}
+	if (providerId === "volcengine-agentplan") {
+		if (baseUrl && normalizeBaseUrl(baseUrl) !== AGENTPLAN_ANALYSIS_BASE_URL) {
+			items.push({
+				severity: "error",
+				title: "AgentPlan 分析地址不正确",
+				detail: `必须使用套餐专属地址 ${AGENTPLAN_ANALYSIS_BASE_URL}；普通方舟地址不会抵扣 AgentPlan 套餐额度。`
+			});
+		}
+		const selectedModel = AGENTPLAN_ANALYSIS_MODELS.find((option) => option.id === model);
+		if (model && !selectedModel) {
+			items.push({
+				severity: "warning",
+				title: "模型不在当前 AgentPlan 清单中",
+				detail: "该模型可能是后续新增型号，也可能无法使用；请以 AgentPlan 套餐页面的最新文本模型清单为准。"
+			});
+		}
+		if (selectedModel?.preview) {
+			items.push({
+				severity: "warning",
+				title: "当前模型属于尝鲜体验版",
+				detail: "官方提示高峰期可能出现访问拥堵或限流；纪要分析失败时可切换豆包 Seed 系列模型。"
+			});
+		}
+		if (selectedModel?.minimumPlan === "Medium") {
+			items.push({
+				severity: "warning",
+				title: "当前模型需要 Medium 及以上套餐",
+				detail: "Kimi K3 不包含在 AgentPlan Small 套餐中，请确认当前套餐档位。"
+			});
+		}
+		items.push({
+			severity: "info",
+			title: "AgentPlan 专属凭证",
+			detail: "分析必须使用 AgentPlan 专属 API Key；实时转写与分析密钥在 Echo Notes 中按用途隔离保存。"
+		});
+	}
 	if (estimatedCharacters !== undefined && estimatedCharacters > 120000) {
 		items.push({ severity: "warning", title: "转写稿可能过长", detail: `当前约 ${estimatedCharacters} 个字符，单次分析可能超出 Provider 上下文限制，建议启用分块分析。` });
 	}
@@ -68,4 +110,8 @@ function isValidHttpUrl(value: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function normalizeBaseUrl(value: string): string {
+	return value.trim().replace(/\/+$/, "");
 }

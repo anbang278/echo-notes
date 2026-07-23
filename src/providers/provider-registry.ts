@@ -1,15 +1,21 @@
 import type { App } from "obsidian";
-import { isProviderId, PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
+import {
+	isOfflineTranscriptionProviderId,
+	PROVIDER_LABELS,
+	type OfflineTranscriptionProviderId,
+	type TranscriptionConfig
+} from "../settings/settings";
 import { AliyunBailianQwenAsrProvider } from "./aliyun-bailian-provider";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-provider";
 import { SiliconFlowTeleSpeechProvider } from "./siliconflow-provider";
 import type { TranscriptionProvider } from "./transcription-provider";
-import { VolcengineAgentPlanAsrProvider } from "./volcengine-agentplan-provider";
 
-export function createTranscriptionProvider(app: App, settings: EchoNotesSettings, apiKey: string): TranscriptionProvider {
+export function createTranscriptionProvider(
+	app: App,
+	settings: TranscriptionConfig<OfflineTranscriptionProviderId>,
+	apiKey: string
+): TranscriptionProvider {
 	switch (settings.provider) {
-		case "volcengine-agentplan":
-			return new VolcengineAgentPlanAsrProvider(app, settings, apiKey);
 		case "aliyun-bailian":
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
 		case "openai":
@@ -27,7 +33,7 @@ export function createTranscriptionProvider(app: App, settings: EchoNotesSetting
 		case "siliconflow":
 			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
 		default:
-			if (isProviderId(settings.provider)) {
+			if (isOfflineTranscriptionProviderId(settings.provider)) {
 				return new OpenAICompatibleAudioProvider(
 					app,
 					settings,

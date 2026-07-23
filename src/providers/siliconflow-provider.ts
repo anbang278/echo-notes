@@ -1,12 +1,21 @@
 import { App, requestUrl } from "obsidian";
-import { runAudioChunkPipeline } from "../audio/audio-chunk-pipeline";
+import { runAdaptiveAudioChunkPipeline } from "../audio/audio-chunk-pipeline";
+import { probeAudioDurationSeconds } from "../audio/audio-duration";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
 import {
 	createWavAudioSegments,
 	formatSegmentTimeRange,
+	splitWavAudioSegment,
 	type WavAudioSegment
 } from "../audio/audio-segmenter";
-import type { EchoNotesSettings } from "../settings/settings";
+import type { TranscriptionConfig } from "../settings/settings";
+import {
+	isRetryablePolicyStatus,
+	resolveProviderTranscriptionPolicy,
+	shouldPreChunkTranscription,
+	shouldSplitPolicyError,
+	type ProviderTranscriptionPolicy
+} from "./transcription-policy";
 import {
 	createHttpTranscriptionError,
 	createNetworkTranscriptionError,
@@ -15,9 +24,6 @@ import {
 	type TranscriptionProvider,
 	type TranscriptionResult
 } from "./transcription-provider";
-
-const SILICONFLOW_MAX_AUDIO_BYTES = 50 * 1024 * 1024;
-const SILICONFLOW_LONG_AUDIO_TARGET_SEGMENT_SECONDS = 600;
 
 interface SiliconFlowTranscriptionResponse {
 	text?: string;
@@ -29,18 +35,34 @@ interface SiliconFlowSegmentResult {
 	raw: SiliconFlowTranscriptionResponse;
 }
 
+interface SiliconFlowProviderDependencies {
+	probeDuration?: typeof probeAudioDurationSeconds;
+	sleep?: (delayMs: number) => Promise<void>;
+}
+
 export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 	id = "siliconflow";
 	name = "SiliconFlow";
 
 	private app: App;
-	private settings: EchoNotesSettings;
+	private settings: TranscriptionConfig;
 	private apiKey: string;
+	private probeDuration: typeof probeAudioDurationSeconds;
+	private sleep: (delayMs: number) => Promise<void>;
 
-	constructor(app: App, settings: EchoNotesSettings, apiKey: string) {
+	constructor(
+		app: App,
+		settings: TranscriptionConfig,
+		apiKey: string,
+		dependencies: SiliconFlowProviderDependencies = {}
+	) {
 		this.app = app;
 		this.settings = settings;
 		this.apiKey = apiKey;
+		this.probeDuration = dependencies.probeDuration ?? probeAudioDurationSeconds;
+		this.sleep =
+			dependencies.sleep ??
+			((delayMs: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs)));
 	}
 
 	async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
@@ -54,45 +76,104 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 		}
 
 		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
-		if (input.audioFile.stat.size > SILICONFLOW_MAX_AUDIO_BYTES) {
-			return this.transcribeLongAudio(audioBuffer, input);
+		const mimeType = getAudioMimeType(input.audioFile);
+		const policy = resolveProviderTranscriptionPolicy({
+			provider: "siliconflow",
+			model: this.settings.model
+		});
+		const durationSeconds = await this.probeDuration(audioBuffer, mimeType);
+		if (
+			shouldPreChunkTranscription({
+				policy,
+				sourceBytes: input.audioFile.stat.size,
+				durationSeconds
+			})
+		) {
+			return this.transcribeLongAudio(audioBuffer, input, policy);
 		}
 
-		const result = await this.transcribeAudioBuffer(
-			audioBuffer,
-			getAudioMimeType(input.audioFile),
-			input.audioFile.name
-		);
+		try {
+			const result = await this.transcribeWholeAudioWithRetry(
+				audioBuffer,
+				mimeType,
+				input.audioFile.name,
+				input,
+				policy,
+				durationSeconds
+			);
 
-		return {
-			text: result.text,
-			provider: this.id,
-			model: this.settings.model,
-			traceId: result.traceId,
-			raw: result.raw
-		};
+			return {
+				text: result.text,
+				provider: this.id,
+				model: this.settings.model,
+				traceId: result.traceId,
+				raw: result.raw
+			};
+		} catch (error) {
+			const httpStatus = readHttpStatus(error);
+			if (!shouldSplitPolicyError(policy, httpStatus)) {
+				throw error;
+			}
+			return this.transcribeLongAudio(audioBuffer, input, policy, httpStatus === 413);
+		}
 	}
 
 	private async transcribeLongAudio(
 		audioBuffer: ArrayBuffer,
-		input: TranscriptionInput
+		input: TranscriptionInput,
+		policy: ProviderTranscriptionPolicy,
+		forceInitialSplit = false
 	): Promise<TranscriptionResult> {
-		const pipelineResult = await runAudioChunkPipeline<WavAudioSegment, SiliconFlowTranscriptionResponse>({
+		const pipelineResult = await runAdaptiveAudioChunkPipeline<
+			WavAudioSegment,
+			SiliconFlowTranscriptionResponse
+		>({
 			onProgress: input.onProgress,
-			createChunks: () => this.createLongAudioChunks(audioBuffer),
+			createChunks: async () => {
+				const chunks = await this.createLongAudioChunks(audioBuffer, policy);
+				if (
+					forceInitialSplit &&
+					chunks.length === 1 &&
+					chunks[0].endSeconds - chunks[0].startSeconds >= (policy.minSegmentSeconds ?? 60) * 2
+				) {
+					const splitChunks = splitWavAudioSegment(chunks[0]);
+					chunks[0].audioBuffer = new ArrayBuffer(0);
+					return splitChunks;
+				}
+				return chunks;
+			},
 			transcribeChunk: async (chunk) => {
-				this.assertChunkWithinMultipartLimit(chunk);
-				const result = await this.transcribeAudioBuffer(
-					chunk.audioBuffer,
-					chunk.mimeType,
-					buildSegmentFileName(input.audioFile.name, chunk)
-				);
-				return {
-					text: result.text,
-					traceId: result.traceId,
-					raw: result.raw
-				};
-			}
+				try {
+					this.assertChunkWithinMultipartLimit(chunk, policy);
+					const result = await this.transcribeAudioBuffer(
+						chunk.audioBuffer,
+						chunk.mimeType,
+						buildSegmentFileName(input.audioFile.name, chunk)
+					);
+					return {
+						text: result.text,
+						traceId: result.traceId,
+						raw: result.raw
+					};
+				} catch (error) {
+					if (error instanceof TranscriptionError) {
+						throw new TranscriptionError(
+							error.code,
+							`分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）转写失败：${error.message}`,
+							error.traceId,
+							error.httpStatus
+						);
+					}
+					throw error;
+				}
+			},
+			splitChunk: (chunk) => splitWavAudioSegment(chunk),
+			shouldRetry: (error) => isRetryablePolicyStatus(policy, readHttpStatus(error)),
+			shouldSplit: (error) => shouldSplitPolicyError(policy, readHttpStatus(error)),
+			retryDelaysMs: policy.retryDelaysMs,
+			maxSplitDepth: policy.maxSplitDepth,
+			minSegmentSeconds: policy.minSegmentSeconds ?? 60,
+			sleep: this.sleep
 		});
 
 		return {
@@ -107,10 +188,14 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 		};
 	}
 
-	private async createLongAudioChunks(audioBuffer: ArrayBuffer): Promise<WavAudioSegment[]> {
+	private async createLongAudioChunks(
+		audioBuffer: ArrayBuffer,
+		policy: ProviderTranscriptionPolicy
+	): Promise<WavAudioSegment[]> {
 		try {
 			return await createWavAudioSegments(audioBuffer, {
-				targetSegmentSeconds: SILICONFLOW_LONG_AUDIO_TARGET_SEGMENT_SECONDS
+				targetSegmentSeconds: policy.targetSegmentSeconds,
+				minSegmentSeconds: policy.minSegmentSeconds
 			});
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -118,15 +203,59 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 		}
 	}
 
-	private assertChunkWithinMultipartLimit(chunk: WavAudioSegment): void {
-		if (chunk.audioBuffer.byteLength <= SILICONFLOW_MAX_AUDIO_BYTES) {
+	private assertChunkWithinMultipartLimit(
+		chunk: WavAudioSegment,
+		policy: ProviderTranscriptionPolicy
+	): void {
+		if (!policy.maxSourceBytes || chunk.audioBuffer.byteLength <= policy.maxSourceBytes) {
 			return;
 		}
 
 		throw new TranscriptionError(
 			"file_too_large",
-			`长音频分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）仍超过 SiliconFlow 50MB 单段上传限制。`
+			`长音频分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）仍超过 SiliconFlow 50MB 单段上传限制。`,
+			undefined,
+			413
 		);
+	}
+
+	private async transcribeWholeAudioWithRetry(
+		audioBuffer: ArrayBuffer,
+		mimeType: string,
+		fileName: string,
+		input: TranscriptionInput,
+		policy: ProviderTranscriptionPolicy,
+		durationSeconds?: number
+	): Promise<SiliconFlowSegmentResult> {
+		for (let attempt = 0; ; attempt += 1) {
+			try {
+				return await this.transcribeAudioBuffer(audioBuffer, mimeType, fileName);
+			} catch (error) {
+				const delayMs = policy.retryDelaysMs[attempt];
+				if (delayMs === undefined || !isRetryablePolicyStatus(policy, readHttpStatus(error))) {
+					throw error;
+				}
+
+				await input.onProgress?.({
+					type: "segment-retrying",
+					segment:
+						durationSeconds !== undefined
+							? {
+									index: 1,
+									total: 1,
+									startSeconds: 0,
+									endSeconds: durationSeconds
+								}
+							: undefined,
+					attempt: attempt + 1,
+					maxAttempts: policy.retryDelaysMs.length,
+					delayMs,
+					httpStatus: readHttpStatus(error),
+					segments: []
+				});
+				await this.sleep(delayMs);
+			}
+		}
 	}
 
 	private async transcribeAudioBuffer(
@@ -254,4 +383,8 @@ function escapeHeaderValue(value: string): string {
 function readTraceId(headers: Record<string, string>): string | undefined {
 	const foundKey = Object.keys(headers).find((key) => key.toLowerCase() === "x-siliconcloud-trace-id");
 	return foundKey ? headers[foundKey] : undefined;
+}
+
+function readHttpStatus(error: unknown): number | undefined {
+	return error instanceof TranscriptionError ? error.httpStatus : undefined;
 }

@@ -1,6 +1,6 @@
 import type { Hotkey, Modifier } from "obsidian";
 
-export type AnalysisProviderId =
+export type OfflineTranscriptionProviderId =
 	| "siliconflow"
 	| "aliyun-bailian"
 	| "openai"
@@ -25,7 +25,24 @@ export type AnalysisProviderId =
 	| "z-ai"
 	| "custom-openai-compatible";
 
-export type TranscriptionProviderId = AnalysisProviderId | "volcengine-agentplan";
+export type AnalysisProviderId = OfflineTranscriptionProviderId | "volcengine-agentplan";
+
+export type RealtimeTranscriptionProviderId = "volcengine-agentplan";
+
+export type TranscriptionProviderId = OfflineTranscriptionProviderId | RealtimeTranscriptionProviderId;
+
+export type TranscriptionMode = "realtime" | "offline";
+
+export interface TranscriptionConfig<TProvider extends TranscriptionProviderId = TranscriptionProviderId> {
+	provider: TProvider;
+	baseUrl: string;
+	model: string;
+	language: string;
+}
+
+export interface RealtimeTranscriptionConfig extends TranscriptionConfig<RealtimeTranscriptionProviderId> {
+	inputDeviceId: string;
+}
 
 export type OutputStrategy = "same-name-subfolder" | "same-folder" | "custom-folder";
 
@@ -38,6 +55,33 @@ export type AgentPlanSpeakerLabelStyle = "speaker" | "speaker-with-time";
 export type EchoNotesHotkeySetting = Hotkey | null;
 
 export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
+export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
+export const LEGACY_AGENTPLAN_NOSTREAM_BASE_URL =
+	"wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream";
+export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
+
+export interface AgentPlanAnalysisModelOption {
+	id: string;
+	label: string;
+	minimumPlan?: "Medium";
+	preview?: boolean;
+}
+
+export const AGENTPLAN_ANALYSIS_MODELS: AgentPlanAnalysisModelOption[] = [
+	{ id: "doubao-seed-2.0-mini", label: "豆包 Seed 2.0 Mini（极速）" },
+	{ id: "doubao-seed-2.0-lite", label: "豆包 Seed 2.0 Lite（标准）" },
+	{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash（标准·尝鲜）", preview: true },
+	{ id: "doubao-seed-evolving", label: "豆包 Seed Evolving（进阶）" },
+	{ id: "doubao-seed-2.0-code", label: "豆包 Seed 2.0 Code（进阶）" },
+	{ id: "doubao-seed-2.0-pro", label: "豆包 Seed 2.0 Pro（进阶）" },
+	{ id: "minimax-m2.7", label: "MiniMax M2.7（进阶）" },
+	{ id: "minimax-m3", label: "MiniMax M3（进阶）" },
+	{ id: "glm-5.2", label: "GLM-5.2（进阶）" },
+	{ id: "kimi-k2.6", label: "Kimi K2.6（进阶）" },
+	{ id: "kimi-k2.7-code", label: "Kimi K2.7 Code（进阶）" },
+	{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro（进阶·尝鲜）", preview: true },
+	{ id: "kimi-k3", label: "Kimi K3（进阶，Medium 及以上）", minimumPlan: "Medium" }
+];
 
 export type BuiltInAnalysisTemplateId =
 	| "work-minutes"
@@ -67,11 +111,10 @@ export interface AnalysisTemplateConfig {
 }
 
 export interface EchoNotesSettings {
-	provider: TranscriptionProviderId;
+	transcriptionMode: TranscriptionMode;
+	offlineTranscription: TranscriptionConfig<OfflineTranscriptionProviderId>;
+	realtimeTranscription: RealtimeTranscriptionConfig;
 	apiKey?: string;
-	baseUrl: string;
-	model: string;
-	language: string;
 	agentPlanSpeakerLabelStyle: AgentPlanSpeakerLabelStyle;
 	outputStrategy: OutputStrategy;
 	customOutputFolder: string;
@@ -97,9 +140,9 @@ export interface EchoNotesSettings {
 	verboseLog: boolean;
 }
 
-export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Pick<EchoNotesSettings, "baseUrl" | "model" | "language">> = {
+export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<TranscriptionConfig, "provider">> = {
 	"volcengine-agentplan": {
-		baseUrl: "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream",
+		baseUrl: AGENTPLAN_ASYNC_BASE_URL,
 		model: "doubao-seed-asr-2.0",
 		language: "zh"
 	},
@@ -220,7 +263,13 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Pick<EchoNotesSe
 	}
 };
 
+export const SILICONFLOW_TRANSCRIPTION_MODELS = [
+	"FunAudioLLM/SenseVoiceSmall",
+	"TeleAI/TeleSpeechASR"
+] as const;
+
 export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
+	"volcengine-agentplan": "火山引擎 AgentPlan",
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	openai: "OpenAI（OpenAI）",
@@ -246,9 +295,14 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 	"custom-openai-compatible": "自定义兼容接口（Custom OpenAI-compatible）"
 };
 
+export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> =
+	Object.fromEntries(
+		Object.entries(ANALYSIS_PROVIDER_LABELS).filter(([provider]) => provider !== "volcengine-agentplan")
+	) as Record<OfflineTranscriptionProviderId, string>;
+
 export const PROVIDER_LABELS: Record<TranscriptionProviderId, string> = {
 	"volcengine-agentplan": "火山引擎 AgentPlan",
-	...ANALYSIS_PROVIDER_LABELS
+	...OFFLINE_TRANSCRIPTION_PROVIDER_LABELS
 };
 
 export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
@@ -265,6 +319,10 @@ export const TRANSCRIPTION_LANGUAGE_LABELS: Record<string, string> = {
 };
 
 export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNotesSettings, "analysisBaseUrl" | "analysisModel">> = {
+	"volcengine-agentplan": {
+		analysisBaseUrl: AGENTPLAN_ANALYSIS_BASE_URL,
+		analysisModel: "doubao-seed-2.0-lite"
+	},
 	siliconflow: {
 		analysisBaseUrl: "https://api.siliconflow.cn/v1",
 		analysisModel: "deepseek-ai/DeepSeek-V3"
@@ -667,10 +725,20 @@ export const DEFAULT_ANALYSIS_TEMPLATES: Record<BuiltInAnalysisTemplateId, Analy
 };
 
 export const DEFAULT_SETTINGS: EchoNotesSettings = {
-	provider: "aliyun-bailian",
-	baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-	model: "qwen3-asr-flash",
-	language: "zh",
+	transcriptionMode: "offline",
+	offlineTranscription: {
+		provider: "aliyun-bailian",
+		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		model: "qwen3-asr-flash",
+		language: "zh"
+	},
+	realtimeTranscription: {
+		provider: "volcengine-agentplan",
+		baseUrl: AGENTPLAN_ASYNC_BASE_URL,
+		model: "doubao-seed-asr-2.0",
+		language: "zh",
+		inputDeviceId: ""
+	},
 	agentPlanSpeakerLabelStyle: "speaker-with-time",
 	outputStrategy: "same-name-subfolder",
 	customOutputFolder: "Transcripts",
@@ -771,8 +839,8 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		transcriptHeading: "转写稿",
 		failedTitle: "转写失败",
 		errorReasonLabel: "错误原因：",
-		transcribingNotice: "长音频正在逐段转写，已完成的分段会持续写入本文档。",
-		partialFailureNotice: "长音频逐段转写已中断，以下为已完成的分段。",
+		transcribingNotice: "音频正在转写，已完成的内容会持续写入本文档。",
+		partialFailureNotice: "音频转写已中断，以下为中断前已完成的内容。",
 		segmentHeadingPrefix: "分段",
 		emptySegmentText: "（本段暂无转写内容）",
 		speakerLabel: "说话人",
@@ -793,8 +861,8 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		transcriptHeading: "Transcribed manuscript",
 		failedTitle: "Transcription failed",
 		errorReasonLabel: "Error reason:",
-		transcribingNotice: "Long audio transcription is running. Completed segments are written here as they finish.",
-		partialFailureNotice: "Long audio transcription stopped. Completed segments are kept below.",
+		transcribingNotice: "Transcription is running. Completed content is written here as it becomes available.",
+		partialFailureNotice: "Transcription stopped. Content completed before the interruption is kept below.",
 		segmentHeadingPrefix: "Segment",
 		emptySegmentText: "(No transcript text for this segment yet.)",
 		speakerLabel: "Speaker",
@@ -813,11 +881,15 @@ export function getLocalizedCopy(language: string | undefined): LocalizedCopy {
 }
 
 export function isProviderId(value: string): value is TranscriptionProviderId {
-	return value in PROVIDER_LABELS;
+	return Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, value);
+}
+
+export function isOfflineTranscriptionProviderId(value: string): value is OfflineTranscriptionProviderId {
+	return Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS, value);
 }
 
 export function isAnalysisProviderId(value: string): value is AnalysisProviderId {
-	return value in ANALYSIS_PROVIDER_LABELS;
+	return Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, value);
 }
 
 export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
@@ -827,24 +899,71 @@ export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
 export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings {
 	const raw = isRecord(rawData) ? rawData : {};
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
-	const rawProvider = typeof raw.provider === "string" ? raw.provider : "";
-	const hasValidProvider = isProviderId(rawProvider);
-	const fallbackProvider: TranscriptionProviderId = "aliyun-bailian";
-	settings.provider = hasValidProvider ? rawProvider : fallbackProvider;
-	const providerDefaults = PROVIDER_DEFAULTS[settings.provider];
-	settings.baseUrl =
-		hasValidProvider && typeof raw.baseUrl === "string" && raw.baseUrl.trim()
-			? raw.baseUrl.trim()
-			: providerDefaults.baseUrl;
-	settings.model =
-		hasValidProvider && typeof raw.model === "string" && raw.model.trim()
-			? raw.model.trim()
-			: providerDefaults.model;
-	settings.language =
-		hasValidProvider && typeof raw.language === "string" && raw.language.trim()
-			? raw.language.trim()
-			: providerDefaults.language;
-	settings.language = normalizeTranscriptionLanguageForProvider(settings.provider, settings.language);
+	const legacyProvider = typeof raw.provider === "string" ? raw.provider : "";
+	const nestedOffline = isRecord(raw.offlineTranscription) ? raw.offlineTranscription : {};
+	const nestedRealtime = isRecord(raw.realtimeTranscription) ? raw.realtimeTranscription : {};
+	const rawOfflineProvider =
+		typeof nestedOffline.provider === "string"
+			? nestedOffline.provider
+			: legacyProvider !== "volcengine-agentplan"
+				? legacyProvider
+				: "";
+	const offlineProvider = isOfflineTranscriptionProviderId(rawOfflineProvider)
+		? rawOfflineProvider
+		: DEFAULT_SETTINGS.offlineTranscription.provider;
+	const offlineDefaults = PROVIDER_DEFAULTS[offlineProvider];
+	settings.offlineTranscription = {
+		provider: offlineProvider,
+		baseUrl: normalizeConfigString(
+			nestedOffline.baseUrl,
+			legacyProvider === offlineProvider ? raw.baseUrl : undefined,
+			offlineDefaults.baseUrl
+		),
+		model: normalizeConfigString(
+			nestedOffline.model,
+			legacyProvider === offlineProvider ? raw.model : undefined,
+			offlineDefaults.model
+		),
+		language: normalizeConfigString(
+			nestedOffline.language,
+			legacyProvider === offlineProvider ? raw.language : undefined,
+			offlineDefaults.language
+		)
+	};
+	const legacyRealtimeBaseUrl =
+		legacyProvider === "volcengine-agentplan" && typeof raw.baseUrl === "string"
+			? raw.baseUrl
+			: undefined;
+	const realtimeBaseUrl = normalizeAgentPlanBaseUrl(
+		normalizeConfigString(
+			nestedRealtime.baseUrl,
+			legacyRealtimeBaseUrl,
+			DEFAULT_SETTINGS.realtimeTranscription.baseUrl
+		)
+	);
+	settings.realtimeTranscription = {
+		provider: "volcengine-agentplan",
+		baseUrl: realtimeBaseUrl,
+		model: DEFAULT_SETTINGS.realtimeTranscription.model,
+		language: normalizeTranscriptionLanguageForProvider(
+			"volcengine-agentplan",
+			normalizeConfigString(
+				nestedRealtime.language,
+				legacyProvider === "volcengine-agentplan" ? raw.language : undefined,
+				DEFAULT_SETTINGS.realtimeTranscription.language
+			)
+		),
+		inputDeviceId:
+			typeof nestedRealtime.inputDeviceId === "string"
+				? nestedRealtime.inputDeviceId.trim()
+				: DEFAULT_SETTINGS.realtimeTranscription.inputDeviceId
+	};
+	settings.transcriptionMode =
+		raw.transcriptionMode === "realtime" || raw.transcriptionMode === "offline"
+			? raw.transcriptionMode
+			: legacyProvider === "volcengine-agentplan"
+				? "realtime"
+				: DEFAULT_SETTINGS.transcriptionMode;
 	settings.agentPlanSpeakerLabelStyle =
 		raw.agentPlanSpeakerLabelStyle === "speaker"
 			? "speaker"
@@ -864,9 +983,11 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		ANALYSIS_PROVIDER_DEFAULTS[settings.analysisProvider] ??
 		ANALYSIS_PROVIDER_DEFAULTS[DEFAULT_SETTINGS.analysisProvider];
 	settings.analysisBaseUrl =
-		hasValidAnalysisProvider && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
-			? raw.analysisBaseUrl.trim()
-			: analysisDefaults.analysisBaseUrl;
+		settings.analysisProvider === "volcengine-agentplan"
+			? AGENTPLAN_ANALYSIS_BASE_URL
+			: hasValidAnalysisProvider && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
+				? raw.analysisBaseUrl.trim()
+				: analysisDefaults.analysisBaseUrl;
 	settings.analysisModel =
 		hasValidAnalysisProvider && typeof raw.analysisModel === "string" && raw.analysisModel.trim()
 			? raw.analysisModel.trim()
@@ -904,12 +1025,36 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	);
 
 	const mutableSettings = settings as EchoNotesSettings & Record<string, unknown>;
+	delete mutableSettings.provider;
+	delete mutableSettings.baseUrl;
+	delete mutableSettings.model;
+	delete mutableSettings.language;
 	delete mutableSettings.autoAnalyzeAfterTranscription;
 	delete mutableSettings.autoAnalysisTemplate;
 	delete mutableSettings.promptForAnalysisAfterTranscription;
 	delete mutableSettings.promptForAnalysisTemplateOnTranscription;
 
 	return settings;
+}
+
+export function getSelectedTranscriptionConfig(settings: EchoNotesSettings): TranscriptionConfig {
+	return settings.transcriptionMode === "realtime"
+		? settings.realtimeTranscription
+		: settings.offlineTranscription;
+}
+
+function normalizeAgentPlanBaseUrl(baseUrl: string): string {
+	return baseUrl === LEGACY_AGENTPLAN_NOSTREAM_BASE_URL ? AGENTPLAN_ASYNC_BASE_URL : baseUrl;
+}
+
+function normalizeConfigString(primary: unknown, legacy: unknown, fallback: string): string {
+	if (typeof primary === "string" && primary.trim()) {
+		return primary.trim();
+	}
+	if (typeof legacy === "string" && legacy.trim()) {
+		return legacy.trim();
+	}
+	return fallback;
 }
 
 export function normalizeTranscriptionLanguageForProvider(

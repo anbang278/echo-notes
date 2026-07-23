@@ -2,15 +2,19 @@ import {
 	buildAgentPlanFullRequestPayload,
 	encodeAgentPlanAudioRequest,
 	encodeAgentPlanFullRequest,
+	getAgentPlanDefiniteResult,
+	getAgentPlanWavDurationSeconds,
 	parseAgentPlanResponseFrame,
 	splitAgentPlanAudio,
 	type AgentPlanResponsePayload
 } from "./volcengine-agentplan-protocol";
+import { TranscriptionError, type TranscriptionUtterance } from "./transcription-provider";
 
 export const AGENTPLAN_RESOURCE_ID = "volc.seedasr.sauc.duration";
 export const AGENTPLAN_PACKET_DURATION_MS = 200;
 export const AGENTPLAN_HANDSHAKE_TIMEOUT_MS = 15000;
 export const AGENTPLAN_FINAL_RESPONSE_TIMEOUT_MS = 30000;
+export const AGENTPLAN_PROGRESS_INTERVAL_MS = 2000;
 
 export interface AgentPlanSocket {
 	onOpen(listener: () => void): void;
@@ -21,6 +25,7 @@ export interface AgentPlanSocket {
 	send(data: Uint8Array): void;
 	close(): void;
 	terminate(): void;
+	getBufferedAmount?(): number;
 }
 
 export type AgentPlanSocketFactory = (url: string, headers: Record<string, string>) => AgentPlanSocket;
@@ -32,8 +37,18 @@ export interface AgentPlanClientOptions {
 	wavBytes: Uint8Array;
 	createSocket: AgentPlanSocketFactory;
 	sleep?: (milliseconds: number) => Promise<void>;
+	now?: () => number;
 	handshakeTimeoutMs?: number;
 	finalResponseTimeoutMs?: number;
+	onProgress?: (progress: AgentPlanClientProgress) => Promise<void> | void;
+}
+
+export interface AgentPlanClientProgress {
+	text: string;
+	utterances?: TranscriptionUtterance[];
+	processedSeconds: number;
+	totalSeconds: number;
+	traceId?: string;
 }
 
 export interface AgentPlanClientResult {
@@ -54,6 +69,39 @@ export class AgentPlanClientError extends Error {
 	}
 }
 
+export function normalizeAgentPlanError(error: unknown): TranscriptionError {
+	if (error instanceof TranscriptionError) {
+		return error;
+	}
+	if (!(error instanceof AgentPlanClientError)) {
+		return new TranscriptionError(
+			"network_error",
+			`火山引擎 AgentPlan ASR 调用失败：${error instanceof Error ? error.message : String(error)}`
+		);
+	}
+
+	const normalized = error.message.toLowerCase();
+	let code: ConstructorParameters<typeof TranscriptionError>[0] = "api_error";
+	let prefix = "火山引擎 AgentPlan ASR 调用失败";
+	if (/401|403|unauthorized|api key|authentication|permission/.test(normalized)) {
+		code = "authentication_failed";
+		prefix = "火山引擎 AgentPlan 鉴权失败";
+	} else if (/429|rate.?limit|server busy|55000031/.test(normalized)) {
+		code = "rate_limited";
+		prefix = "火山引擎 AgentPlan 请求受限";
+	} else if (/quota|billing|credit|balance|exceeded/.test(normalized)) {
+		code = "quota_exceeded";
+		prefix = "火山引擎 AgentPlan 额度不足";
+	} else if (/timeout|超时|websocket|异常关闭/.test(normalized)) {
+		code = "network_error";
+		prefix = "火山引擎 AgentPlan 连接失败";
+	} else if (/result\.text|invalid json|响应帧/.test(normalized)) {
+		code = "invalid_response";
+		prefix = "火山引擎 AgentPlan 响应无效";
+	}
+	return new TranscriptionError(code, `${prefix}：${error.message}`, error.traceId);
+}
+
 export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): Promise<AgentPlanClientResult> {
 	const requestId = crypto.randomUUID();
 	const headers = {
@@ -65,6 +113,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 	};
 	const socket = options.createSocket(options.url, headers);
 	const sleep = options.sleep ?? delay;
+	const now = options.now ?? (() => performance.now());
 	const handshakeTimeoutMs = options.handshakeTimeoutMs ?? AGENTPLAN_HANDSHAKE_TIMEOUT_MS;
 	const finalResponseTimeoutMs = options.finalResponseTimeoutMs ?? AGENTPLAN_FINAL_RESPONSE_TIMEOUT_MS;
 	let traceId: string | undefined;
@@ -72,6 +121,11 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 	let audioStarted = false;
 	let latestPayload: AgentPlanResponsePayload = {};
 	let latestText = "";
+	let processedSeconds = 0;
+	let lastProgressSeconds = -Infinity;
+	let lastDefiniteSignature = "";
+	const totalSeconds = getAgentPlanWavDurationSeconds(options.wavBytes);
+	let progressQueue = Promise.resolve();
 	let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
 	let finalResponseTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -96,7 +150,38 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 			reject(error);
 		};
 
-		const succeed = (): void => {
+		const emitProgress = (force = false): void => {
+			if (!options.onProgress || settled) {
+				return;
+			}
+			const definiteResult = getAgentPlanDefiniteResult(latestPayload);
+			const signature = JSON.stringify({
+				text: definiteResult.text,
+				utterances: definiteResult.utterances
+			});
+			const hasNewDefiniteResult = signature !== lastDefiniteSignature && Boolean(definiteResult.text);
+			const hasProgressInterval =
+				processedSeconds >= totalSeconds ||
+				processedSeconds - lastProgressSeconds >= AGENTPLAN_PROGRESS_INTERVAL_MS / 1000;
+			if (!force && !hasNewDefiniteResult && !hasProgressInterval) {
+				return;
+			}
+
+			lastDefiniteSignature = signature;
+			lastProgressSeconds = processedSeconds;
+			const progress: AgentPlanClientProgress = {
+				text: definiteResult.text,
+				utterances: definiteResult.utterances,
+				processedSeconds: Math.min(processedSeconds, totalSeconds),
+				totalSeconds,
+				traceId
+			};
+			progressQueue = progressQueue
+				.then(() => options.onProgress?.(progress))
+				.catch(() => undefined);
+		};
+
+		const succeed = async (): Promise<void> => {
 			if (settled) {
 				return;
 			}
@@ -104,8 +189,10 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 				fail(new AgentPlanClientError("AgentPlan ASR 响应中缺少 result.text。", undefined, traceId));
 				return;
 			}
+			emitProgress(true);
 			settled = true;
 			cleanup();
+			await progressQueue;
 			socket.close();
 			resolve({ text: latestText, traceId, raw: latestPayload });
 		};
@@ -116,6 +203,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 				if (packets.length === 0) {
 					throw new AgentPlanClientError("待转写 WAV 音频为空。", undefined, traceId);
 				}
+				const streamStartedAt = now();
 				for (let packetIndex = 0; packetIndex < packets.length; packetIndex += 1) {
 					if (settled) {
 						return;
@@ -123,14 +211,20 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 					const isLastPackage = packetIndex === packets.length - 1;
 					const frame = await encodeAgentPlanAudioRequest(packets[packetIndex], packetIndex + 2, isLastPackage);
 					socket.send(frame);
+					processedSeconds = Math.min((packetIndex + 1) * AGENTPLAN_PACKET_DURATION_MS / 1000, totalSeconds);
+					emitProgress(isLastPackage);
 					if (!isLastPackage) {
-						await sleep(AGENTPLAN_PACKET_DURATION_MS);
+						const nextPacketTargetAt =
+							streamStartedAt + (packetIndex + 1) * AGENTPLAN_PACKET_DURATION_MS;
+						await sleep(Math.max(0, nextPacketTargetAt - now()));
 					}
 				}
-				finalResponseTimer = setTimeout(
-					() => fail(new AgentPlanClientError("AgentPlan ASR 等待最终识别结果超时。", undefined, traceId)),
-					finalResponseTimeoutMs
-				);
+				if (!settled) {
+					finalResponseTimer = setTimeout(
+						() => fail(new AgentPlanClientError("AgentPlan ASR 等待最终识别结果超时。", undefined, traceId)),
+						finalResponseTimeoutMs
+					);
+				}
 			} catch (error) {
 				fail(
 					error instanceof AgentPlanClientError
@@ -172,6 +266,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 						} else if (!latestText) {
 							latestPayload = frame.payload;
 						}
+						emitProgress();
 					}
 					if (!audioStarted) {
 						audioStarted = true;
@@ -181,7 +276,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 						void sendAudio();
 					}
 					if (frame.isLastPackage) {
-						succeed();
+						void succeed();
 					}
 				})
 				.catch((error) => fail(new AgentPlanClientError(error instanceof Error ? error.message : String(error), undefined, traceId)));

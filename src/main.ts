@@ -1,4 +1,17 @@
-import { App, Editor, Modal, Notice, Plugin, Setting, TFile, type Hotkey, type MarkdownFileInfo } from "obsidian";
+import {
+	App,
+	Editor,
+	FileSystemAdapter,
+	MarkdownView,
+	Modal,
+	Notice,
+	Platform,
+	Plugin,
+	Setting,
+	TFile,
+	type Hotkey,
+	type MarkdownFileInfo
+} from "obsidian";
 import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
 import type { AnalysisResult, ChunkedAnalysisProvider } from "./analysis/analysis-provider";
 import { AnalysisService } from "./analysis/analysis-service";
@@ -11,26 +24,46 @@ import {
 	selectAnalysisTemplatesForSourceMarkdown
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
+import {
+	ChunkedMediaRecorder,
+	RealtimePcmCapture,
+	REALTIME_RECORDING_EXTENSION,
+	VaultRecordingSink,
+	listAudioInputDevices,
+	requestRealtimeMicrophone,
+	type AudioInputDevice
+} from "./audio/realtime-audio-capture";
 import { isSupportedAudioFile } from "./audio/audio-detector";
+import { formatSegmentTimeRange, formatSegmentTimestamp } from "./audio/audio-segmenter";
 import { createAudioLinkFingerprints } from "./audio/audio-link-fingerprint";
 import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
+import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
 import {
 	shouldWriteFailedTranscript,
 	TranscriptionError,
+	type StreamingTranscriptionState,
 	type TranscriptionProgress,
 	type TranscriptionSegment
 } from "./providers/transcription-provider";
 import {
+	AgentPlanRealtimeSession,
+	type AgentPlanRealtimeSessionResult
+} from "./providers/volcengine-agentplan-realtime-session";
+import { normalizeAgentPlanError } from "./providers/volcengine-agentplan-client";
+import { loadAgentPlanSocketFactory } from "./providers/volcengine-agentplan-socket";
+import {
 	cloneHotkey,
+	getSelectedTranscriptionConfig,
 	normalizeEchoNotesSettings,
 	type AnalysisTemplateConfig,
 	type EchoNotesHotkeySetting,
-	type EchoNotesSettings
+	type EchoNotesSettings,
+	type TranscriptionProviderId
 } from "./settings/settings";
 import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction";
 import { redactAnalysisInputText } from "./security/content-redaction";
@@ -65,6 +98,9 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"open-task-center",
 	"transcribe-selected-audio",
 	"transcribe-all-audio-files-in-current-note",
+	"start-realtime-transcription",
+	"stop-realtime-transcription",
+	"open-active-realtime-transcript",
 	"analyze-current-transcript-with-template"
 ];
 
@@ -107,6 +143,23 @@ interface AppWithInternals {
 	hotkeyManager?: ObsidianHotkeyManager;
 }
 
+interface ActiveRealtimeRecording {
+	audioFile: TFile;
+	sourceNote: TFile;
+	transcriptFile: TFile;
+	mediaStream: MediaStream;
+	mediaRecorder: ChunkedMediaRecorder;
+	pcmCapture: RealtimePcmCapture;
+	agentPlanSession: AgentPlanRealtimeSession;
+	startedAt: number;
+	streamingState: StreamingTranscriptionState;
+	asrError?: Error;
+	stopping: boolean;
+	writeTimer?: number;
+	writeQueue: Promise<void>;
+	taskId: string;
+}
+
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = normalizeEchoNotesSettings(undefined);
 
@@ -121,6 +174,12 @@ export default class EchoNotesPlugin extends Plugin {
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
 	private processedMarkdownAudioLinks = new Set<string>();
+	private realtimeAudioPaths = new Set<string>();
+	private audioInputDevices: AudioInputDevice[] = [];
+	private activeRealtimeRecording: ActiveRealtimeRecording | null = null;
+	private realtimeRibbonEl: HTMLElement | null = null;
+	private realtimeStatusEl: HTMLElement | null = null;
+	private realtimeStatusTimer: number | null = null;
 	private loadedAt = Date.now();
 
 	async onload(): Promise<void> {
@@ -128,9 +187,25 @@ export default class EchoNotesPlugin extends Plugin {
 		this.refreshServices();
 		this.addSettingTab(new EchoNotesSettingTab(this.app, this));
 		this.registerView(ECHO_NOTES_TASK_CENTER_VIEW_TYPE, (leaf) => new EchoNotesTaskCenterView(leaf, this));
+		this.realtimeRibbonEl = this.addRibbonIcon("audio-lines", "开始 Echo Notes 实时转写", () => {
+			if (this.activeRealtimeRecording) {
+				void this.stopRealtimeTranscription();
+			} else {
+				void this.startRealtimeTranscription();
+			}
+		});
+		this.realtimeRibbonEl.addClass("echo-notes-realtime-ribbon");
 		this.addRibbonIcon("list-checks", "Echo Notes 任务中心", () => {
 			void this.activateTaskCenterView();
 		});
+		this.realtimeStatusEl = this.addStatusBarItem();
+		this.realtimeStatusEl.addClass("echo-notes-realtime-status");
+		this.realtimeStatusEl.addEventListener("click", () => {
+			if (this.activeRealtimeRecording) {
+				void this.stopRealtimeTranscription();
+			}
+		});
+		this.updateRealtimeUi();
 		this.registerCommands();
 		this.registerAutomation();
 	}
@@ -140,12 +215,26 @@ export default class EchoNotesPlugin extends Plugin {
 			window.clearTimeout(timer);
 		}
 		this.markdownDebounceTimers.clear();
+		if (this.realtimeStatusTimer !== null) {
+			window.clearInterval(this.realtimeStatusTimer);
+		}
+		if (this.activeRealtimeRecording) {
+			this.activeRealtimeRecording.agentPlanSession.abort("Echo Notes 插件已停用。");
+			void this.stopRealtimeTranscription();
+		}
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = normalizeEchoNotesSettings(await this.loadData());
+		const loadedSettings = await this.loadData() as Record<string, unknown> | null;
+		this.settings = normalizeEchoNotesSettings(loadedSettings);
+		const shouldPersistSettingsMigration =
+			Boolean(loadedSettings) &&
+			JSON.stringify(loadedSettings) !== JSON.stringify(this.settings);
 		await this.migrateApiKeyToSecretStorage();
 		await this.migrateAnalysisApiKeyToSecretStorage();
+		if (shouldPersistSettingsMigration) {
+			await this.saveData(this.settings);
+		}
 	}
 
 	async saveSettings(): Promise<void> {
@@ -154,6 +243,7 @@ export default class EchoNotesPlugin extends Plugin {
 		delete this.settings.analysisApiKey;
 		await this.saveData(this.settings);
 		this.refreshServices();
+		this.updateRealtimeUi();
 	}
 
 	refreshRegisteredCommands(): void {
@@ -274,13 +364,13 @@ export default class EchoNotesPlugin extends Plugin {
 		return saved;
 	}
 
-	getApiKey(): string {
-		return this.app.secretStorage.getSecret(getTranscriptionApiKeySecretId(this.settings.provider)) ?? this.settings.apiKey ?? "";
+	getApiKey(provider: TranscriptionProviderId = getSelectedTranscriptionConfig(this.settings).provider): string {
+		return this.app.secretStorage.getSecret(getTranscriptionApiKeySecretId(provider)) ?? this.settings.apiKey ?? "";
 	}
 
-	async saveApiKey(apiKey: string): Promise<void> {
+	async saveApiKey(provider: TranscriptionProviderId, apiKey: string): Promise<void> {
 		try {
-			this.app.secretStorage.setSecret(getTranscriptionApiKeySecretId(this.settings.provider), apiKey);
+			this.app.secretStorage.setSecret(getTranscriptionApiKeySecretId(provider), apiKey);
 		} catch (error) {
 			this.log("API Key 保存失败", error);
 			throw new Error(`无法写入 Obsidian SecretStorage：${getSanitizedErrorMessage(error)}`, { cause: error });
@@ -289,6 +379,21 @@ export default class EchoNotesPlugin extends Plugin {
 			delete this.settings.apiKey;
 			await this.saveSettings();
 		}
+	}
+
+	getCachedAudioInputDevices(): AudioInputDevice[] {
+		return this.audioInputDevices.slice();
+	}
+
+	async refreshAudioInputDevices(): Promise<AudioInputDevice[]> {
+		this.audioInputDevices = await listAudioInputDevices(true);
+		const selectedDeviceId = this.settings.realtimeTranscription.inputDeviceId;
+		if (selectedDeviceId && !this.audioInputDevices.some((device) => device.deviceId === selectedDeviceId)) {
+			this.settings.realtimeTranscription.inputDeviceId = "";
+			await this.saveSettings();
+			new Notice("原麦克风设备已不可用，已回退到系统默认麦克风。");
+		}
+		return this.getCachedAudioInputDevices();
 	}
 
 	getAnalysisApiKey(): string {
@@ -340,6 +445,42 @@ export default class EchoNotesPlugin extends Plugin {
 			hotkeys: this.getCommandHotkeys(this.settings.transcribeAllAudioHotkey),
 			editorCallback: (editor, view) => {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
+			}
+		});
+
+		this.addCommand({
+			id: "start-realtime-transcription",
+			name: "Start realtime transcription",
+			checkCallback: (checking) => {
+				const available = !this.activeRealtimeRecording;
+				if (available && !checking) {
+					void this.startRealtimeTranscription();
+				}
+				return available;
+			}
+		});
+
+		this.addCommand({
+			id: "stop-realtime-transcription",
+			name: "Stop realtime transcription",
+			checkCallback: (checking) => {
+				const available = Boolean(this.activeRealtimeRecording);
+				if (available && !checking) {
+					void this.stopRealtimeTranscription();
+				}
+				return available;
+			}
+		});
+
+		this.addCommand({
+			id: "open-active-realtime-transcript",
+			name: "Open active realtime transcript",
+			checkCallback: (checking) => {
+				const recording = this.activeRealtimeRecording;
+				if (recording && !checking) {
+					void this.app.workspace.getLeaf(false).openFile(recording.transcriptFile);
+				}
+				return Boolean(recording);
 			}
 		});
 
@@ -438,7 +579,7 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {
-		const targetSecretId = getTranscriptionApiKeySecretId(this.settings.provider);
+		const targetSecretId = getTranscriptionApiKeySecretId(getSelectedTranscriptionConfig(this.settings).provider);
 		migrateLegacySecret(this.app.secretStorage, LEGACY_API_KEY_SECRET_ID, targetSecretId, this.settings.apiKey);
 		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
@@ -478,6 +619,10 @@ export default class EchoNotesPlugin extends Plugin {
 			this.registerEvent(
 				this.app.vault.on("create", (file) => {
 					if (!this.settings.autoTranscribeOnAudioCreated || !(file instanceof TFile) || !isSupportedAudioFile(file)) {
+						return;
+					}
+					if (this.realtimeAudioPaths.has(file.path)) {
+						this.log("跳过正在实时录制的音频文件", file.path);
 						return;
 					}
 					if (file.stat.ctime < this.loadedAt) {
@@ -636,6 +781,7 @@ export default class EchoNotesPlugin extends Plugin {
 		sourceNote: TFile | undefined,
 		options: ProcessAudioOptions
 	): Promise<ProcessAudioResult | null> {
+		const transcriptionConfig = this.settings.offlineTranscription;
 		let notifiedTranscriptPath: string | null = null;
 		const notifyTranscriptFileReady = async (transcriptFile: TFile): Promise<void> => {
 			if (notifiedTranscriptPath === transcriptFile.path) {
@@ -660,7 +806,11 @@ export default class EchoNotesPlugin extends Plugin {
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
 		const reusableTranscript =
 			existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription
-				? await this.transcriptService.getReusableTranscriptFile(audioFile)
+				? await this.transcriptService.getReusableTranscriptFile(
+						audioFile,
+						transcriptionConfig.provider,
+						transcriptionConfig.model
+					)
 				: null;
 		if (reusableTranscript) {
 			this.taskCenter.upsertTask({
@@ -669,8 +819,8 @@ export default class EchoNotesPlugin extends Plugin {
 				title: audioFile.name,
 				status: "success",
 				stage: "已复用现有 transcript",
-				provider: this.settings.provider,
-				model: this.settings.model,
+				provider: transcriptionConfig.provider,
+				model: transcriptionConfig.model,
 				targetPath: audioFile.path,
 				sourcePath: sourceNote?.path,
 				outputPath: reusableTranscript.path,
@@ -690,8 +840,8 @@ export default class EchoNotesPlugin extends Plugin {
 			this.log("已存在 transcript 但源音频或转写配置不匹配，将重新转写", {
 				audioPath: audioFile.path,
 				transcriptPath: existingTranscript.path,
-				provider: this.settings.provider,
-				model: this.settings.model
+				provider: transcriptionConfig.provider,
+				model: transcriptionConfig.model
 			});
 		}
 
@@ -714,8 +864,8 @@ export default class EchoNotesPlugin extends Plugin {
 			title: audioFile.name,
 			status: "running",
 			stage: "准备转写",
-			provider: this.settings.provider,
-			model: this.settings.model,
+			provider: transcriptionConfig.provider,
+			model: transcriptionConfig.model,
 			targetPath: audioFile.path,
 			sourcePath: sourceNote?.path,
 			outputPath: undefined,
@@ -731,21 +881,70 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		});
 		let completedSegments: TranscriptionSegment[] = [];
+		let streamingState: StreamingTranscriptionState | undefined;
+		let diagnosticsPassed = false;
 		try {
-			const diagnostics = diagnoseTranscriptionProviderSettings(this.settings, this.getApiKey());
+			const diagnostics = diagnoseTranscriptionProviderSettings(
+				transcriptionConfig,
+				this.getApiKey(transcriptionConfig.provider),
+				{ isMobile: Platform.isMobile, usage: "offline" }
+			);
 			if (!diagnostics.canAttemptTranscription) {
 				throw new Error(diagnostics.items.filter((item) => item.severity === "error").map((item) => item.detail).join("；"));
 			}
-			new Notice(`开始转写：${audioFile.name}`);
-			const provider = createTranscriptionProvider(this.app, this.settings, this.getApiKey());
+			diagnosticsPassed = true;
+			const provider = createTranscriptionProvider(
+				this.app,
+				transcriptionConfig,
+				this.getApiKey(transcriptionConfig.provider)
+			);
+			const initialTranscriptFile = await this.transcriptService.writeTranscribingTranscript(
+				audioFile,
+				sourceNote,
+				provider.id,
+				transcriptionConfig.model,
+				completedSegments
+			);
+			await notifyTranscriptFileReady(initialTranscriptFile);
+			this.taskCenter.updateTask(transcriptionTaskId, {
+				stage: "正在准备音频",
+				outputPath: initialTranscriptFile.path
+			});
+			new Notice(`已创建转写稿，开始准备音频：${audioFile.name}`);
 			const handleProgress = async (progress: TranscriptionProgress): Promise<void> => {
+				if (progress.type === "streaming-result") {
+					streamingState = {
+						text: progress.text,
+						utterances: progress.utterances,
+						processedSeconds: progress.processedSeconds,
+						totalSeconds: progress.totalSeconds,
+						traceId: progress.traceId
+					};
+					const transcriptFile = await this.transcriptService.writeTranscribingTranscript(
+						audioFile,
+						sourceNote,
+						provider.id,
+						transcriptionConfig.model,
+						completedSegments,
+						streamingState
+					);
+					await notifyTranscriptFileReady(transcriptFile);
+					const stableUtteranceCount = progress.utterances?.length ?? 0;
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `正在转写 ${formatSegmentTimestamp(progress.processedSeconds)} / ${formatSegmentTimestamp(progress.totalSeconds)}${stableUtteranceCount > 0 ? `，已写入 ${stableUtteranceCount} 个确定分句` : ""}`,
+						outputPath: transcriptFile.path,
+						traceId: progress.traceId
+					});
+					return;
+				}
+
 				if (progress.type === "long-audio-preparing") {
 					completedSegments = [];
 					const transcriptFile = await this.transcriptService.writeTranscribingTranscript(
 						audioFile,
 						sourceNote,
 						provider.id,
-						this.settings.model,
+						transcriptionConfig.model,
 						completedSegments
 					);
 					await notifyTranscriptFileReady(transcriptFile);
@@ -765,7 +964,7 @@ export default class EchoNotesPlugin extends Plugin {
 						audioFile,
 						sourceNote,
 						provider.id,
-						this.settings.model,
+						transcriptionConfig.model,
 						completedSegments
 					);
 					await notifyTranscriptFileReady(transcriptFile);
@@ -791,12 +990,51 @@ export default class EchoNotesPlugin extends Plugin {
 					return;
 				}
 
+				if (progress.type === "segment-retrying") {
+					const rangeText = progress.segment
+						? `（${formatSegmentTimeRange(progress.segment)}）`
+						: "";
+					const targetText = progress.segment
+						? `分段 ${progress.segment.index}/${progress.segment.total}`
+						: "整段音频";
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `${targetText}${rangeText} 服务端失败，${Math.round(progress.delayMs / 1000)} 秒后重试 ${progress.attempt}/${progress.maxAttempts}`,
+						currentSegment: progress.segment?.index,
+						totalSegments: progress.segment?.total
+					});
+					new Notice(
+						`${targetText}${rangeText} 转写失败，正在进行第 ${progress.attempt}/${progress.maxAttempts} 次重试。`
+					);
+					return;
+				}
+
+				if (progress.type === "segment-split") {
+					completedSegments = progress.segments;
+					await this.transcriptService.writeTranscribingTranscript(
+						audioFile,
+						sourceNote,
+						provider.id,
+						transcriptionConfig.model,
+						completedSegments
+					);
+					const rangeText = formatSegmentTimeRange(progress.segment);
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `分段 ${rangeText} 已缩小为 ${progress.replacementSegments.length} 段`,
+						currentSegment: completedSegments.length,
+						totalSegments: progress.totalSegments
+					});
+					new Notice(
+						`分段 ${rangeText} 持续失败，已自动缩小为 ${progress.replacementSegments.length} 段；已完成内容不会重传。`
+					);
+					return;
+				}
+
 				completedSegments = progress.segments;
 				await this.transcriptService.writeTranscribingTranscript(
 					audioFile,
 					sourceNote,
 					provider.id,
-					this.settings.model,
+					transcriptionConfig.model,
 					completedSegments
 				);
 				this.taskCenter.updateTask(transcriptionTaskId, {
@@ -809,7 +1047,7 @@ export default class EchoNotesPlugin extends Plugin {
 			const result = await provider.transcribe({
 				audioFile,
 				sourceNote,
-				language: this.settings.language,
+				language: transcriptionConfig.language,
 				onProgress: handleProgress
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
@@ -830,7 +1068,7 @@ export default class EchoNotesPlugin extends Plugin {
 			return { transcriptFile, analysisEligible: true };
 		} catch (error) {
 			const message = getErrorMessage(error);
-			const traceId = error instanceof TranscriptionError ? error.traceId : undefined;
+			const traceId = error instanceof TranscriptionError ? error.traceId ?? streamingState?.traceId : streamingState?.traceId;
 			this.taskCenter.updateTask(transcriptionTaskId, {
 				status: "failed",
 				stage: "转写失败",
@@ -841,16 +1079,20 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`转写失败：${message}`);
 			this.log("转写失败", error);
 
-			if (completedSegments.length > 0 || shouldWriteFailedTranscript(error)) {
+			if (
+				diagnosticsPassed &&
+				(completedSegments.length > 0 || streamingState?.text.trim() || shouldWriteFailedTranscript(error))
+			) {
 				try {
 					const transcriptFile = await this.transcriptService.writeFailedTranscript(
 						audioFile,
 						sourceNote,
-						this.settings.provider,
-						this.settings.model,
+						transcriptionConfig.provider,
+						transcriptionConfig.model,
 						message,
 						traceId,
-						completedSegments
+						completedSegments,
+						streamingState
 					);
 					await notifyTranscriptFileReady(transcriptFile);
 					this.taskCenter.updateTask(transcriptionTaskId, {
@@ -1151,6 +1393,422 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	private async startRealtimeTranscription(): Promise<void> {
+		if (this.activeRealtimeRecording) {
+			new Notice("实时转写已经在运行。");
+			await this.app.workspace.getLeaf(false).openFile(this.activeRealtimeRecording.transcriptFile);
+			return;
+		}
+		if (Platform.isMobile) {
+			new Notice("实时转写仅支持 Obsidian 桌面端；移动端仍可使用离线转写。");
+			return;
+		}
+		if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
+			new Notice("实时录音仅支持本地文件系统 Vault。");
+			return;
+		}
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const sourceNote = view?.file;
+		if (!view || !sourceNote || sourceNote.extension !== "md") {
+			new Notice("请先打开一篇已保存的 Markdown 笔记，再开始实时转写。");
+			return;
+		}
+
+		const config = this.settings.realtimeTranscription;
+		const apiKey = this.getApiKey(config.provider);
+		const diagnostics = diagnoseTranscriptionProviderSettings(config, apiKey, {
+			isMobile: false,
+			isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter,
+			usage: "realtime"
+		});
+		if (!diagnostics.canAttemptTranscription) {
+			new Notice(
+				`实时转写配置不可用：${diagnostics.items
+					.filter((item) => item.severity === "error")
+					.map((item) => item.detail)
+					.join("；")}`
+			);
+			return;
+		}
+
+		let mediaStream: MediaStream | null = null;
+		let mediaRecorder: ChunkedMediaRecorder | null = null;
+		let pcmCapture: RealtimePcmCapture | null = null;
+		let agentPlanSession: AgentPlanRealtimeSession | null = null;
+		let audioPath = "";
+		try {
+			mediaStream = await requestRealtimeMicrophone(config.inputDeviceId);
+			const audioName = `Recording ${formatRecordingTimestamp(new Date())}`;
+			const attachmentVault = this.app.vault as typeof this.app.vault & {
+				getAvailablePathForAttachments(name: string, extension: string, sourceFile: TFile): Promise<string>;
+			};
+			audioPath = await attachmentVault.getAvailablePathForAttachments(
+				audioName,
+				REALTIME_RECORDING_EXTENSION,
+				sourceNote
+			);
+			this.realtimeAudioPaths.add(audioPath);
+			const sink = await VaultRecordingSink.create(this.app, audioPath);
+			const audioFile = sink.file;
+			const startedAt = Date.now();
+			const streamingState: StreamingTranscriptionState = {
+				text: "",
+				provisionalText: "",
+				utterances: undefined,
+				processedSeconds: 0,
+				totalSeconds: 0,
+				realtime: true,
+				connectionStatus: "正在连接 AgentPlan"
+			};
+			const transcriptFile = await this.transcriptService.writeTranscribingTranscript(
+				audioFile,
+				sourceNote,
+				config.provider,
+				config.model,
+				[],
+				streamingState
+			);
+			try {
+				this.insertRealtimeLinks(view.editor, sourceNote, audioFile, transcriptFile);
+			} catch (error) {
+				new Notice("录音和转写稿已创建，但未能写入当前笔记；实时录音仍会继续。");
+				this.log("实时录音链接写回失败", error);
+			}
+
+			const socketFactory = await loadAgentPlanSocketFactory();
+			const session = new AgentPlanRealtimeSession({
+				url: config.baseUrl,
+				apiKey,
+				language: config.language,
+				createSocket: socketFactory,
+				onProgress: (progress) => {
+					const recording = this.activeRealtimeRecording;
+					if (!recording || recording.audioFile.path !== audioFile.path) {
+						return;
+					}
+					recording.streamingState.text = progress.text;
+					recording.streamingState.utterances = progress.utterances;
+					recording.streamingState.provisionalText = progress.provisionalText;
+					recording.streamingState.traceId = progress.traceId;
+					recording.streamingState.connectionStatus = "AgentPlan 已连接";
+					this.queueRealtimeTranscriptWrite(recording);
+					this.updateRealtimeTask(recording);
+				}
+			});
+			agentPlanSession = session;
+			mediaRecorder = new ChunkedMediaRecorder(mediaStream, sink);
+			pcmCapture = new RealtimePcmCapture(mediaStream, (packet) => {
+				const recording = this.activeRealtimeRecording;
+				if (!recording || recording.asrError) {
+					return;
+				}
+				try {
+					session.pushPcm(packet);
+				} catch (error) {
+					recording.asrError = normalizeAgentPlanError(error);
+					recording.streamingState.connectionStatus = "AgentPlan 已中断，本地录音继续";
+					this.queueRealtimeTranscriptWrite(recording, true);
+				}
+			});
+			const taskId = createTaskId("transcription", audioFile.path, "realtime");
+			const recording: ActiveRealtimeRecording = {
+				audioFile,
+				sourceNote,
+				transcriptFile,
+				mediaStream,
+				mediaRecorder,
+				pcmCapture,
+				agentPlanSession,
+				startedAt,
+				streamingState,
+				stopping: false,
+				writeQueue: Promise.resolve(),
+				taskId
+			};
+			this.activeRealtimeRecording = recording;
+			this.taskCenter.upsertTask({
+				id: taskId,
+				kind: "transcription",
+				title: audioFile.name,
+				status: "running",
+				stage: "正在实时录音，连接 AgentPlan",
+				provider: config.provider,
+				model: config.model,
+				targetPath: audioFile.path,
+				sourcePath: sourceNote.path,
+				outputPath: transcriptFile.path,
+				bytes: 0,
+				error: undefined,
+				traceId: undefined,
+				completedAt: undefined
+			});
+			mediaRecorder.start();
+			await pcmCapture.start();
+			void agentPlanSession.start().catch((error) => {
+				if (!this.activeRealtimeRecording || this.activeRealtimeRecording !== recording) {
+					return;
+				}
+				recording.asrError = normalizeAgentPlanError(error);
+				recording.streamingState.connectionStatus = "AgentPlan 已中断，本地录音继续";
+				this.queueRealtimeTranscriptWrite(recording, true);
+				this.updateRealtimeTask(recording);
+			});
+			this.startRealtimeStatusTimer();
+			this.updateRealtimeUi();
+			new Notice(`已开始实时转写：${audioFile.name}`);
+		} catch (error) {
+			agentPlanSession?.abort("实时录音启动失败，已中止 AgentPlan 会话。");
+			await pcmCapture?.stop().catch(() => undefined);
+			await mediaRecorder?.stop().catch(() => undefined);
+			mediaStream?.getTracks().forEach((track) => track.stop());
+			if (audioPath) {
+				this.realtimeAudioPaths.delete(audioPath);
+			}
+			this.activeRealtimeRecording = null;
+			this.updateRealtimeUi();
+			new Notice(`无法开始实时转写：${getErrorMessage(error)}`);
+			this.log("开始实时转写失败", error);
+		}
+	}
+
+	private async stopRealtimeTranscription(): Promise<void> {
+		const recording = this.activeRealtimeRecording;
+		if (!recording || recording.stopping) {
+			return;
+		}
+		recording.stopping = true;
+		recording.streamingState.connectionStatus = "正在完成录音和最终识别";
+		this.queueRealtimeTranscriptWrite(recording, true);
+		this.updateRealtimeUi();
+
+		let remainder: Uint8Array | null = null;
+		try {
+			remainder = await recording.pcmCapture.stop();
+		} catch (error) {
+			recording.asrError ??= toError(error);
+		}
+		if (remainder && !recording.asrError) {
+			try {
+				recording.agentPlanSession.pushPcm(remainder);
+			} catch (error) {
+				recording.asrError = normalizeAgentPlanError(error);
+			}
+		}
+
+		const audioResult = recording.mediaRecorder.stop();
+		const asrResult: Promise<AgentPlanRealtimeSessionResult> = recording.asrError
+			? Promise.reject(recording.asrError)
+			: recording.agentPlanSession.finish();
+		const [savedAudio, finalAsr] = await Promise.allSettled([audioResult, asrResult]);
+		recording.mediaStream.getTracks().forEach((track) => track.stop());
+		recording.streamingState.processedSeconds = (Date.now() - recording.startedAt) / 1000;
+
+		const audioSaveError =
+			savedAudio.status === "rejected"
+				? new Error(`本地录音保存失败：${getErrorMessage(savedAudio.reason)}`)
+				: null;
+		if (recording.writeTimer !== undefined) {
+			window.clearTimeout(recording.writeTimer);
+			recording.writeTimer = undefined;
+		}
+
+		if (finalAsr.status === "fulfilled" && !audioSaveError) {
+			const result = finalAsr.value;
+			await recording.writeQueue;
+			const transcriptFile = await this.transcriptService.writeSuccessTranscript(
+				recording.audioFile,
+				recording.sourceNote,
+				{
+					text: result.text,
+					utterances: result.utterances,
+					provider: this.settings.realtimeTranscription.provider,
+					model: this.settings.realtimeTranscription.model,
+					traceId: result.traceId,
+					raw: result.raw
+				}
+			);
+			recording.transcriptFile = transcriptFile;
+			this.taskCenter.updateTask(recording.taskId, {
+				status: "success",
+				stage: "实时转写完成",
+				bytes: savedAudio.status === "fulfilled" ? savedAudio.value : undefined,
+				outputPath: transcriptFile.path,
+				traceId: result.traceId,
+				error: undefined,
+				completedAt: Date.now()
+			});
+			new Notice(`实时转写完成：${recording.audioFile.name}`);
+			this.startAnalysisTasks(
+				transcriptFile,
+				this.getDefaultAnalysisTemplatesForAnalysis()
+			);
+		} else {
+			if (finalAsr.status === "fulfilled") {
+				recording.streamingState.text = finalAsr.value.text;
+				recording.streamingState.utterances = finalAsr.value.utterances;
+				recording.streamingState.traceId = finalAsr.value.traceId;
+			}
+			const error =
+				audioSaveError ??
+				normalizeAgentPlanError(
+					finalAsr.status === "rejected"
+						? finalAsr.reason
+						: recording.asrError ?? "AgentPlan 实时转写失败"
+				);
+			recording.streamingState.provisionalText = "";
+			recording.streamingState.connectionStatus = audioSaveError
+				? "本地录音保存失败"
+				: "实时识别已中断";
+			await recording.writeQueue;
+			const transcriptFile = await this.transcriptService.writeFailedTranscript(
+				recording.audioFile,
+				recording.sourceNote,
+				this.settings.realtimeTranscription.provider,
+				this.settings.realtimeTranscription.model,
+				getErrorMessage(error),
+				recording.streamingState.traceId,
+				[],
+				recording.streamingState
+			);
+			recording.transcriptFile = transcriptFile;
+			this.taskCenter.updateTask(recording.taskId, {
+				status: "failed",
+				stage: audioSaveError
+					? "本地录音保存失败，转写内容已保留"
+					: "实时识别中断，本地录音已保留",
+				bytes: savedAudio.status === "fulfilled" ? savedAudio.value : undefined,
+				outputPath: transcriptFile.path,
+				error: getErrorMessage(error),
+				traceId: recording.streamingState.traceId,
+				completedAt: Date.now(),
+				retry: {
+					label: "使用离线 Provider 重试",
+					run: () => this.retryTranscriptionTask(
+						recording.audioFile.path,
+						recording.sourceNote.path,
+						recording.audioFile.path
+					)
+				}
+			});
+			new Notice(
+				audioSaveError
+					? `实时转写已结束，但本地录音保存失败：${getErrorMessage(error)}`
+					: `实时识别已中断，本地录音和部分文字已保留：${getErrorMessage(error)}`
+			);
+		}
+
+		this.realtimeAudioPaths.delete(recording.audioFile.path);
+		this.activeRealtimeRecording = null;
+		this.stopRealtimeStatusTimer();
+		this.updateRealtimeUi();
+	}
+
+	private insertRealtimeLinks(editor: Editor, sourceNote: TFile, audioFile: TFile, transcriptFile: TFile): void {
+		const audioLink = this.app.fileManager.generateMarkdownLink(audioFile, sourceNote.path);
+		const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
+		const content = editor.getValue();
+		const missingLines = getMissingRealtimeLinkLines(content, audioLink, transcriptLink);
+		if (missingLines.length === 0) {
+			return;
+		}
+		const block = missingLines.join("\n");
+		const insertAt = editor.getCursor("to");
+		const leadingNewline = insertAt.ch > 0 ? "\n" : "";
+		this.mutatingFiles.add(sourceNote.path);
+		editor.replaceRange(`${leadingNewline}${block}\n`, insertAt);
+		window.setTimeout(() => this.mutatingFiles.delete(sourceNote.path), 1500);
+	}
+
+	private queueRealtimeTranscriptWrite(recording: ActiveRealtimeRecording, force = false): void {
+		recording.streamingState.processedSeconds = (Date.now() - recording.startedAt) / 1000;
+		if (recording.writeTimer !== undefined) {
+			if (!force) {
+				return;
+			}
+			window.clearTimeout(recording.writeTimer);
+			recording.writeTimer = undefined;
+		}
+		const write = (): void => {
+			recording.writeTimer = undefined;
+			recording.writeQueue = recording.writeQueue
+				.then(async () => {
+					recording.transcriptFile = await this.transcriptService.writeTranscribingTranscript(
+						recording.audioFile,
+						recording.sourceNote,
+						this.settings.realtimeTranscription.provider,
+						this.settings.realtimeTranscription.model,
+						[],
+						{ ...recording.streamingState }
+					);
+				})
+				.catch((error) => {
+					this.log("实时转写稿写入失败", error);
+				});
+		};
+		if (force) {
+			write();
+		} else {
+			recording.writeTimer = window.setTimeout(write, 500);
+		}
+	}
+
+	private updateRealtimeTask(recording: ActiveRealtimeRecording): void {
+		const elapsed = Math.max(0, Math.round((Date.now() - recording.startedAt) / 1000));
+		const utteranceCount = recording.streamingState.utterances?.length ?? 0;
+		this.taskCenter.updateTask(recording.taskId, {
+			stage: `实时录音 ${formatSegmentTimestamp(elapsed)} · ${recording.streamingState.connectionStatus ?? "连接中"} · ${utteranceCount} 个确定分句`,
+			traceId: recording.streamingState.traceId
+		});
+		this.updateRealtimeUi();
+	}
+
+	private startRealtimeStatusTimer(): void {
+		this.stopRealtimeStatusTimer();
+		this.realtimeStatusTimer = window.setInterval(() => {
+			const recording = this.activeRealtimeRecording;
+			if (!recording) {
+				return;
+			}
+			this.updateRealtimeTask(recording);
+			this.queueRealtimeTranscriptWrite(recording);
+		}, 1000);
+	}
+
+	private stopRealtimeStatusTimer(): void {
+		if (this.realtimeStatusTimer !== null) {
+			window.clearInterval(this.realtimeStatusTimer);
+			this.realtimeStatusTimer = null;
+		}
+	}
+
+	private updateRealtimeUi(): void {
+		const recording = this.activeRealtimeRecording;
+		if (this.realtimeRibbonEl) {
+			this.realtimeRibbonEl.toggleClass("is-active", Boolean(recording));
+			this.realtimeRibbonEl.toggle(
+				!Platform.isMobile &&
+					(this.settings.transcriptionMode === "realtime" || Boolean(recording))
+			);
+			this.realtimeRibbonEl.setAttribute(
+				"aria-label",
+				recording ? "停止 Echo Notes 实时转写" : "开始 Echo Notes 实时转写"
+			);
+		}
+		if (!this.realtimeStatusEl) {
+			return;
+		}
+		if (!recording) {
+			this.realtimeStatusEl.empty();
+			this.realtimeStatusEl.hide();
+			return;
+		}
+		const elapsed = Math.max(0, Math.round((Date.now() - recording.startedAt) / 1000));
+		this.realtimeStatusEl.setText(
+			`Echo Notes ${formatSegmentTimestamp(elapsed)} · ${recording.streamingState.connectionStatus ?? "连接中"}`
+		);
+		this.realtimeStatusEl.show();
+	}
+
 	private scheduleMarkdownScan(file: TFile): void {
 		const existingTimer = this.markdownDebounceTimers.get(file.path);
 		if (existingTimer !== undefined) {
@@ -1287,6 +1945,22 @@ function getErrorMessage(error: unknown): string {
 	return getSanitizedErrorMessage(error);
 }
 
+function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+
+function formatRecordingTimestamp(date: Date): string {
+	const pad = (value: number): string => value.toString().padStart(2, "0");
+	return [
+		date.getFullYear(),
+		pad(date.getMonth() + 1),
+		pad(date.getDate()),
+		pad(date.getHours()),
+		pad(date.getMinutes()),
+		pad(date.getSeconds())
+	].join("");
+}
+
 function isChunkedAnalysisProvider(provider: unknown): provider is ChunkedAnalysisProvider {
 	return (
 		typeof provider === "object" &&
@@ -1326,7 +2000,16 @@ class TranscriptionUploadConfirmModal extends Modal {
 			text: "Echo Notes 将把以下音频发送给你配置的转写 Provider。确认后才会开始上传。"
 		});
 
-		const preview = buildTranscriptionUploadPreview(this.settings, this.audioFile);
+		const preview = buildTranscriptionUploadPreview(
+			{
+				...this.settings.offlineTranscription,
+				analysisEnabled: this.settings.analysisEnabled,
+				analysisProvider: this.settings.analysisProvider,
+				analysisBaseUrl: this.settings.analysisBaseUrl,
+				analysisModel: this.settings.analysisModel
+			},
+			this.audioFile
+		);
 		const tableEl = contentEl.createDiv({ cls: "echo-notes-upload-preview-table" });
 		for (const row of preview.rows) {
 			const rowEl = tableEl.createDiv({ cls: "echo-notes-upload-preview-row" });

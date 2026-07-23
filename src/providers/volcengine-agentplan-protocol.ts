@@ -13,7 +13,7 @@ export interface AgentPlanFullRequestPayload {
 		uid: string;
 	};
 	audio: {
-		format: "wav";
+		format: "wav" | "pcm";
 		codec: "raw";
 		rate: 16000;
 		bits: 16;
@@ -26,9 +26,10 @@ export interface AgentPlanFullRequestPayload {
 		enable_punc: true;
 		enable_ddc: true;
 		show_utterances: true;
-		enable_nonstream: false;
+		enable_nonstream: true;
 		enable_speaker_info: true;
 		ssd_version: "200";
+		result_type: "full";
 	};
 }
 
@@ -67,14 +68,17 @@ export interface AgentPlanResponseFrame {
 	rawPayloadText?: string;
 }
 
-export function buildAgentPlanFullRequestPayload(language: string): AgentPlanFullRequestPayload {
+export function buildAgentPlanFullRequestPayload(
+	language: string,
+	format: AgentPlanFullRequestPayload["audio"]["format"] = "wav"
+): AgentPlanFullRequestPayload {
 	const mappedLanguage = mapAgentPlanLanguage(language);
 	return {
 		user: {
 			uid: "echo-notes"
 		},
 		audio: {
-			format: "wav",
+			format,
 			codec: "raw",
 			rate: 16000,
 			bits: 16,
@@ -87,9 +91,10 @@ export function buildAgentPlanFullRequestPayload(language: string): AgentPlanFul
 			enable_punc: true,
 			enable_ddc: true,
 			show_utterances: true,
-			enable_nonstream: false,
+			enable_nonstream: true,
 			enable_speaker_info: true,
-			ssd_version: "200"
+			ssd_version: "200",
+			result_type: "full"
 		}
 	};
 }
@@ -106,7 +111,14 @@ export function normalizeAgentPlanUtterances(
 		return undefined;
 	}
 
-	const normalized = utterances.flatMap((utterance): TranscriptionUtterance[] => {
+	const validTextUtterances = utterances.filter(
+		(utterance) => typeof utterance.text === "string" && utterance.text.trim()
+	);
+	if (validTextUtterances.length === 0) {
+		return undefined;
+	}
+
+	const normalized = validTextUtterances.flatMap((utterance): TranscriptionUtterance[] => {
 		const text = typeof utterance.text === "string" ? utterance.text.trim() : "";
 		const rawSpeakerId = utterance.additions?.speaker_id;
 		if (!text || (typeof rawSpeakerId !== "string" && typeof rawSpeakerId !== "number")) {
@@ -128,7 +140,55 @@ export function normalizeAgentPlanUtterances(
 		}];
 	});
 
-	return normalized.length > 0 ? normalized : undefined;
+	return normalized.length === validTextUtterances.length ? normalized : undefined;
+}
+
+export function getAgentPlanDefiniteResult(payload: AgentPlanResponsePayload): {
+	text: string;
+	utterances?: TranscriptionUtterance[];
+} {
+	const definiteUtterances = Array.isArray(payload.result?.utterances)
+		? payload.result.utterances.filter(
+				(utterance) =>
+					utterance.definite === true &&
+					typeof utterance.text === "string" &&
+					utterance.text.trim()
+			)
+		: [];
+	const text = definiteUtterances
+		.map((utterance) => (typeof utterance.text === "string" ? utterance.text.trim() : ""))
+		.filter(Boolean)
+		.reduce((combined, current) => joinAgentPlanText(combined, current), "");
+
+	return {
+		text,
+		utterances: normalizeAgentPlanUtterances(definiteUtterances)
+	};
+}
+
+export function getAgentPlanRealtimeResult(payload: AgentPlanResponsePayload): {
+	text: string;
+	utterances?: TranscriptionUtterance[];
+	provisionalText: string;
+} {
+	const definite = getAgentPlanDefiniteResult(payload);
+	const provisionalUtterances = Array.isArray(payload.result?.utterances)
+		? payload.result.utterances.filter(
+				(utterance) =>
+					utterance.definite !== true &&
+					typeof utterance.text === "string" &&
+					utterance.text.trim()
+			)
+		: [];
+	const provisionalText = provisionalUtterances
+		.map((utterance) => typeof utterance.text === "string" ? utterance.text.trim() : "")
+		.filter(Boolean)
+		.reduce((combined, current) => joinAgentPlanText(combined, current), "");
+
+	return {
+		...definite,
+		provisionalText
+	};
 }
 
 export async function encodeAgentPlanFullRequest(
@@ -245,6 +305,28 @@ export function splitAgentPlanAudio(audioBytes: Uint8Array, packetDurationMs = 2
 	return packets;
 }
 
+export function getAgentPlanWavDurationSeconds(wavBytes: Uint8Array): number {
+	if (
+		wavBytes.byteLength >= 44 &&
+		readAscii(wavBytes, 0, 4) === "RIFF" &&
+		readAscii(wavBytes, 8, 4) === "WAVE"
+	) {
+		let offset = 12;
+		const view = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength);
+		while (offset + 8 <= wavBytes.byteLength) {
+			const chunkId = readAscii(wavBytes, offset, 4);
+			const chunkSize = view.getUint32(offset + 4, true);
+			const dataOffset = offset + 8;
+			if (chunkId === "data" && dataOffset + chunkSize <= wavBytes.byteLength) {
+				return chunkSize / (16000 * 2);
+			}
+			offset = dataOffset + chunkSize + (chunkSize % 2);
+		}
+	}
+
+	return Math.max(0, wavBytes.byteLength - 44) / (16000 * 2);
+}
+
 function createFrame(
 	messageType: number,
 	flags: number,
@@ -290,5 +372,17 @@ function assertAvailable(frame: Uint8Array, offset: number, byteLength: number):
 
 function millisecondsToSeconds(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value / 1000 : undefined;
+}
+
+function readAscii(bytes: Uint8Array, offset: number, length: number): string {
+	return String.fromCharCode(...bytes.subarray(offset, offset + length));
+}
+
+function joinAgentPlanText(left: string, right: string): string {
+	if (!left) {
+		return right;
+	}
+	const separator = /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right) ? " " : "";
+	return `${left}${separator}${right}`;
 }
 import type { TranscriptionUtterance } from "./transcription-provider";

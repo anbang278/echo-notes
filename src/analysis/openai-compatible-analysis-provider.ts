@@ -2,6 +2,7 @@ import { requestUrl } from "obsidian";
 import { buildAnalysisMessages } from "./analysis-templates";
 import { AnalysisError, type AnalysisInput, type AnalysisProvider, type AnalysisResult } from "./analysis-provider";
 import { ANALYSIS_PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
+import { sanitizeSensitiveText } from "../security/redaction";
 
 interface OpenAICompatibleChatResponse {
 	choices?: Array<{
@@ -99,7 +100,7 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 			if (response.status < 200 || response.status >= 300) {
 				throw new AnalysisError(
 					"api_error",
-					`${this.name} 分析 API 请求失败：HTTP ${response.status} ${response.text}`,
+					`${this.name} 分析 API 请求失败：HTTP ${response.status} ${sanitizeSensitiveText(response.text)}`,
 					traceId
 				);
 			}
@@ -122,7 +123,7 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 				throw error;
 			}
 
-			const message = error instanceof Error ? error.message : String(error);
+			const message = sanitizeSensitiveText(error instanceof Error ? error.message : String(error));
 			throw new AnalysisError("network_error", `${this.name} 分析 API 调用失败：${message}`);
 		}
 	}
@@ -134,7 +135,7 @@ function uniqueTraceIds(traceIds: Array<string | undefined>): string | undefined
 }
 
 function readTraceId(headers: Record<string, string>): string | undefined {
-	const traceHeaders = ["x-request-id", "x-ds-trace-id", "openai-processing-ms"];
+	const traceHeaders = ["x-request-id", "x-ark-request-id", "x-tt-logid", "x-ds-trace-id", "openai-processing-ms"];
 	const foundKey = Object.keys(headers).find((key) => traceHeaders.includes(key.toLowerCase()));
 	return foundKey ? headers[foundKey] : undefined;
 }

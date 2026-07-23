@@ -127,6 +127,38 @@ export async function createWavAudioBuffer(sourceAudioBuffer: ArrayBuffer): Prom
 	);
 }
 
+export function splitWavAudioSegment(segment: WavAudioSegment): WavAudioSegment[] {
+	const wav = readPcm16MonoWav(segment.audioBuffer);
+	const midpointSample = Math.floor(wav.sampleCount / 2);
+	if (midpointSample <= 0 || midpointSample >= wav.sampleCount) {
+		throw new Error("WAV 分段过短，无法继续拆分。");
+	}
+
+	const durationSeconds = segment.endSeconds - segment.startSeconds;
+	const midpointSeconds = segment.startSeconds + durationSeconds * (midpointSample / wav.sampleCount);
+	const firstPcm = wav.pcmBytes.slice(0, midpointSample * 2);
+	const secondPcm = wav.pcmBytes.slice(midpointSample * 2);
+
+	return [
+		{
+			index: segment.index,
+			total: segment.total + 1,
+			startSeconds: segment.startSeconds,
+			endSeconds: midpointSeconds,
+			audioBuffer: encodePcm16MonoToWav(firstPcm, wav.sampleRate),
+			mimeType: WAV_SEGMENT_MIME_TYPE
+		},
+		{
+			index: segment.index + 1,
+			total: segment.total + 1,
+			startSeconds: midpointSeconds,
+			endSeconds: segment.endSeconds,
+			audioBuffer: encodePcm16MonoToWav(secondPcm, wav.sampleRate),
+			mimeType: WAV_SEGMENT_MIME_TYPE
+		}
+	];
+}
+
 function normalizeBoundary(
 	boundarySeconds: number,
 	fallbackSeconds: number,
@@ -287,4 +319,80 @@ function writeAscii(view: DataView, offset: number, value: string): void {
 	for (let index = 0; index < value.length; index += 1) {
 		view.setUint8(offset + index, value.charCodeAt(index));
 	}
+}
+
+function readPcm16MonoWav(buffer: ArrayBuffer): {
+	sampleRate: number;
+	sampleCount: number;
+	pcmBytes: Uint8Array;
+} {
+	const view = new DataView(buffer);
+	if (buffer.byteLength < 44 || readAscii(view, 0, 4) !== "RIFF" || readAscii(view, 8, 4) !== "WAVE") {
+		throw new Error("仅支持拆分标准 PCM WAV 分段。");
+	}
+
+	let offset = 12;
+	let sampleRate = 0;
+	let channels = 0;
+	let bitsPerSample = 0;
+	let audioFormat = 0;
+	let pcmBytes: Uint8Array | undefined;
+
+	while (offset + 8 <= buffer.byteLength) {
+		const chunkId = readAscii(view, offset, 4);
+		const chunkSize = view.getUint32(offset + 4, true);
+		const dataOffset = offset + 8;
+		if (dataOffset + chunkSize > buffer.byteLength) {
+			break;
+		}
+
+		if (chunkId === "fmt " && chunkSize >= 16) {
+			audioFormat = view.getUint16(dataOffset, true);
+			channels = view.getUint16(dataOffset + 2, true);
+			sampleRate = view.getUint32(dataOffset + 4, true);
+			bitsPerSample = view.getUint16(dataOffset + 14, true);
+		} else if (chunkId === "data") {
+			pcmBytes = new Uint8Array(buffer.slice(dataOffset, dataOffset + chunkSize));
+		}
+
+		offset = dataOffset + chunkSize + (chunkSize % 2);
+	}
+
+	if (audioFormat !== 1 || channels !== 1 || bitsPerSample !== 16 || !sampleRate || !pcmBytes) {
+		throw new Error("仅支持拆分 16-bit 单声道 PCM WAV 分段。");
+	}
+
+	return {
+		sampleRate,
+		sampleCount: Math.floor(pcmBytes.byteLength / 2),
+		pcmBytes
+	};
+}
+
+function encodePcm16MonoToWav(pcmBytes: Uint8Array, sampleRate: number): ArrayBuffer {
+	const buffer = new ArrayBuffer(44 + pcmBytes.byteLength);
+	const view = new DataView(buffer);
+	writeAscii(view, 0, "RIFF");
+	view.setUint32(4, 36 + pcmBytes.byteLength, true);
+	writeAscii(view, 8, "WAVE");
+	writeAscii(view, 12, "fmt ");
+	view.setUint32(16, 16, true);
+	view.setUint16(20, 1, true);
+	view.setUint16(22, 1, true);
+	view.setUint32(24, sampleRate, true);
+	view.setUint32(28, sampleRate * 2, true);
+	view.setUint16(32, 2, true);
+	view.setUint16(34, 16, true);
+	writeAscii(view, 36, "data");
+	view.setUint32(40, pcmBytes.byteLength, true);
+	new Uint8Array(buffer, 44).set(pcmBytes);
+	return buffer;
+}
+
+function readAscii(view: DataView, offset: number, length: number): string {
+	let value = "";
+	for (let index = 0; index < length; index += 1) {
+		value += String.fromCharCode(view.getUint8(offset + index));
+	}
+	return value;
 }

@@ -6,6 +6,7 @@ export type ProviderEndpointShape = "openai-audio" | "chat-audio" | "agentplan-a
 
 export interface ProviderCapability {
 	maxAudioBytes: number | null;
+	maxAudioDurationSeconds?: number;
 	maxBase64DataUrlBytes?: number;
 	supportsChunking: boolean;
 	supportsLanguage: boolean;
@@ -15,6 +16,12 @@ export interface ProviderCapability {
 	uploadMode: ProviderUploadMode;
 	endpointShape: ProviderEndpointShape;
 	recommendedModels: string[];
+	transcriptionPolicy?: {
+		targetSegmentSeconds: number;
+		minSegmentSeconds: number;
+		retryableHttpStatuses: readonly number[];
+		maxSplitDepth: number;
+	};
 	notes: string[];
 }
 
@@ -76,12 +83,15 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		recommendedModels: ["doubao-seed-asr-2.0"],
 		notes: [
 			"仅支持 Obsidian 桌面端；移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头。",
-			"整段音频会在本地转换为 16 kHz mono WAV，在同一条 WebSocket 中以 200 ms 分包节奏实时发送，不额外切成多个转写请求。",
+			"Echo Notes 独立采集麦克风，连续转换为 16 kHz、16-bit、mono PCM，在同一条优化双流 WebSocket 中以 200 ms 分包实时发送。",
+			"已确定的二遍高精度分句会持续写入转写稿；失败时保留已经写入的正文。",
+			"本地录音使用 WebM Opus 约每秒追加到附件；AgentPlan 中断不会停止本地录音。",
 			"始终启用说话人聚类并返回 utterance 级时间范围；仅识别说话人编号，不识别真实姓名。"
 		]
 	},
 	siliconflow: {
 		maxAudioBytes: SILICONFLOW_MAX_AUDIO_BYTES,
+		maxAudioDurationSeconds: 60 * 60,
 		supportsChunking: true,
 		supportsLanguage: false,
 		supportsTimestamp: false,
@@ -89,10 +99,17 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		supportsStreaming: false,
 		uploadMode: "multipart",
 		endpointShape: "custom",
-		recommendedModels: ["FunAudioLLM/SenseVoiceSmall"],
+		recommendedModels: ["FunAudioLLM/SenseVoiceSmall", "TeleAI/TeleSpeechASR"],
+		transcriptionPolicy: {
+			targetSegmentSeconds: 10 * 60,
+			minSegmentSeconds: 60,
+			retryableHttpStatuses: [500, 502, 503, 504],
+			maxSplitDepth: 4
+		},
 		notes: [
-			"SiliconFlow SenseVoiceSmall 目前由 Echo Notes 走专用 multipart 接口。",
-			"如果原音频超过 50 MB，Echo Notes 会在本地解码并切成 16 kHz mono WAV 分段逐段上传。"
+			"SiliconFlow 由 Echo Notes 走专用 multipart 接口；官方单次限制为不超过 50 MB 且不超过 1 小时。",
+			"超过任一限制时会在本地解码为约 10 分钟一段的 16 kHz mono WAV，再按原顺序逐段上传。",
+			"HTTP 500/502/503/504 会退避重试；仍失败或收到 413 时只缩小失败分段，已完成分段不会重传。"
 		]
 	},
 	"aliyun-bailian": {
@@ -132,18 +149,33 @@ export function getProviderCapabilitySummary(capability: ProviderCapability): st
 			: "单次音频上限：由 Provider 决定";
 	const longAudioSummary =
 		capability.endpointShape === "agentplan-asr-websocket"
-			? "长音频处理：单连接持续发送"
+			? "实时音频：单连接持续发送"
 			: capability.supportsChunking
 				? "长音频分段：支持"
 				: "长音频分段：暂不支持";
+	const durationLimit =
+		capability.maxAudioDurationSeconds !== undefined
+			? `单次时长上限：${formatDurationLimit(capability.maxAudioDurationSeconds)}`
+			: undefined;
 
 	return [
 		uploadLimit,
+		...(durationLimit ? [durationLimit] : []),
 		longAudioSummary,
 		capability.supportsLanguage ? "语言参数：支持" : "语言参数：暂不支持",
 		capability.supportsTimestamp ? "时间戳：支持" : "时间戳：暂不支持",
 		capability.supportsSpeakerDiarization ? "说话人分离：支持" : "说话人分离：暂不支持"
 	];
+}
+
+function formatDurationLimit(seconds: number): string {
+	if (seconds % 3600 === 0) {
+		return `${seconds / 3600} 小时`;
+	}
+	if (seconds % 60 === 0) {
+		return `${seconds / 60} 分钟`;
+	}
+	return `${seconds} 秒`;
 }
 
 function createOpenAICompatibleCapability(recommendedModels: string[]): ProviderCapability {

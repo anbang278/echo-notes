@@ -1,6 +1,6 @@
 import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
-import type { EchoNotesSettings } from "../settings/settings";
-import { PROVIDER_LABELS, isProviderId } from "../settings/settings";
+import type { TranscriptionConfig } from "../settings/settings";
+import { AGENTPLAN_ASYNC_BASE_URL, PROVIDER_LABELS, isProviderId } from "../settings/settings";
 import { getTranscriptionProviderCapability } from "./provider-capabilities";
 
 export type ProviderDiagnosticSeverity = "error" | "warning" | "info";
@@ -19,10 +19,12 @@ export interface ProviderDiagnosticResult {
 
 export interface ProviderDiagnosticOptions {
 	isMobile?: boolean;
+	isFileSystemVault?: boolean;
+	usage?: "offline" | "realtime";
 }
 
 export function diagnoseTranscriptionProviderSettings(
-	settings: Pick<EchoNotesSettings, "provider" | "baseUrl" | "model" | "language">,
+	settings: TranscriptionConfig,
 	apiKey: string,
 	options: ProviderDiagnosticOptions = {}
 ): ProviderDiagnosticResult {
@@ -47,6 +49,17 @@ export function diagnoseTranscriptionProviderSettings(
 			severity: "error",
 			title: "AgentPlan 仅支持桌面端",
 			detail: "Obsidian 移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头，请在桌面端使用该 Provider。"
+		});
+	}
+	if (
+		providerId === "volcengine-agentplan" &&
+		options.usage === "realtime" &&
+		options.isFileSystemVault === false
+	) {
+		items.push({
+			severity: "error",
+			title: "实时录音需要本地文件系统 Vault",
+			detail: "实时录音会按顺序追加 WebM 分片；当前 Vault 不是 FileSystemAdapter，无法保证录音附件可恢复。"
 		});
 	}
 
@@ -84,12 +97,12 @@ export function diagnoseTranscriptionProviderSettings(
 
 		if (
 			providerId === "volcengine-agentplan" &&
-			trimmedBaseUrl !== "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream"
+			trimmedBaseUrl !== AGENTPLAN_ASYNC_BASE_URL
 		) {
 			items.push({
-				severity: "error",
-				title: "AgentPlan WebSocket 地址不匹配",
-				detail: "请使用官方单流高准确率端点 wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream。"
+				severity: "warning",
+				title: "AgentPlan 使用迁移保留的自定义地址",
+				detail: `当前地址不是官方默认端点 ${AGENTPLAN_ASYNC_BASE_URL}；仅在你确认该 wss:// 地址兼容 AgentPlan 协议时继续使用。`
 			});
 		}
 	}
@@ -132,8 +145,8 @@ export function diagnoseTranscriptionProviderSettings(
 	if (capability.endpointShape === "agentplan-asr-websocket") {
 		items.push({
 			severity: "info",
-			title: "AgentPlan WebSocket 实时发送",
-			detail: "音频会本地转换为 16 kHz mono WAV，以 200 ms 分包节奏发送，转写耗时通常接近音频时长。"
+			title: "AgentPlan 麦克风实时转写",
+			detail: "Echo Notes 会把麦克风音频连续降混并重采样为 16 kHz mono PCM16，以 200 ms 分包直接发送；确定分句会持续写入转写稿。"
 		});
 		items.push({
 			severity: "info",
@@ -141,14 +154,22 @@ export function diagnoseTranscriptionProviderSettings(
 			detail: "插件会输出说话人编号和 utterance 时间范围，不识别真实姓名；单人录音也会显示说话人 1。非中文语言会自动按 auto 调用。"
 		});
 	}
+	if (providerId === "siliconflow") {
+		items.push({
+			severity: "info",
+			title: "硅基流动长音频自动恢复",
+			detail:
+				"单次音频必须同时不超过 50 MB 和 1 小时；超过任一限制会按约 10 分钟切分。HTTP 500/502/503/504 重试后仍失败或收到 413 时，只会继续缩小失败段。"
+		});
+	}
 
 	if (!capability.supportsChunking) {
 		items.push({
 			severity: "info",
-			title: providerId === "volcengine-agentplan" ? "单连接整段音频" : "长音频分段暂不支持",
+			title: providerId === "volcengine-agentplan" ? "单连接实时会话" : "长音频分段暂不支持",
 			detail:
 				providerId === "volcengine-agentplan"
-					? "AgentPlan 使用单条 WebSocket 持续发送整段音频，Echo Notes 不会额外切成多个转写请求。"
+					? "AgentPlan 使用单条优化双流 WebSocket 持续发送麦克风 PCM；停止录音后等待最终二遍识别结果。"
 					: "该 Provider 当前不会自动分段。超过能力表限制的大文件会在上传前被阻止。"
 		});
 	}

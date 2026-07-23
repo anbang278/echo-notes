@@ -1,5 +1,9 @@
 import { App, TFile } from "obsidian";
-import type { TranscriptionResult, TranscriptionSegment } from "../providers/transcription-provider";
+import type {
+	StreamingTranscriptionState,
+	TranscriptionResult,
+	TranscriptionSegment
+} from "../providers/transcription-provider";
 import type { EchoNotesSettings } from "../settings/settings";
 import { FileService, getParentPath } from "../obsidian/file-service";
 import {
@@ -48,7 +52,7 @@ export class TranscriptService {
 		return legacyFile instanceof TFile ? legacyFile : null;
 	}
 
-	async getReusableTranscriptFile(audioFile: TFile): Promise<TFile | null> {
+	async getReusableTranscriptFile(audioFile: TFile, provider: string, model: string): Promise<TFile | null> {
 		const transcriptFile = this.getTranscriptFile(audioFile);
 		if (!transcriptFile) {
 			return null;
@@ -57,8 +61,8 @@ export class TranscriptService {
 		const content = await this.app.vault.cachedRead(transcriptFile);
 		return isReusableTranscriptForAudio(content, {
 			sourceAudio: createSourceAudioMetadata(audioFile),
-			provider: this.settings.provider,
-			model: this.settings.model
+			provider,
+			model
 		})
 			? transcriptFile
 			: null;
@@ -83,7 +87,8 @@ export class TranscriptService {
 		sourceNote: TFile | undefined,
 		provider: string,
 		model: string,
-		segments: TranscriptionSegment[]
+		segments: TranscriptionSegment[],
+		streamingState?: StreamingTranscriptionState
 	): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
 		const content = renderProgressTranscriptTemplate({
@@ -94,6 +99,8 @@ export class TranscriptService {
 			provider,
 			model,
 			segments,
+			streamingState,
+			speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle,
 			copyLanguage: this.settings.copyLanguage
 		});
 		return this.writeTranscript(transcriptPath, content);
@@ -106,7 +113,8 @@ export class TranscriptService {
 		model: string,
 		error: string,
 		traceId?: string,
-		segments?: TranscriptionSegment[]
+		segments?: TranscriptionSegment[],
+		streamingState?: StreamingTranscriptionState
 	): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
 		const content = renderFailedTranscriptTemplate({
@@ -119,6 +127,8 @@ export class TranscriptService {
 			error,
 			traceId,
 			segments,
+			streamingState,
+			speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle,
 			copyLanguage: this.settings.copyLanguage
 		});
 		return this.writeTranscript(transcriptPath, content);
