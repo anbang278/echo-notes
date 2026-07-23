@@ -1,7 +1,15 @@
 import type { App, TFile } from "obsidian";
 import { formatSegmentTimeRange } from "../audio/audio-segmenter";
-import type { TranscriptionResult, TranscriptionSegment } from "../providers/transcription-provider";
-import { getLocalizedCopy, type CopyLanguage } from "../settings/settings";
+import type {
+	TranscriptionResult,
+	TranscriptionSegment,
+	TranscriptionUtterance
+} from "../providers/transcription-provider";
+import {
+	getLocalizedCopy,
+	type AgentPlanSpeakerLabelStyle,
+	type CopyLanguage
+} from "../settings/settings";
 import {
 	createSourceAudioMetadata,
 	renderSourceAudioMetadata,
@@ -16,6 +24,7 @@ export interface TranscriptTemplateInput {
 	sourceNote?: TFile;
 	result: TranscriptionResult;
 	copyLanguage: CopyLanguage;
+	speakerLabelStyle?: AgentPlanSpeakerLabelStyle;
 }
 
 export interface FailedTranscriptTemplateInput {
@@ -68,7 +77,11 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 		...renderSourceInfo(copy, sourceAudioLink, sourceNoteLink),
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
-		renderTranscriptionBody(input.result, input.copyLanguage),
+		renderTranscriptionBody(
+			input.result,
+			input.copyLanguage,
+			input.speakerLabelStyle ?? "speaker-with-time"
+		),
 		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
@@ -156,6 +169,41 @@ export function renderTranscriptionSegments(segments: TranscriptionSegment[], co
 		.join("\n\n");
 }
 
+export function renderTranscriptionUtterances(
+	utterances: TranscriptionUtterance[],
+	copyLanguage: CopyLanguage,
+	style: AgentPlanSpeakerLabelStyle
+): string {
+	const turns = groupConsecutiveSpeakerUtterances(utterances);
+	const copy = getLocalizedCopy(copyLanguage);
+	const speakerNumbers = new Map<string, number>();
+
+	return turns
+		.map((turn) => {
+			let speakerNumber = speakerNumbers.get(turn.speakerId);
+			if (speakerNumber === undefined) {
+				speakerNumber = speakerNumbers.size + 1;
+				speakerNumbers.set(turn.speakerId, speakerNumber);
+			}
+			let localizedTimeRange = "";
+			if (
+				style === "speaker-with-time" &&
+				turn.startSeconds !== undefined &&
+				turn.endSeconds !== undefined &&
+				turn.endSeconds >= turn.startSeconds
+			) {
+				const formattedTimeRange = formatSegmentTimeRange({
+					startSeconds: turn.startSeconds,
+					endSeconds: turn.endSeconds
+				});
+				localizedTimeRange =
+					copyLanguage === "en" ? ` (${formattedTimeRange})` : `（${formattedTimeRange}）`;
+			}
+			return `**${copy.speakerLabel} ${speakerNumber}${localizedTimeRange}**\n\n${turn.text}`;
+		})
+		.join("\n\n");
+}
+
 function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInput): string {
 	const copy = getLocalizedCopy(input.copyLanguage);
 	const sourceAudioLink = input.app.fileManager.generateMarkdownLink(input.audioFile, input.transcriptPath);
@@ -231,12 +279,48 @@ function renderTranscriptFrontmatter(input: {
 	];
 }
 
-function renderTranscriptionBody(result: TranscriptionResult, copyLanguage: CopyLanguage): string {
+function renderTranscriptionBody(
+	result: TranscriptionResult,
+	copyLanguage: CopyLanguage,
+	speakerLabelStyle: AgentPlanSpeakerLabelStyle
+): string {
+	if (result.utterances && result.utterances.length > 0) {
+		return renderTranscriptionUtterances(result.utterances, copyLanguage, speakerLabelStyle);
+	}
+
 	if (result.segments && result.segments.length > 0) {
 		return renderTranscriptionSegments(result.segments, copyLanguage);
 	}
 
 	return result.text.trim();
+}
+
+function groupConsecutiveSpeakerUtterances(utterances: TranscriptionUtterance[]): TranscriptionUtterance[] {
+	const turns: TranscriptionUtterance[] = [];
+	for (const utterance of utterances) {
+		const text = utterance.text.trim();
+		if (!text || !utterance.speakerId.trim()) {
+			continue;
+		}
+
+		const previous = turns.at(-1);
+		if (previous?.speakerId === utterance.speakerId) {
+			previous.text = joinUtteranceText(previous.text, text);
+			previous.startSeconds ??= utterance.startSeconds;
+			if (utterance.endSeconds !== undefined) {
+				previous.endSeconds = utterance.endSeconds;
+			}
+			continue;
+		}
+
+		turns.push({ ...utterance, speakerId: utterance.speakerId.trim(), text });
+	}
+	return turns;
+}
+
+function joinUtteranceText(left: string, right: string): string {
+	const separator = /[A-Za-z0-9]$/.test(left) && /^[A-Za-z0-9]/.test(right) ? " " : "";
+	return `${left}${separator}${right}`;
 }
 
 function renderSegmentsOrEmpty(segments: TranscriptionSegment[], copyLanguage: CopyLanguage): string {

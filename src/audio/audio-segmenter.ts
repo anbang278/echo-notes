@@ -115,6 +115,18 @@ export async function createWavAudioSegments(
 	}));
 }
 
+export async function createWavAudioBuffer(sourceAudioBuffer: ArrayBuffer): Promise<ArrayBuffer> {
+	const decodedAudio = await decodeAudio(sourceAudioBuffer);
+	return encodeAudioSegmentToWav(
+		decodedAudio,
+		{
+			startSeconds: 0,
+			endSeconds: decodedAudio.duration
+		},
+		WAV_SEGMENT_SAMPLE_RATE
+	);
+}
+
 function normalizeBoundary(
 	boundarySeconds: number,
 	fallbackSeconds: number,

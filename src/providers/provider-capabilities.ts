@@ -1,8 +1,8 @@
-import { isProviderId, type ProviderId } from "../settings/settings";
+import { isProviderId, type TranscriptionProviderId } from "../settings/settings";
 
-export type ProviderUploadMode = "multipart" | "base64-data-url";
+export type ProviderUploadMode = "multipart" | "base64-data-url" | "websocket-stream";
 
-export type ProviderEndpointShape = "openai-audio" | "chat-audio" | "custom";
+export type ProviderEndpointShape = "openai-audio" | "chat-audio" | "agentplan-asr-websocket" | "custom";
 
 export interface ProviderCapability {
 	maxAudioBytes: number | null;
@@ -45,7 +45,7 @@ export const OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS = [
 	"cerebras",
 	"z-ai",
 	"custom-openai-compatible"
-] as const satisfies readonly ProviderId[];
+] as const satisfies readonly TranscriptionProviderId[];
 
 type OpenAICompatibleTranscriptionProviderId = (typeof OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS)[number];
 
@@ -63,7 +63,23 @@ const openAICompatibleCapabilities = Object.fromEntries(
 	])
 ) as Record<OpenAICompatibleTranscriptionProviderId, ProviderCapability>;
 
-export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<ProviderId, ProviderCapability> = {
+export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId, ProviderCapability> = {
+	"volcengine-agentplan": {
+		maxAudioBytes: null,
+		supportsChunking: false,
+		supportsLanguage: true,
+		supportsTimestamp: true,
+		supportsSpeakerDiarization: true,
+		supportsStreaming: true,
+		uploadMode: "websocket-stream",
+		endpointShape: "agentplan-asr-websocket",
+		recommendedModels: ["doubao-seed-asr-2.0"],
+		notes: [
+			"仅支持 Obsidian 桌面端；移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头。",
+			"整段音频会在本地转换为 16 kHz mono WAV，在同一条 WebSocket 中以 200 ms 分包节奏实时发送，不额外切成多个转写请求。",
+			"始终启用说话人聚类并返回 utterance 级时间范围；仅识别说话人编号，不识别真实姓名。"
+		]
+	},
 	siliconflow: {
 		maxAudioBytes: SILICONFLOW_MAX_AUDIO_BYTES,
 		supportsChunking: true,
@@ -114,10 +130,16 @@ export function getProviderCapabilitySummary(capability: ProviderCapability): st
 		: capability.maxBase64DataUrlBytes
 			? `单次编码输入上限：${formatProviderCapabilityBytes(capability.maxBase64DataUrlBytes)}`
 			: "单次音频上限：由 Provider 决定";
+	const longAudioSummary =
+		capability.endpointShape === "agentplan-asr-websocket"
+			? "长音频处理：单连接持续发送"
+			: capability.supportsChunking
+				? "长音频分段：支持"
+				: "长音频分段：暂不支持";
 
 	return [
 		uploadLimit,
-		capability.supportsChunking ? "长音频分段：支持" : "长音频分段：暂不支持",
+		longAudioSummary,
 		capability.supportsLanguage ? "语言参数：支持" : "语言参数：暂不支持",
 		capability.supportsTimestamp ? "时间戳：支持" : "时间戳：暂不支持",
 		capability.supportsSpeakerDiarization ? "说话人分离：支持" : "说话人分离：暂不支持"

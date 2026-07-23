@@ -1,5 +1,5 @@
 import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
-import { isProviderId, PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
+import { ANALYSIS_PROVIDER_LABELS, isAnalysisProviderId, type EchoNotesSettings } from "../settings/settings";
 
 export type AnalysisDiagnosticSeverity = "error" | "warning" | "info";
 
@@ -20,7 +20,7 @@ export function diagnoseAnalysisProviderSettings(
 	apiKey: string,
 	estimatedCharacters?: number
 ): AnalysisDiagnosticResult {
-	const providerId = isProviderId(settings.analysisProvider) ? settings.analysisProvider : "custom-openai-compatible";
+	const providerId = isAnalysisProviderId(settings.analysisProvider) ? settings.analysisProvider : "custom-openai-compatible";
 	const items: AnalysisDiagnosticItem[] = [];
 	const baseUrl = settings.analysisBaseUrl.trim();
 	const model = settings.analysisModel.trim();
@@ -55,7 +55,7 @@ export function diagnoseAnalysisProviderSettings(
 	}
 
 	return {
-		providerLabel: PROVIDER_LABELS[providerId] ?? settings.analysisProvider,
+		providerLabel: ANALYSIS_PROVIDER_LABELS[providerId] ?? settings.analysisProvider,
 		canAttemptAnalysis: !items.some((item) => item.severity === "error"),
 		items
 	};

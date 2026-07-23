@@ -1,4 +1,4 @@
-import type { AnalysisProviderId, ProviderId } from "../settings/settings";
+import type { AnalysisProviderId, TranscriptionProviderId } from "../settings/settings";
 
 const TRANSCRIPTION_SECRET_PREFIX = "echo-notes-transcription-api-key";
 const ANALYSIS_SECRET_PREFIX = "echo-notes-analysis-api-key";
@@ -8,7 +8,7 @@ export interface SecretStorageLike {
 	setSecret(id: string, secret: string): void;
 }
 
-export function getTranscriptionApiKeySecretId(provider: ProviderId): string {
+export function getTranscriptionApiKeySecretId(provider: TranscriptionProviderId): string {
 	return `${TRANSCRIPTION_SECRET_PREFIX}-${provider}`;
 }
 

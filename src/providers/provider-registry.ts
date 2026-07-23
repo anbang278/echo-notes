@@ -4,9 +4,12 @@ import { AliyunBailianQwenAsrProvider } from "./aliyun-bailian-provider";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-provider";
 import { SiliconFlowTeleSpeechProvider } from "./siliconflow-provider";
 import type { TranscriptionProvider } from "./transcription-provider";
+import { VolcengineAgentPlanAsrProvider } from "./volcengine-agentplan-provider";
 
 export function createTranscriptionProvider(app: App, settings: EchoNotesSettings, apiKey: string): TranscriptionProvider {
 	switch (settings.provider) {
+		case "volcengine-agentplan":
+			return new VolcengineAgentPlanAsrProvider(app, settings, apiKey);
 		case "aliyun-bailian":
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
 		case "openai":

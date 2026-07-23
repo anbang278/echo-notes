@@ -13,6 +13,13 @@ export interface TranscriptionSegment extends TranscriptionSegmentRange {
 	traceId?: string;
 }
 
+export interface TranscriptionUtterance {
+	speakerId: string;
+	text: string;
+	startSeconds?: number;
+	endSeconds?: number;
+}
+
 export type TranscriptionProgress =
 	| {
 			type: "long-audio-preparing";
@@ -47,6 +54,7 @@ export interface TranscriptionResult {
 	model: string;
 	traceId?: string;
 	segments?: TranscriptionSegment[];
+	utterances?: TranscriptionUtterance[];
 	raw?: unknown;
 }
 

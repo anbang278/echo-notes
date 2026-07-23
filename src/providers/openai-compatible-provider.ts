@@ -1,6 +1,6 @@
 import { App, requestUrl } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
-import type { EchoNotesSettings, ProviderId } from "../settings/settings";
+import type { EchoNotesSettings, TranscriptionProviderId } from "../settings/settings";
 import {
 	createHttpTranscriptionError,
 	createNetworkTranscriptionError,
@@ -17,14 +17,14 @@ interface OpenAICompatibleTranscriptionResponse {
 }
 
 export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
-	id: ProviderId;
+	id: TranscriptionProviderId;
 	name: string;
 
 	private app: App;
 	private settings: EchoNotesSettings;
 	private apiKey: string;
 
-	constructor(app: App, settings: EchoNotesSettings, apiKey: string, id: ProviderId, name: string) {
+	constructor(app: App, settings: EchoNotesSettings, apiKey: string, id: TranscriptionProviderId, name: string) {
 		this.app = app;
 		this.settings = settings;
 		this.apiKey = apiKey;

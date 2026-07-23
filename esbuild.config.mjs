@@ -30,6 +30,10 @@ const context = await esbuild.context({
 		...builtins
 	],
 	format: "cjs",
+	// Obsidian 桌面端使用 CommonJS 插件宿主。桌面专用依赖 ws 需选择 Node 入口，
+	// AgentPlan Provider 会在移动端守卫通过后再延迟加载该依赖。
+	platform: "node",
+	mainFields: ["main", "module"],
 	target: "es2018",
 	logLevel: "info",
 	sourcemap: production ? false : "inline",

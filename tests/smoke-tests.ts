@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { gunzipSync, gzipSync } from "node:zlib";
 import {
 	ANALYSIS_LINKS_END,
 	ANALYSIS_LINKS_START,
@@ -41,6 +42,21 @@ import {
 } from "../src/providers/provider-capabilities";
 import { diagnoseTranscriptionProviderSettings } from "../src/providers/provider-diagnostics";
 import {
+	AGENTPLAN_RESOURCE_ID,
+	transcribeAgentPlanWav,
+	type AgentPlanSocket
+} from "../src/providers/volcengine-agentplan-client";
+import {
+	buildAgentPlanFullRequestPayload,
+	encodeAgentPlanAudioRequest,
+	encodeAgentPlanFullRequest,
+	getAgentPlanPcmPacketByteLength,
+	mapAgentPlanLanguage,
+	normalizeAgentPlanUtterances,
+	parseAgentPlanResponseFrame,
+	splitAgentPlanAudio
+} from "../src/providers/volcengine-agentplan-protocol";
+import {
 	classifyHttpTranscriptionError,
 	createHttpTranscriptionError,
 	createNetworkTranscriptionError,
@@ -77,13 +93,17 @@ import {
 	parseHotkeyInput,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
-	TRANSCRIPTION_LANGUAGE_LABELS
+	TRANSCRIPTION_LANGUAGE_LABELS,
+	isAnalysisProviderId,
+	isProviderId,
+	normalizeTranscriptionLanguageForProvider
 } from "../src/settings/settings";
 import {
 	renderFailedTranscriptTemplate,
 	renderProgressTranscriptTemplate,
 	renderTranscriptTemplate,
-	renderTranscriptionSegments
+	renderTranscriptionSegments,
+	renderTranscriptionUtterances
 } from "../src/transcript/transcript-template";
 import {
 	createTranscriptFileName,
@@ -664,6 +684,50 @@ assert.match(segmentedTranscript, /status: done/);
 assert.match(segmentedTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(segmentedTranscript, /## 分段 01（00:00-03:00）/);
 
+const speakerUtterances = [
+	{ speakerId: "server-a", text: "第一句。", startSeconds: 0.08, endSeconds: 1.2 },
+	{ speakerId: "server-a", text: "第二句。", startSeconds: 1.4, endSeconds: 2.8 },
+	{ speakerId: "server-b", text: "Hello", startSeconds: 3, endSeconds: 3.8 },
+	{ speakerId: "server-b", text: "world.", startSeconds: 4, endSeconds: 4.8 },
+	{ speakerId: "server-a", text: "再次发言。", startSeconds: 5, endSeconds: 6 }
+];
+const renderedSpeakerTurns = renderTranscriptionUtterances(speakerUtterances, "zh", "speaker-with-time");
+assert.match(renderedSpeakerTurns, /\*\*说话人 1（00:00-00:03）\*\*/);
+assert.match(renderedSpeakerTurns, /第一句。第二句。/);
+assert.match(renderedSpeakerTurns, /\*\*说话人 2（00:03-00:05）\*\*/);
+assert.match(renderedSpeakerTurns, /Hello world\./);
+assert.equal((renderedSpeakerTurns.match(/\*\*说话人 1/g) ?? []).length, 2);
+
+const renderedSpeakerOnly = renderTranscriptionUtterances(
+	[{ speakerId: "only", text: "Single speaker text." }],
+	"en",
+	"speaker"
+);
+assert.equal(renderedSpeakerOnly, "**Speaker 1**\n\nSingle speaker text.");
+const renderedMissingTime = renderTranscriptionUtterances(
+	[{ speakerId: "only", text: "缺少时间" }],
+	"zh",
+	"speaker-with-time"
+);
+assert.equal(renderedMissingTime, "**说话人 1**\n\n缺少时间");
+
+const diarizedTranscript = renderTranscriptTemplate({
+	app: templateApp as never,
+	audioFile: audioFile as never,
+	transcriptPath: "Recording 20260531001942.transcript.md",
+	result: {
+		text: "原始全文回退",
+		provider: "volcengine-agentplan",
+		model: "doubao-seed-asr-2.0",
+		utterances: [{ speakerId: "0", text: "单人录音正文", startSeconds: 0, endSeconds: 2 }]
+	},
+	copyLanguage: "zh",
+	speakerLabelStyle: "speaker-with-time"
+});
+assert.match(diarizedTranscript, /\*\*说话人 1（00:00-00:02）\*\*/);
+assert.match(diarizedTranscript, /单人录音正文/);
+assert.doesNotMatch(diarizedTranscript, /原始全文回退/);
+
 const progressTranscript = renderProgressTranscriptTemplate({
 	app: templateApp as never,
 	audioFile: audioFile as never,
@@ -736,12 +800,16 @@ for (const [templateId, keyword, firstHeading, finalHeading, guidance] of roleTe
 	assert.match(template.customPrompt, finalHeading);
 	assert.match(template.customPrompt, guidance);
 }
-assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), Object.keys(PROVIDER_LABELS));
-assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(PROVIDER_LABELS));
+assert.equal(Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, "volcengine-agentplan"), true);
+assert.equal(Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, "volcengine-agentplan"), false);
+assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(ANALYSIS_PROVIDER_LABELS));
+assert.equal(isProviderId("volcengine-agentplan"), true);
+assert.equal(isAnalysisProviderId("volcengine-agentplan"), false);
 assert.equal(DEFAULT_SETTINGS.provider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.model, "qwen3-asr-flash");
 assert.equal(DEFAULT_SETTINGS.language, "zh");
+assert.equal(DEFAULT_SETTINGS.agentPlanSpeakerLabelStyle, "speaker-with-time");
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
@@ -749,6 +817,11 @@ assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall")
 assert.equal(PROVIDER_DEFAULTS.siliconflow.language, "auto");
 assert.equal(PROVIDER_DEFAULTS.openai.language, "zh");
 assert.equal(PROVIDER_DEFAULTS["custom-openai-compatible"].language, "zh");
+assert.deepEqual(PROVIDER_DEFAULTS["volcengine-agentplan"], {
+	baseUrl: "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream",
+	model: "doubao-seed-asr-2.0",
+	language: "zh"
+});
 assert.equal(TRANSCRIPTION_LANGUAGE_LABELS.zh, "中文（zh）");
 assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
@@ -774,16 +847,146 @@ assert.deepEqual(getTranscriptionProviderCapability("siliconflow").recommendedMo
 assert.equal(getTranscriptionProviderCapability("openai").maxAudioBytes, 25 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("openai").supportsLanguage, true);
 assert.equal(getTranscriptionProviderCapability("openai").supportsTimestamp, false);
+assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").uploadMode, "websocket-stream");
+assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").endpointShape, "agentplan-asr-websocket");
+assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsChunking, false);
+assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsTimestamp, true);
+assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsSpeakerDiarization, true);
 assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "openai-audio");
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("siliconflow")).includes("长音频分段：支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("openai")).includes("长音频分段：暂不支持"));
+assert.ok(
+	getProviderCapabilitySummary(getTranscriptionProviderCapability("volcengine-agentplan")).includes(
+		"长音频处理：单连接持续发送"
+	)
+);
+assert.ok(
+	getProviderCapabilitySummary(getTranscriptionProviderCapability("volcengine-agentplan")).includes(
+		"说话人分离：支持"
+	)
+);
 for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
 	const capability = getTranscriptionProviderCapability(providerId);
 	assert.equal(capability.endpointShape, "openai-audio");
 	assert.equal(capability.uploadMode, "multipart");
 	assert.equal(capability.maxAudioBytes, 25 * 1024 * 1024);
 }
+assert.equal(mapAgentPlanLanguage("zh"), "zh-CN");
+assert.equal(mapAgentPlanLanguage("zh-CN"), "zh-CN");
+assert.equal(mapAgentPlanLanguage("en"), undefined);
+assert.equal(mapAgentPlanLanguage("auto"), undefined);
+assert.equal(mapAgentPlanLanguage("yue-CN"), undefined);
+assert.equal(buildAgentPlanFullRequestPayload("zh").audio.language, "zh-CN");
+assert.equal(buildAgentPlanFullRequestPayload("en").audio.language, undefined);
+assert.equal(buildAgentPlanFullRequestPayload("auto").audio.language, undefined);
+assert.equal(buildAgentPlanFullRequestPayload("zh").request.enable_itn, true);
+assert.equal(buildAgentPlanFullRequestPayload("zh").request.enable_speaker_info, true);
+assert.equal(buildAgentPlanFullRequestPayload("zh").request.ssd_version, "200");
+assert.equal(getAgentPlanPcmPacketByteLength(), 6400);
+assert.deepEqual(
+	splitAgentPlanAudio(new Uint8Array(6500)).map((packet) => packet.byteLength),
+	[6400, 100]
+);
+const agentPlanFullRequestFrame = await encodeAgentPlanFullRequest(buildAgentPlanFullRequestPayload("zh"));
+assert.equal(agentPlanFullRequestFrame[0], 0x11);
+assert.equal(agentPlanFullRequestFrame[1], 0x11);
+assert.equal(agentPlanFullRequestFrame[2], 0x11);
+assert.equal(new DataView(agentPlanFullRequestFrame.buffer).getInt32(4, false), 1);
+const agentPlanRequestPayload = JSON.parse(
+	gunzipSync(agentPlanFullRequestFrame.subarray(12)).toString("utf8")
+) as ReturnType<typeof buildAgentPlanFullRequestPayload>;
+assert.equal(agentPlanRequestPayload.request.enable_speaker_info, true);
+assert.equal(agentPlanRequestPayload.request.ssd_version, "200");
+const agentPlanLastAudioFrame = await encodeAgentPlanAudioRequest(new Uint8Array([1, 2, 3]), 8, true);
+assert.equal(agentPlanLastAudioFrame[1], 0x23);
+assert.equal(new DataView(agentPlanLastAudioFrame.buffer).getInt32(4, false), -8);
+
+const parsedAgentPlanResponse = await parseAgentPlanResponseFrame(
+	createAgentPlanServerFrame({ result: { text: "测试转写" } }, { isLastPackage: true, sequence: -3 })
+);
+assert.equal(parsedAgentPlanResponse.messageType, "response");
+assert.equal(parsedAgentPlanResponse.isLastPackage, true);
+assert.equal(parsedAgentPlanResponse.sequence, -3);
+assert.equal(parsedAgentPlanResponse.payload?.result?.text, "测试转写");
+const normalizedAgentPlanUtterances = normalizeAgentPlanUtterances([
+	{
+		text: "第一位发言人",
+		start_time: 80,
+		end_time: 1200,
+		additions: { speaker_id: "0" }
+	},
+	{
+		text: "第二位发言人",
+		start_time: 1300,
+		end_time: 2400,
+		additions: { speaker_id: 1 }
+	},
+	{ text: "", start_time: 2500, end_time: 2600, additions: { speaker_id: "2" } },
+	{ text: "缺少说话人", start_time: 2700, end_time: 2800 }
+]);
+assert.deepEqual(normalizedAgentPlanUtterances, [
+	{ speakerId: "0", text: "第一位发言人", startSeconds: 0.08, endSeconds: 1.2 },
+	{ speakerId: "1", text: "第二位发言人", startSeconds: 1.3, endSeconds: 2.4 }
+]);
+assert.equal(normalizeAgentPlanUtterances(undefined), undefined);
+assert.equal(normalizeAgentPlanUtterances([{ text: "无 speaker" }]), undefined);
+const parsedAgentPlanError = await parseAgentPlanResponseFrame(
+	createAgentPlanServerFrame({ message: "quota exceeded" }, { errorCode: 45000081 })
+);
+assert.equal(parsedAgentPlanError.messageType, "error");
+assert.equal(parsedAgentPlanError.errorCode, 45000081);
+
+const fakeAgentPlanSocket = createFakeAgentPlanSocket();
+let capturedAgentPlanHeaders: Record<string, string> | undefined;
+const fakeAgentPlanResult = await transcribeAgentPlanWav({
+	url: PROVIDER_DEFAULTS["volcengine-agentplan"].baseUrl,
+	apiKey: "ark-test-secret",
+	language: "zh",
+	wavBytes: new Uint8Array(6500),
+	createSocket: (_url, headers) => {
+		capturedAgentPlanHeaders = headers;
+		return fakeAgentPlanSocket;
+	},
+	sleep: async () => undefined,
+	handshakeTimeoutMs: 100,
+	finalResponseTimeoutMs: 100
+});
+assert.equal(capturedAgentPlanHeaders?.["X-Api-Key"], "ark-test-secret");
+assert.equal(capturedAgentPlanHeaders?.["X-Api-Resource-Id"], AGENTPLAN_RESOURCE_ID);
+assert.match(capturedAgentPlanHeaders?.["X-Api-Request-Id"] ?? "", /^[0-9a-f-]{36}$/);
+assert.equal(fakeAgentPlanResult.text, "AgentPlan 模拟转写结果");
+assert.equal(fakeAgentPlanResult.traceId, "trace-agentplan-test");
+assert.equal(fakeAgentPlanResult.raw.result?.utterances?.[0]?.additions?.speaker_id, "0");
+assert.equal(fakeAgentPlanSocket.sentFrames.filter((frame) => frame[1] >> 4 === 0x2).length, 2);
+assert.equal(fakeAgentPlanSocket.sentFrames.at(-1)?.[1] & 0x2, 0x2);
+
+await assert.rejects(
+	transcribeAgentPlanWav({
+		url: PROVIDER_DEFAULTS["volcengine-agentplan"].baseUrl,
+		apiKey: "ark-test-secret",
+		language: "zh",
+		wavBytes: new Uint8Array(100),
+		createSocket: () => createFakeAgentPlanSocket("silent"),
+		sleep: async () => undefined,
+		handshakeTimeoutMs: 5,
+		finalResponseTimeoutMs: 5
+	}),
+	/AgentPlan ASR WebSocket 连接超时/
+);
+await assert.rejects(
+	transcribeAgentPlanWav({
+		url: PROVIDER_DEFAULTS["volcengine-agentplan"].baseUrl,
+		apiKey: "ark-test-secret",
+		language: "zh",
+		wavBytes: new Uint8Array(100),
+		createSocket: () => createFakeAgentPlanSocket("error"),
+		sleep: async () => undefined,
+		handshakeTimeoutMs: 100,
+		finalResponseTimeoutMs: 100
+	}),
+	/45000081.*quota exceeded/
+);
 const sensitiveErrorText = [
 	"Authorization: Bearer sk-exampletestsecret123456",
 	'{"api_key":"sk-examplejsonsecret123456"}',
@@ -796,13 +999,14 @@ assert.equal(
 );
 assert.equal(getAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key-openai");
 const providerIds = Object.keys(PROVIDER_LABELS) as Array<keyof typeof PROVIDER_LABELS>;
+const analysisProviderIds = Object.keys(ANALYSIS_PROVIDER_LABELS) as Array<keyof typeof ANALYSIS_PROVIDER_LABELS>;
 const transcriptionSecretIds = providerIds.map(getTranscriptionApiKeySecretId);
-const analysisSecretIds = providerIds.map(getAnalysisApiKeySecretId);
+const analysisSecretIds = analysisProviderIds.map(getAnalysisApiKeySecretId);
 for (const secretId of [...transcriptionSecretIds, ...analysisSecretIds]) {
 	assert.match(secretId, /^[a-z0-9-]+$/);
 }
 assert.equal(new Set(transcriptionSecretIds).size, providerIds.length);
-assert.equal(new Set(analysisSecretIds).size, providerIds.length);
+assert.equal(new Set(analysisSecretIds).size, analysisProviderIds.length);
 assert.equal(transcriptionSecretIds.some((secretId) => analysisSecretIds.includes(secretId)), false);
 
 class MemorySecretStorage implements SecretStorageLike {
@@ -942,6 +1146,8 @@ assert.equal(formatFileSize(1536), "1.5 KB");
 assert.equal(formatFileSize(2 * 1024 * 1024), "2 MB");
 assert.equal(isInsecureRemoteBaseUrl("http://api.example.com/v1"), true);
 assert.equal(isInsecureRemoteBaseUrl("https://api.example.com/v1"), false);
+assert.equal(isInsecureRemoteBaseUrl("ws://api.example.com/v1"), true);
+assert.equal(isInsecureRemoteBaseUrl("wss://api.example.com/v1"), false);
 assert.equal(isInsecureRemoteBaseUrl("http://localhost:11434/v1"), false);
 const uploadPreview = buildTranscriptionUploadPreview(
 	{
@@ -993,6 +1199,42 @@ const validProviderDiagnostics = diagnoseTranscriptionProviderSettings(DEFAULT_S
 assert.equal(validProviderDiagnostics.canAttemptTranscription, true);
 assert.equal(validProviderDiagnostics.providerLabel, PROVIDER_LABELS["aliyun-bailian"]);
 assert.equal(validProviderDiagnostics.items.some((item) => item.severity === "error"), false);
+const validAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		provider: "volcengine-agentplan",
+		...PROVIDER_DEFAULTS["volcengine-agentplan"]
+	},
+	"ark-valid",
+	{ isMobile: false }
+);
+assert.equal(validAgentPlanDiagnostics.canAttemptTranscription, true);
+assert.ok(validAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan WebSocket 实时发送"));
+assert.ok(validAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 说话人分离始终开启"));
+const mobileAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		provider: "volcengine-agentplan",
+		...PROVIDER_DEFAULTS["volcengine-agentplan"]
+	},
+	"ark-valid",
+	{ isMobile: true }
+);
+assert.equal(mobileAgentPlanDiagnostics.canAttemptTranscription, false);
+assert.ok(mobileAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 仅支持桌面端"));
+const invalidAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		provider: "volcengine-agentplan",
+		baseUrl: "ws://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async",
+		model: "bigmodel",
+		language: "zh"
+	},
+	"ark-valid"
+);
+assert.equal(invalidAgentPlanDiagnostics.canAttemptTranscription, false);
+assert.ok(invalidAgentPlanDiagnostics.items.some((item) => item.title === "Base URL 格式无效"));
+assert.ok(invalidAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 模型不匹配"));
 const unsupportedLanguageDiagnostics = diagnoseTranscriptionProviderSettings(
 	{
 		...DEFAULT_SETTINGS,
@@ -1015,6 +1257,10 @@ assert.ok(
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "");
+assert.equal(normalizeTranscriptionLanguageForProvider("volcengine-agentplan", "zh"), "zh");
+assert.equal(normalizeTranscriptionLanguageForProvider("volcengine-agentplan", "zh-CN"), "zh-CN");
+assert.equal(normalizeTranscriptionLanguageForProvider("volcengine-agentplan", "en"), "auto");
+assert.equal(normalizeTranscriptionLanguageForProvider("openai", "en"), "en");
 assert.deepEqual(parseHotkeyInput("Control + L"), { modifiers: ["Ctrl"], key: "L" });
 assert.deepEqual(parseHotkeyInput("Cmd+Shift+P"), { modifiers: ["Meta", "Shift"], key: "P" });
 assert.equal(parseHotkeyInput("not a hotkey"), undefined);
@@ -1042,6 +1288,7 @@ assert.equal(normalizedSettings.analysisEnabled, true);
 assert.equal(normalizedSettings.provider, "aliyun-bailian");
 assert.equal(normalizedSettings.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(normalizedSettings.model, "qwen3-asr-flash");
+assert.equal(normalizedSettings.agentPlanSpeakerLabelStyle, "speaker-with-time");
 assert.equal(normalizedSettings.analysisProvider, "aliyun-bailian");
 assert.equal(normalizedSettings.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
@@ -1131,6 +1378,24 @@ assert.equal(invalidTranscriptionProviderSettings.baseUrl, "https://dashscope.al
 assert.equal(invalidTranscriptionProviderSettings.model, "qwen3-asr-flash");
 assert.equal(invalidTranscriptionProviderSettings.language, "zh");
 assert.equal(normalizeEchoNotesSettings({ provider: "aliyun-bailian", language: "cmn" }).language, "cmn");
+assert.equal(
+	normalizeEchoNotesSettings({ provider: "volcengine-agentplan", language: "en" }).language,
+	"auto"
+);
+assert.equal(
+	normalizeEchoNotesSettings({
+		provider: "volcengine-agentplan",
+		agentPlanSpeakerLabelStyle: "speaker"
+	}).agentPlanSpeakerLabelStyle,
+	"speaker"
+);
+assert.equal(
+	normalizeEchoNotesSettings({
+		provider: "volcengine-agentplan",
+		agentPlanSpeakerLabelStyle: "invalid"
+	}).agentPlanSpeakerLabelStyle,
+	"speaker-with-time"
+);
 assert.equal(createTranscriptFileName("Projects/A/Meeting.m4a"), "Meeting.transcript.md");
 const hashedTranscriptA = createTranscriptFileName("Projects/A/Meeting.m4a", true);
 const hashedTranscriptB = createTranscriptFileName("Projects/B/Meeting.m4a", true);
@@ -1506,5 +1771,90 @@ assert.ok(
 	transcriptWithLegacyUpdatedWorkAnalysis.indexOf(TRANSCRIPT_ANALYSIS_START) <
 		transcriptWithLegacyUpdatedWorkAnalysis.indexOf("## 转写稿")
 );
+
+function createAgentPlanServerFrame(
+	payload: Record<string, unknown>,
+	options: { isLastPackage?: boolean; sequence?: number; errorCode?: number } = {}
+): Uint8Array {
+	const payloadBytes = gzipSync(JSON.stringify(payload));
+	const isError = options.errorCode !== undefined;
+	const flags = 0x1 | (options.isLastPackage ? 0x2 : 0);
+	const prefixLength = 4 + 4 + (isError ? 4 : 0) + 4;
+	const frame = new Uint8Array(prefixLength + payloadBytes.byteLength);
+	frame[0] = 0x11;
+	frame[1] = ((isError ? 0xf : 0x9) << 4) | flags;
+	frame[2] = 0x11;
+	const view = new DataView(frame.buffer);
+	let offset = 4;
+	view.setInt32(offset, options.sequence ?? 1, false);
+	offset += 4;
+	if (isError) {
+		view.setUint32(offset, options.errorCode ?? 0, false);
+		offset += 4;
+	}
+	view.setUint32(offset, payloadBytes.byteLength, false);
+	offset += 4;
+	frame.set(payloadBytes, offset);
+	return frame;
+}
+
+function createFakeAgentPlanSocket(
+	behavior: "success" | "silent" | "error" = "success"
+): AgentPlanSocket & { sentFrames: Uint8Array[] } {
+	let messageListener: ((data: Uint8Array) => void) | undefined;
+	let upgradeListener: ((headers: Record<string, string | string[] | undefined>) => void) | undefined;
+	const sentFrames: Uint8Array[] = [];
+	return {
+		sentFrames,
+		onOpen: (listener) => {
+			queueMicrotask(() => {
+				upgradeListener?.({ "x-tt-logid": "trace-agentplan-test" });
+				listener();
+			});
+		},
+		onMessage: (listener) => {
+			messageListener = listener;
+		},
+		onError: (_listener) => undefined,
+		onClose: (_listener) => undefined,
+		onUpgrade: (listener) => {
+			upgradeListener = listener;
+		},
+		send: (data) => {
+			sentFrames.push(Uint8Array.from(data));
+			const messageType = data[1] >> 4;
+			if (messageType === 0x1 && behavior === "success") {
+				queueMicrotask(() => messageListener?.(createAgentPlanServerFrame({})));
+			} else if (messageType === 0x1 && behavior === "error") {
+				queueMicrotask(() =>
+					messageListener?.(createAgentPlanServerFrame({ message: "quota exceeded" }, { errorCode: 45000081 }))
+				);
+			} else if (messageType === 0x2 && (data[1] & 0x2) !== 0 && behavior === "success") {
+				queueMicrotask(() =>
+					messageListener?.(
+						createAgentPlanServerFrame(
+							{
+								result: {
+									text: "AgentPlan 模拟转写结果",
+									utterances: [
+										{
+											text: "AgentPlan 模拟转写结果",
+											start_time: 0,
+											end_time: 1200,
+											additions: { speaker_id: "0" }
+										}
+									]
+								}
+							},
+							{ isLastPackage: true, sequence: -3 }
+						)
+					)
+				);
+			}
+		},
+		close: () => undefined,
+		terminate: () => undefined
+	};
+}
 
 console.log("Smoke tests passed.");

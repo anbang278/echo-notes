@@ -83,6 +83,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 转写服务商预设：
 
+- 火山引擎 AgentPlan：使用 `doubao-seed-asr-2.0`、说话人分离与 utterance 时间范围，仅支持桌面端
 - 【免费】硅基流动（SiliconFlow）：默认模型 `FunAudioLLM/SenseVoiceSmall`
 - 阿里百炼（Alibaba Bailian）：默认模型 `qwen3-asr-flash`
 - OpenAI（OpenAI）：使用 OpenAI-compatible 音频转写接口
@@ -94,7 +95,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 设置页还提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
 
-AI 纪要分析使用独立配置，默认是阿里百炼 `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 列表与转写 Provider 列表保持一致；可选聊天模型预设需要确认支持 `{Base URL}/chat/completions`。
+AI 纪要分析使用独立配置，默认是阿里百炼 `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。火山引擎 AgentPlan 这类仅转写 Provider 不会出现在分析 Provider 列表中；可选聊天模型预设需要确认支持 `{Base URL}/chat/completions`。
 
 ## 网络与数据使用
 
@@ -102,12 +103,13 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 
 - 硅基流动默认地址：`https://api.siliconflow.cn`
 - 阿里百炼默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- 火山引擎 AgentPlan ASR 地址：`wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream`
 - OpenAI 默认地址：`https://api.openai.com/v1`
 - Groq 默认地址：`https://api.groq.com/openai/v1`
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - 自定义兼容接口：由用户自行配置
 
-转写会把所选音频上传到你配置的转写服务商。AI 纪要分析会把转写稿文本上传到你配置的分析服务商。转写 API Key 和分析 API Key 都会按 Provider 隔离保存到 Obsidian `SecretStorage`，切换 Provider 不会复用其他服务商的密钥。转写稿和写回的 AI 纪要内容会保存在你的 Obsidian Vault。
+转写会把所选音频上传到你配置的转写服务商。使用火山引擎 AgentPlan 时，Echo Notes 会先在本地将整段音频转换为 16 kHz mono WAV，再通过同一条鉴权 WebSocket 按 200 ms 分包发送，不额外切成多个转写请求。AgentPlan 还会返回说话人聚类编号和 utterance 时间范围；这些标签只能区分不同声音，不能识别真实姓名。AI 纪要分析会把转写稿文本上传到你配置的分析服务商。转写 API Key 和分析 API Key 都会按 Provider 隔离保存到 Obsidian `SecretStorage`，切换 Provider 不会复用其他服务商的密钥。转写稿和写回的 AI 纪要内容会保存在你的 Obsidian Vault。
 
 如果在设置页开启“手动转写前确认上传”，Echo Notes 会在手动转写上传前显示确认弹窗，列出 Provider、Base URL、模型、文件大小和 HTTP 风险提示。开启该模式后，自动化转写会跳过需要确认的上传，避免后台未经确认发送音频。
 
@@ -123,6 +125,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 
 服务商限制：
 
+- 火山引擎 AgentPlan `doubao-seed-asr-2.0`：仅支持桌面端。整段音频会在本地解码为 16 kHz mono WAV，通过同一条 WebSocket 按实时速度发送，因此转写耗时通常接近录音时长。说话人聚类始终开启。必须使用 AgentPlan 专属 API Key，不能与普通方舟 API Key 混用。
 - 硅基流动：不超过 50 MB 的文件直接上传；更大的文件会先在本地解码并转换为约 10 分钟一段的 16 kHz mono WAV，再按顺序逐段转写。
 - 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
 - OpenAI-compatible 服务商：超过 25 MB 的文件会在上传前被阻止。
@@ -131,13 +134,22 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 
 | Provider 类型 | 上传方式 | 接口形态 | 限制 | Echo Notes 分段 | 语言参数 | 时间戳 | 说话人分离 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| 火山引擎 AgentPlan `doubao-seed-asr-2.0` | 鉴权 WebSocket 实时流 | `/api/v3/plan/sauc/bigmodel_nostream` | 以 Provider 时长/额度规则为准 | 不分段，单连接持续发送 | 中文或 auto | utterance 级支持 | 支持 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
 | 硅基流动 `FunAudioLLM/SenseVoiceSmall` | multipart | SiliconFlow 专用端点 | 单段音频 50 MB | 支持 | 暂不支持 | 暂不支持 | 暂不支持 |
 | OpenAI-compatible 预设和自定义端点 | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
-长音频分段目前适用于阿里百炼 `qwen3-asr-flash` 和硅基流动 `FunAudioLLM/SenseVoiceSmall`。分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。如果本地浏览器音频解码失败，Echo Notes 会写入带失败原因的 transcript。
+长音频分段目前适用于阿里百炼 `qwen3-asr-flash` 和硅基流动 `FunAudioLLM/SenseVoiceSmall`。AgentPlan 则通过同一条 WebSocket 持续发送转换后的整段音频。分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。如果本地浏览器音频解码失败，Echo Notes 会写入带失败原因的 transcript。
 
-默认转写语言只会发送给支持语言参数的 Provider，例如阿里百炼和 OpenAI-compatible 接口。SiliconFlow 官方转写接口只声明 `file` 和 `model`，因此 Echo Notes 不会向它发送非标准语言字段，仍由模型自动识别。
+默认转写语言只会发送给支持语言参数的 Provider，例如阿里百炼和 OpenAI-compatible 接口。AgentPlan 说话人分离只使用中文或省略 language；选择其他语言时会自动切换为 `auto`。SiliconFlow 官方转写接口只声明 `file` 和 `model`，因此 Echo Notes 不会向它发送非标准语言字段，仍由模型自动识别。
+
+AgentPlan 转写稿始终显示说话人标签，单人录音也会显示“说话人 1”。设置项“说话人标签样式”可选择仅显示说话人，或使用默认的“说话人＋时间”：
+
+```markdown
+**说话人 1（00:00-00:12）**
+
+转写正文。
+```
 
 ## 配置转写服务商
 
@@ -153,6 +165,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 
 | 服务商 | Base URL | Model | 默认语言 |
 | --- | --- | --- | --- |
+| 火山引擎 AgentPlan | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream` | `doubao-seed-asr-2.0` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
 | OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` | `zh` |
@@ -324,8 +337,8 @@ npm run build
 
 ## 当前限制
 
-- 不支持说话人分离。
-- 不支持带时间戳的分段转写。
+- 说话人分离和 utterance 时间范围目前仅适用于火山引擎 AgentPlan，只能标记说话人编号，不能识别真实姓名。
+- 暂不输出逐词时间戳。
 - 暂不支持所有 Provider 通用的大文件自动切片；共享 AudioChunkPipeline 核心已存在，但 Provider 覆盖目前仍只适用于阿里百炼 `qwen3-asr-flash`。
 - 不支持本地 Whisper。
 - 长文本分析采用“逐块提取 + 最终汇总”，会增加模型调用次数和成本；Obsidian 重启后暂不支持从已完成分块继续。

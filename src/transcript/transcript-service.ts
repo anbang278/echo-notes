@@ -72,7 +72,8 @@ export class TranscriptService {
 			transcriptPath,
 			sourceNote,
 			result,
-			copyLanguage: this.settings.copyLanguage
+			copyLanguage: this.settings.copyLanguage,
+			speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle
 		});
 		return this.writeTranscript(transcriptPath, content);
 	}

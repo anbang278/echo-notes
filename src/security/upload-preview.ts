@@ -81,7 +81,7 @@ export function formatFileSize(bytes: number): string {
 export function isInsecureRemoteBaseUrl(baseUrl: string): boolean {
 	try {
 		const url = new URL(baseUrl);
-		if (url.protocol !== "http:") {
+		if (url.protocol !== "http:" && url.protocol !== "ws:") {
 			return false;
 		}
 

@@ -1,4 +1,4 @@
-import { App, Modal, Notice, PluginSettingTab, Setting, type SettingDefinitionItem } from "obsidian";
+import { App, Modal, Notice, Platform, PluginSettingTab, Setting, type SettingDefinitionItem } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import {
 	getProviderCapabilitySummary,
@@ -24,16 +24,18 @@ import {
 	formatHotkey,
 	isAnalysisProviderId,
 	isProviderId,
+	normalizeTranscriptionLanguageForProvider,
 	parseHotkeyInput,
 	parseRecognitionKeywordsInput,
 	restoreDefaultAnalysisTemplate,
 	type AnalysisProviderId,
 	type AnalysisTemplateConfig,
+	type AgentPlanSpeakerLabelStyle,
 	type CopyLanguage,
 	type EchoNotesHotkeySetting,
 	type InsertStyle,
 	type OutputStrategy,
-	type ProviderId
+	type TranscriptionProviderId
 } from "./settings";
 
 export class EchoNotesSettingTab extends PluginSettingTab {
@@ -151,8 +153,16 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return dropdown
 					.setValue(currentLanguage)
 					.onChange(async (value) => {
-						this.plugin.settings.language = value || "auto";
+						const normalizedLanguage = normalizeTranscriptionLanguageForProvider(
+							this.plugin.settings.provider,
+							value || "auto"
+						);
+						this.plugin.settings.language = normalizedLanguage;
 						await this.plugin.saveSettings();
+						if (normalizedLanguage !== value) {
+							new Notice("AgentPlan 说话人分离仅支持 auto 或中文，已自动切换为 auto。");
+							this.refreshSettings();
+						}
 					});
 			});
 
@@ -176,10 +186,33 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					if (!value || value === this.plugin.settings.language) {
 						return;
 					}
-					this.plugin.settings.language = value;
+					const normalizedLanguage = normalizeTranscriptionLanguageForProvider(
+						this.plugin.settings.provider,
+						value
+					);
+					this.plugin.settings.language = normalizedLanguage;
+					if (normalizedLanguage !== value) {
+						new Notice("AgentPlan 说话人分离仅支持 auto 或中文，已自动切换为 auto。");
+					}
 					void this.plugin.saveSettings().then(() => this.refreshSettings());
 				});
 			});
+
+		if (this.plugin.settings.provider === "volcengine-agentplan") {
+			new Setting(containerEl)
+				.setName("说话人标签样式")
+				.setDesc("AgentPlan 始终启用说话人聚类。可只标记说话人，或同时显示每轮发言的起止时间；单人录音也会显示“说话人 1”。")
+				.addDropdown((dropdown) =>
+					dropdown
+						.addOption("speaker", "仅说话人")
+						.addOption("speaker-with-time", "说话人＋时间")
+						.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle)
+						.onChange(async (value) => {
+							this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
+							await this.plugin.saveSettings();
+						})
+				);
+		}
 
 		this.renderProviderDiagnostics(containerEl);
 
@@ -422,7 +455,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析 Provider")
-			.setDesc("用于对转写稿生成纪要的服务商。列表与转写 Provider 保持一致，默认使用阿里百炼。")
+			.setDesc("用于对转写稿生成纪要的服务商。仅转写 Provider 不会出现在此列表中，默认使用阿里百炼。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
 					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
@@ -618,7 +651,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				button
 					.setButtonText("检查转写配置")
 					.onClick(() => {
-						const result = diagnoseTranscriptionProviderSettings(this.plugin.settings, this.plugin.getApiKey());
+					const result = diagnoseTranscriptionProviderSettings(this.plugin.settings, this.plugin.getApiKey(), {
+						isMobile: Platform.isMobile
+					});
 						new ProviderDiagnosticsModal(this.app, result.providerLabel, result.canAttemptTranscription, result.items).open();
 					})
 			);
@@ -725,7 +760,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private applyProviderDefaults(provider: ProviderId): void {
+	private applyProviderDefaults(provider: TranscriptionProviderId): void {
 		const defaults = PROVIDER_DEFAULTS[provider];
 		this.plugin.settings.baseUrl = defaults.baseUrl;
 		this.plugin.settings.model = defaults.model;
@@ -752,6 +787,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private getBaseUrlDescription(): string {
 		switch (this.plugin.settings.provider) {
+			case "volcengine-agentplan":
+				return "AgentPlan ASR 单流高准确率 WebSocket 端点；仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
 				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
 			case "openai":
@@ -783,6 +820,20 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderProviderSignup(containerEl: HTMLElement): void {
+		if (this.plugin.settings.provider === "volcengine-agentplan") {
+			const desc = document.createDocumentFragment();
+			desc.appendText("请在火山方舟 AgentPlan 控制台创建专属 API Key：");
+			const link = document.createElement("a");
+			link.href =
+				"https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan";
+			link.textContent = "获取 AgentPlan 专属 API Key";
+			link.target = "_blank";
+			link.rel = "noopener noreferrer";
+			desc.appendChild(link);
+			new Setting(containerEl).setName("AgentPlan 专属 API Key").setDesc(desc);
+			return;
+		}
+
 		if (this.plugin.settings.provider !== "siliconflow") {
 			return;
 		}
@@ -812,6 +863,8 @@ function getUploadModeLabel(uploadMode: string): string {
 			return "multipart";
 		case "base64-data-url":
 			return "Base64 Data URL";
+		case "websocket-stream":
+			return "WebSocket 实时流";
 		default:
 			return uploadMode;
 	}
@@ -823,6 +876,8 @@ function getEndpointShapeLabel(endpointShape: string): string {
 			return "/audio/transcriptions";
 		case "chat-audio":
 			return "/chat/completions + input_audio";
+		case "agentplan-asr-websocket":
+			return "AgentPlan ASR WebSocket";
 		case "custom":
 			return "专用接口";
 		default:

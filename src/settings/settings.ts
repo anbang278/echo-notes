@@ -1,6 +1,6 @@
 import type { Hotkey, Modifier } from "obsidian";
 
-export type ProviderId =
+export type AnalysisProviderId =
 	| "siliconflow"
 	| "aliyun-bailian"
 	| "openai"
@@ -25,13 +25,15 @@ export type ProviderId =
 	| "z-ai"
 	| "custom-openai-compatible";
 
+export type TranscriptionProviderId = AnalysisProviderId | "volcengine-agentplan";
+
 export type OutputStrategy = "same-name-subfolder" | "same-folder" | "custom-folder";
 
 export type InsertStyle = "linkOnly" | "callout";
 
 export type CopyLanguage = "zh" | "en";
 
-export type AnalysisProviderId = ProviderId;
+export type AgentPlanSpeakerLabelStyle = "speaker" | "speaker-with-time";
 
 export type EchoNotesHotkeySetting = Hotkey | null;
 
@@ -65,11 +67,12 @@ export interface AnalysisTemplateConfig {
 }
 
 export interface EchoNotesSettings {
-	provider: ProviderId;
+	provider: TranscriptionProviderId;
 	apiKey?: string;
 	baseUrl: string;
 	model: string;
 	language: string;
+	agentPlanSpeakerLabelStyle: AgentPlanSpeakerLabelStyle;
 	outputStrategy: OutputStrategy;
 	customOutputFolder: string;
 	insertStyle: InsertStyle;
@@ -94,7 +97,12 @@ export interface EchoNotesSettings {
 	verboseLog: boolean;
 }
 
-export const PROVIDER_DEFAULTS: Record<ProviderId, Pick<EchoNotesSettings, "baseUrl" | "model" | "language">> = {
+export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Pick<EchoNotesSettings, "baseUrl" | "model" | "language">> = {
+	"volcengine-agentplan": {
+		baseUrl: "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream",
+		model: "doubao-seed-asr-2.0",
+		language: "zh"
+	},
 	siliconflow: {
 		baseUrl: "https://api.siliconflow.cn",
 		model: "FunAudioLLM/SenseVoiceSmall",
@@ -212,7 +220,7 @@ export const PROVIDER_DEFAULTS: Record<ProviderId, Pick<EchoNotesSettings, "base
 	}
 };
 
-export const PROVIDER_LABELS: Record<ProviderId, string> = {
+export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	openai: "OpenAI（OpenAI）",
@@ -236,6 +244,11 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
 	cerebras: "Cerebras",
 	"z-ai": "Z.AI",
 	"custom-openai-compatible": "自定义兼容接口（Custom OpenAI-compatible）"
+};
+
+export const PROVIDER_LABELS: Record<TranscriptionProviderId, string> = {
+	"volcengine-agentplan": "火山引擎 AgentPlan",
+	...ANALYSIS_PROVIDER_LABELS
 };
 
 export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
@@ -345,8 +358,6 @@ export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNot
 		analysisModel: "gpt-4o-mini"
 	}
 };
-
-export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = PROVIDER_LABELS;
 
 export const BUILTIN_ANALYSIS_TEMPLATE_IDS: BuiltInAnalysisTemplateId[] = [
 	"work-minutes",
@@ -660,6 +671,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 	model: "qwen3-asr-flash",
 	language: "zh",
+	agentPlanSpeakerLabelStyle: "speaker-with-time",
 	outputStrategy: "same-name-subfolder",
 	customOutputFolder: "Transcripts",
 	insertStyle: "linkOnly",
@@ -739,6 +751,7 @@ export interface LocalizedCopy {
 	partialFailureNotice: string;
 	segmentHeadingPrefix: string;
 	emptySegmentText: string;
+	speakerLabel: string;
 	analysisLinksHeading: string;
 	sourceTranscriptLabel: string;
 	analysisHeading: string;
@@ -762,6 +775,7 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		partialFailureNotice: "长音频逐段转写已中断，以下为已完成的分段。",
 		segmentHeadingPrefix: "分段",
 		emptySegmentText: "（本段暂无转写内容）",
+		speakerLabel: "说话人",
 		analysisLinksHeading: "纪要分析",
 		sourceTranscriptLabel: "来源转写稿：",
 		analysisHeading: "分析结果",
@@ -783,6 +797,7 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		partialFailureNotice: "Long audio transcription stopped. Completed segments are kept below.",
 		segmentHeadingPrefix: "Segment",
 		emptySegmentText: "(No transcript text for this segment yet.)",
+		speakerLabel: "Speaker",
 		analysisLinksHeading: "Analysis",
 		sourceTranscriptLabel: "Source transcript: ",
 		analysisHeading: "Analysis",
@@ -797,12 +812,12 @@ export function getLocalizedCopy(language: string | undefined): LocalizedCopy {
 	return language === "en" ? LOCALIZED_COPY.en : LOCALIZED_COPY.zh;
 }
 
-export function isProviderId(value: string): value is ProviderId {
+export function isProviderId(value: string): value is TranscriptionProviderId {
 	return value in PROVIDER_LABELS;
 }
 
 export function isAnalysisProviderId(value: string): value is AnalysisProviderId {
-	return isProviderId(value);
+	return value in ANALYSIS_PROVIDER_LABELS;
 }
 
 export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
@@ -814,7 +829,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
 	const rawProvider = typeof raw.provider === "string" ? raw.provider : "";
 	const hasValidProvider = isProviderId(rawProvider);
-	const fallbackProvider: ProviderId = "aliyun-bailian";
+	const fallbackProvider: TranscriptionProviderId = "aliyun-bailian";
 	settings.provider = hasValidProvider ? rawProvider : fallbackProvider;
 	const providerDefaults = PROVIDER_DEFAULTS[settings.provider];
 	settings.baseUrl =
@@ -829,6 +844,11 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		hasValidProvider && typeof raw.language === "string" && raw.language.trim()
 			? raw.language.trim()
 			: providerDefaults.language;
+	settings.language = normalizeTranscriptionLanguageForProvider(settings.provider, settings.language);
+	settings.agentPlanSpeakerLabelStyle =
+		raw.agentPlanSpeakerLabelStyle === "speaker"
+			? "speaker"
+			: DEFAULT_SETTINGS.agentPlanSpeakerLabelStyle;
 	const oldAutoAnalyze = raw.autoAnalyzeAfterTranscription === true;
 	const rawDefaultAnalysisTemplateId =
 		typeof raw.defaultAnalysisTemplateId === "string"
@@ -890,6 +910,22 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	delete mutableSettings.promptForAnalysisTemplateOnTranscription;
 
 	return settings;
+}
+
+export function normalizeTranscriptionLanguageForProvider(
+	provider: TranscriptionProviderId,
+	language: string
+): string {
+	const normalized = language.trim() || "auto";
+	if (
+		provider === "volcengine-agentplan" &&
+		normalized !== "auto" &&
+		normalized !== "zh" &&
+		normalized !== "zh-CN"
+	) {
+		return "auto";
+	}
+	return normalized;
 }
 
 export function normalizeAnalysisTemplates(value: unknown): AnalysisTemplateConfig[] {
