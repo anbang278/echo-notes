@@ -63,8 +63,8 @@ export class AgentPlanRealtimeSession {
 	private failedError: AgentPlanClientError | null = null;
 	private finishing = false;
 	private settled = false;
-	private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
-	private finalTimer: ReturnType<typeof setTimeout> | null = null;
+	private handshakeTimer: number | null = null;
+	private finalTimer: number | null = null;
 	private progressQueue = Promise.resolve();
 	private responseQueue = Promise.resolve();
 
@@ -90,7 +90,7 @@ export class AgentPlanRealtimeSession {
 			"X-Api-Sequence": "-1"
 		});
 		this.bindSocket(this.socket);
-		this.handshakeTimer = setTimeout(
+		this.handshakeTimer = window.setTimeout(
 			() => this.fail(new AgentPlanClientError("AgentPlan 实时 ASR WebSocket 连接超时。", undefined, this.traceId)),
 			this.options.handshakeTimeoutMs ?? AGENTPLAN_HANDSHAKE_TIMEOUT_MS
 		);
@@ -150,7 +150,7 @@ export class AgentPlanRealtimeSession {
 					this.socket?.send(frame);
 				});
 				await this.sendQueue;
-				this.finalTimer = setTimeout(
+				this.finalTimer = window.setTimeout(
 					() => this.fail(new AgentPlanClientError("AgentPlan 实时 ASR 等待最终识别结果超时。", undefined, this.traceId)),
 					this.options.finalResponseTimeoutMs ?? AGENTPLAN_FINAL_RESPONSE_TIMEOUT_MS
 				);
@@ -228,7 +228,7 @@ export class AgentPlanRealtimeSession {
 
 	private markReady(): void {
 		if (this.handshakeTimer) {
-			clearTimeout(this.handshakeTimer);
+			window.clearTimeout(this.handshakeTimer);
 			this.handshakeTimer = null;
 		}
 		this.resolveReady?.();
@@ -337,10 +337,10 @@ export class AgentPlanRealtimeSession {
 
 	private clearTimers(): void {
 		if (this.handshakeTimer) {
-			clearTimeout(this.handshakeTimer);
+			window.clearTimeout(this.handshakeTimer);
 		}
 		if (this.finalTimer) {
-			clearTimeout(this.finalTimer);
+			window.clearTimeout(this.finalTimer);
 		}
 		this.handshakeTimer = null;
 		this.finalTimer = null;

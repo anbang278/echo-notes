@@ -118,7 +118,7 @@ export async function runAdaptiveAudioChunkPipeline<Chunk extends AudioChunk, Ra
 	const rawSegments: RawResponse[] = [];
 	const sleep =
 		input.sleep ??
-		((delayMs: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs)));
+		((delayMs: number) => new Promise<void>((resolve) => window.setTimeout(resolve, delayMs)));
 
 	renumberPendingChunks(pending, completedSegments.length);
 	await input.onProgress?.({

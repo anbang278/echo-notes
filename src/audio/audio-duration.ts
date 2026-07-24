@@ -13,7 +13,7 @@ export async function probeAudioDurationSeconds(
 		return undefined;
 	}
 
-	const audio = document.createElement("audio");
+	const audio = createEl("audio");
 	const objectUrl = URL.createObjectURL(new Blob([audioBuffer], { type: mimeType }));
 	audio.preload = "metadata";
 
@@ -25,14 +25,14 @@ export async function probeAudioDurationSeconds(
 					return;
 				}
 				settled = true;
-				globalThis.clearTimeout(timeoutId);
+				window.clearTimeout(timeoutId);
 				resolve(
 					duration !== undefined && Number.isFinite(duration) && duration > 0
 						? duration
 						: undefined
 				);
 			};
-			const timeoutId = globalThis.setTimeout(() => finish(), Math.max(250, timeoutMs));
+			const timeoutId = window.setTimeout(() => finish(), Math.max(250, timeoutMs));
 			audio.addEventListener("loadedmetadata", () => finish(audio.duration), { once: true });
 			audio.addEventListener("durationchange", () => {
 				if (Number.isFinite(audio.duration) && audio.duration > 0) {

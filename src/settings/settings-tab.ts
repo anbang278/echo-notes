@@ -501,9 +501,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			"触发 Echo Notes: Transcribe all audio files in current note。默认留空，请选择不与撤销等系统操作冲突的组合。",
 			"例如 Mod+Shift+T",
 			this.plugin.settings.transcribeAllAudioHotkey,
-			async (hotkey) => {
-				this.plugin.settings.transcribeAllAudioHotkey = hotkey;
-			}
+			(hotkey) => this.plugin.setTranscribeAllAudioHotkey(hotkey)
 		);
 	}
 
@@ -982,15 +980,16 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderAgentPlanAnalysisSignup(containerEl: HTMLElement): void {
-		const desc = document.createDocumentFragment();
+		const desc = createFragment();
 		desc.appendText(`Echo Notes 将通过 ${AGENTPLAN_ANALYSIS_BASE_URL}/chat/completions 调用纪要分析。请使用`);
-		const keyLink = document.createElement("a");
-		keyLink.href =
-			"https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan";
-		keyLink.textContent = "AgentPlan 专属 API Key";
-		keyLink.target = "_blank";
-		keyLink.rel = "noopener noreferrer";
-		desc.appendChild(keyLink);
+		desc.createEl("a", {
+			text: "AgentPlan 专属 API Key",
+			attr: {
+				href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
+				target: "_blank",
+				rel: "noopener noreferrer"
+			}
+		});
 		desc.appendText("，并遵守 AgentPlan 对 AI 工具使用场景的套餐限制。");
 
 		new Setting(containerEl)
@@ -1001,15 +1000,16 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderProviderSignup(containerEl: HTMLElement): void {
 		const provider = this.getSelectedTranscriptionConfig().provider;
 		if (provider === "volcengine-agentplan") {
-			const desc = document.createDocumentFragment();
+			const desc = createFragment();
 			desc.appendText("请在火山方舟 AgentPlan 控制台创建专属 API Key：");
-			const link = document.createElement("a");
-			link.href =
-				"https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan";
-			link.textContent = "获取 AgentPlan 专属 API Key";
-			link.target = "_blank";
-			link.rel = "noopener noreferrer";
-			desc.appendChild(link);
+			desc.createEl("a", {
+				text: "获取 AgentPlan 专属 API Key",
+				attr: {
+					href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
+					target: "_blank",
+					rel: "noopener noreferrer"
+				}
+			});
 			new Setting(containerEl).setName("AgentPlan 专属 API Key").setDesc(desc);
 			return;
 		}
@@ -1018,14 +1018,16 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		const desc = document.createDocumentFragment();
+		const desc = createFragment();
 		desc.appendText("硅基流动免费注册链接：");
-		const link = document.createElement("a");
-		link.href = "https://cloud.siliconflow.cn/i/uTf2euFF";
-		link.textContent = "https://cloud.siliconflow.cn/i/uTf2euFF";
-		link.target = "_blank";
-		link.rel = "noopener noreferrer";
-		desc.appendChild(link);
+		desc.createEl("a", {
+			text: "https://cloud.siliconflow.cn/i/uTf2euFF",
+			attr: {
+				href: "https://cloud.siliconflow.cn/i/uTf2euFF",
+				target: "_blank",
+				rel: "noopener noreferrer"
+			}
+		});
 
 		new Setting(containerEl)
 			.setName("硅基流动注册链接")

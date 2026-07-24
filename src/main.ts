@@ -364,6 +364,28 @@ export default class EchoNotesPlugin extends Plugin {
 		return saved;
 	}
 
+	async setTranscribeAllAudioHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
+		const commandId = `${this.manifest.id}:transcribe-all-audio-files-in-current-note`;
+		const hotkeyManager = this.getHotkeyManager();
+		if (typeof hotkeyManager?.setHotkeys !== "function" || typeof hotkeyManager?.save !== "function") {
+			new Notice("当前 Obsidian 版本未暴露快捷键内部 API，请到 Obsidian 快捷键设置中手动修改 Echo Notes 命令。");
+			return false;
+		}
+
+		try {
+			hotkeyManager.setHotkeys(commandId, this.getCommandHotkeys(hotkey));
+			await hotkeyManager.save();
+			this.settings.transcribeAllAudioHotkey = cloneHotkey(hotkey);
+			new Notice("已保存 Echo Notes 转写当前笔记全部音频快捷键。");
+			return true;
+		} catch (error) {
+			const message = getErrorMessage(error);
+			new Notice(`保存 Echo Notes 快捷键失败：${message}`);
+			this.log("保存 Echo Notes 快捷键失败", { commandId, error: message });
+			return false;
+		}
+	}
+
 	getApiKey(provider: TranscriptionProviderId = getSelectedTranscriptionConfig(this.settings).provider): string {
 		return this.app.secretStorage.getSecret(getTranscriptionApiKeySecretId(provider)) ?? this.settings.apiKey ?? "";
 	}
@@ -442,7 +464,6 @@ export default class EchoNotesPlugin extends Plugin {
 		this.addCommand({
 			id: "transcribe-all-audio-files-in-current-note",
 			name: "Transcribe all audio files in current note",
-			hotkeys: this.getCommandHotkeys(this.settings.transcribeAllAudioHotkey),
 			editorCallback: (editor, view) => {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
 			}
@@ -491,6 +512,8 @@ export default class EchoNotesPlugin extends Plugin {
 				void this.handleAnalyzeCurrentTranscriptWithTemplate();
 			}
 		});
+
+		this.applyConfiguredTranscribeAllAudioHotkey();
 	}
 
 	private removeRegisteredCommands(): void {
@@ -511,6 +534,17 @@ export default class EchoNotesPlugin extends Plugin {
 	private getCommandHotkeys(hotkey: EchoNotesHotkeySetting): Hotkey[] {
 		const cloned = cloneHotkey(hotkey);
 		return cloned ? [cloned] : [];
+	}
+
+	private applyConfiguredTranscribeAllAudioHotkey(): void {
+		const hotkey = cloneHotkey(this.settings.transcribeAllAudioHotkey);
+		if (!hotkey) {
+			return;
+		}
+		this.getHotkeyManager()?.setHotkeys?.(
+			`${this.manifest.id}:transcribe-all-audio-files-in-current-note`,
+			[hotkey]
+		);
 	}
 
 	private getInternalPlugins(): InternalPlugins | undefined {
@@ -1818,7 +1852,10 @@ export default class EchoNotesPlugin extends Plugin {
 		const timer = window.setTimeout(() => {
 			this.markdownDebounceTimers.delete(file.path);
 			void this.handleAutoMarkdownFile(file).catch((error) => {
-				this.log("Markdown 音频链接自动化扫描失败", { path: file.path, error });
+				this.log("Markdown 音频链接自动化扫描失败", {
+					path: file.path,
+					error: getErrorMessage(error)
+				});
 				new Notice(`Echo Notes 自动化扫描失败：${getErrorMessage(error)}`);
 			});
 		}, 1000);
@@ -1928,7 +1965,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private log(message: string, ...args: unknown[]): void {
 		if (this.settings.verboseLog) {
-			console.log(`[Echo Notes] ${message}`, ...args.map(sanitizeLogValue));
+			console.debug(`[Echo Notes] ${message}`, ...args.map(sanitizeLogValue));
 		}
 	}
 }

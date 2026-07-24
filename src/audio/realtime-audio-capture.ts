@@ -1,4 +1,4 @@
-import { App, FileSystemAdapter, TFile } from "obsidian";
+import { App, FileSystemAdapter, Platform, TFile } from "obsidian";
 import { FileService, getParentPath } from "../obsidian/file-service";
 import { SequentialBlobWriteQueue } from "./realtime-blob-write-queue";
 import {
@@ -75,13 +75,16 @@ export class VaultRecordingSink {
 		this.app = app;
 		this.file = file;
 		this.writeQueue = new SequentialBlobWriteQueue(async (bytes) => {
+			if (!Platform.isDesktop || !Platform.isDesktopApp) {
+				throw new Error("实时录音文件写入仅支持 Obsidian 桌面端。");
+			}
 			const fs = await import("node:fs/promises");
 			await fs.appendFile(fullPath, bytes);
 		});
 	}
 
 	static async create(app: App, path: string): Promise<VaultRecordingSink> {
-		if (!(app.vault.adapter instanceof FileSystemAdapter)) {
+		if (!Platform.isDesktop || !Platform.isDesktopApp || !(app.vault.adapter instanceof FileSystemAdapter)) {
 			throw new Error("实时录音仅支持本地文件系统 Vault。");
 		}
 		await new FileService(app).ensureFolder(getParentPath(path));
@@ -136,7 +139,8 @@ export class ChunkedMediaRecorder {
 				return;
 			}
 			recorder.addEventListener("error", (event) => {
-				reject(new Error(`本地录音失败：${event.error?.message ?? "未知错误"}`));
+				const message = event instanceof ErrorEvent && event.message ? event.message : "未知错误";
+				reject(new Error(`本地录音失败：${message}`));
 			}, { once: true });
 			recorder.addEventListener("stop", () => {
 				void this.sink.finish().then(resolve, reject);

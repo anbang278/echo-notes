@@ -159,6 +159,13 @@ import {
 	TaskCenterStore
 } from "../src/task-center/task-center-store";
 
+if (typeof window === "undefined") {
+	Object.defineProperty(globalThis, "window", {
+		value: globalThis,
+		configurable: true
+	});
+}
+
 const sample = [
 	"![[Recording 20260531001942.m4a]]",
 	"[[Recording 20260531001942.m4a|录音]]",

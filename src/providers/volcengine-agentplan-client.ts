@@ -126,16 +126,16 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 	let lastDefiniteSignature = "";
 	const totalSeconds = getAgentPlanWavDurationSeconds(options.wavBytes);
 	let progressQueue = Promise.resolve();
-	let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
-	let finalResponseTimer: ReturnType<typeof setTimeout> | undefined;
+	let handshakeTimer: number | undefined;
+	let finalResponseTimer: number | undefined;
 
 	return new Promise<AgentPlanClientResult>((resolve, reject) => {
 		const cleanup = (): void => {
 			if (handshakeTimer) {
-				clearTimeout(handshakeTimer);
+				window.clearTimeout(handshakeTimer);
 			}
 			if (finalResponseTimer) {
-				clearTimeout(finalResponseTimer);
+				window.clearTimeout(finalResponseTimer);
 			}
 		};
 
@@ -220,7 +220,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 					}
 				}
 				if (!settled) {
-					finalResponseTimer = setTimeout(
+					finalResponseTimer = window.setTimeout(
 						() => fail(new AgentPlanClientError("AgentPlan ASR 等待最终识别结果超时。", undefined, traceId)),
 						finalResponseTimeoutMs
 					);
@@ -234,7 +234,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 			}
 		};
 
-		handshakeTimer = setTimeout(
+		handshakeTimer = window.setTimeout(
 			() => fail(new AgentPlanClientError("AgentPlan ASR WebSocket 连接超时。", undefined, traceId)),
 			handshakeTimeoutMs
 		);
@@ -271,7 +271,7 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 					if (!audioStarted) {
 						audioStarted = true;
 						if (handshakeTimer) {
-							clearTimeout(handshakeTimer);
+							window.clearTimeout(handshakeTimer);
 						}
 						void sendAudio();
 					}
@@ -299,5 +299,5 @@ function readHeader(headers: Record<string, string | string[] | undefined>, name
 }
 
 function delay(milliseconds: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, milliseconds));
+	return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }

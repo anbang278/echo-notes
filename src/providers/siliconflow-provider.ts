@@ -62,7 +62,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 		this.probeDuration = dependencies.probeDuration ?? probeAudioDurationSeconds;
 		this.sleep =
 			dependencies.sleep ??
-			((delayMs: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, delayMs)));
+			((delayMs: number) => new Promise<void>((resolve) => window.setTimeout(resolve, delayMs)));
 	}
 
 	async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
