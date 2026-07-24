@@ -56,7 +56,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Choose **Real-time transcription** or **Offline transcription** above the Provider setting. Each mode keeps an isolated provider configuration.
 - In real-time mode, Echo Notes captures the microphone independently, immediately creates a WebM recording and `.transcript.md`, and progressively writes provisional text, definite utterances, speakers, and time ranges.
 - If AgentPlan fails, local recording continues and confirmed text is preserved. After stopping, Task Center offers an explicit **Retry with offline provider** action without automatically creating another paid request.
-- Offline mode keeps Alibaba Bailian, SiliconFlow, and the existing OpenAI-compatible providers for audio files already stored in the vault.
+- Offline mode supports the verified Alibaba Bailian, SiliconFlow, Ollama, and LM Studio providers for audio files already stored in the vault.
 - Transcribe the selected audio link in the current note.
 - Scan and transcribe all supported audio links in the current note.
 - Generate a Markdown transcript file with source metadata.
@@ -96,10 +96,8 @@ Offline transcription providers:
 
 - 【免费】硅基流动（SiliconFlow） with official choices `FunAudioLLM/SenseVoiceSmall` and `TeleAI/TeleSpeechASR`, plus custom model IDs
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
-- OpenAI（OpenAI） with OpenAI-compatible audio transcription
-- Groq（Groq） with OpenAI-compatible audio transcription
-- Ollama, Ollama Open WebUI, Google Gemini, OpenRouter, LM Studio, 302.AI, Anthropic, Mistral AI, Together AI, Fireworks AI, Perplexity AI, DeepSeek, xAI, Novita AI, DeepInfra, SambaNova, Cerebras, and Z.AI as provider-dependent OpenAI-compatible presets. These presets work only when the configured service actually implements `/audio/transcriptions`.
-- 自定义兼容接口（Custom OpenAI-compatible） for custom `/audio/transcriptions` endpoints
+- Ollama through its local OpenAI-compatible `/audio/transcriptions` endpoint
+- LM Studio through its local OpenAI-compatible `/audio/transcriptions` endpoint
 
 AgentPlan's official Base URL and model are read-only in real-time mode. Offline provider defaults remain editable. The settings tab switches API key, language, microphone or offline-provider fields with the selected mode and shows the relevant endpoint, size, chunking, timestamp, and diarization capabilities.
 
@@ -117,10 +115,10 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 - Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - Volcengine AgentPlan ASR endpoint: `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
 - Volcengine AgentPlan analysis endpoint: `https://ark.cn-beijing.volces.com/api/plan/v3`
-- OpenAI default endpoint: `https://api.openai.com/v1`
-- Groq default endpoint: `https://api.groq.com/openai/v1`
+- Ollama transcription default endpoint: `http://localhost:11434/v1`
+- LM Studio transcription default endpoint: `http://localhost:1234/v1`
 - AI analysis default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-- Custom OpenAI-compatible endpoint: user configured
+- Other AI analysis endpoints use the Base URL configured for the selected analysis provider.
 
 Offline transcription sends the selected audio to the configured offline provider. Real-time mode does not create or convert a complete WAV first. Echo Notes runs two local paths in parallel: `MediaRecorder` appends WebM Opus chunks to the vault about once per second, while Web Audio continuously downmixes and resamples the microphone to 16 kHz, 16-bit, mono PCM and sends 200 ms packets over one authenticated optimized bidirectional AgentPlan WebSocket. The recording, transcript, audio embed, and transcript link are created as soon as the session starts. Confirmed second-pass utterances are written progressively; unconfirmed text stays in a temporary region. If AgentPlan disconnects, local recording continues and already persisted audio and text remain available.
 
@@ -158,7 +156,7 @@ Provider limits:
 - Retries and smaller chunks can create extra provider requests, but Echo Notes never changes the selected provider, API key, or model. Completed chunks are not retransmitted; failures keep completed text, trace IDs, and the failed time range.
 - See the [SiliconFlow transcription API reference](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions) for the current limits and model list.
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
-- OpenAI-compatible providers: files over 25 MB are blocked before upload.
+- Ollama and LM Studio: files over 25 MB are blocked before upload.
 
 Capability matrix:
 
@@ -167,11 +165,11 @@ Capability matrix:
 | Volcengine AgentPlan `doubao-seed-asr-2.0` | microphone PCM over authenticated optimized bidirectional WebSocket | `/api/v3/plan/sauc/bigmodel_async` | desktop and local filesystem vault only | No; one live session | Chinese or auto | Yes, utterance level | Yes |
 | Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
 | SiliconFlow `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / custom model | multipart | dedicated SiliconFlow endpoint | 50 MB and one hour per request | Yes; ~10-minute chunks with adaptive shrinking | No | No | No |
-| OpenAI-compatible presets and custom endpoints | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
+| Ollama and LM Studio | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
 
 Long-audio chunking belongs to the offline path and currently applies to Alibaba Bailian `qwen3-asr-flash` and SiliconFlow official or custom transcription models. Extremely long files still require Web Audio to decode the full source locally and may hit device memory limits; a decode failure keeps the transcript draft and reports a clear local error, without installing or invoking FFmpeg. A real-time AgentPlan session consumes microphone PCM directly: provisional text is coalesced about every 500 ms, while new definite utterances, stop, completion, and failure force a write. If AgentPlan fails, local recording continues; after stopping, Task Center offers an offline retry but does not upload automatically. Offline chunked transcripts include headings such as `## Segment 01（00:00-03:00）`.
 
-Default transcription language is sent only to providers that support a language parameter, such as Alibaba Bailian and OpenAI-compatible endpoints. AgentPlan speaker diarization supports Chinese or an omitted language; selecting another language while AgentPlan is active automatically switches it to `auto`. SiliconFlow's official transcription API documents only `file` and `model`, so Echo Notes does not send a non-standard language field to SiliconFlow; that provider still auto-detects the audio language.
+Default transcription language is sent only to providers that support a language parameter, such as Alibaba Bailian, Ollama, and LM Studio. AgentPlan speaker diarization supports Chinese or an omitted language; selecting another language while AgentPlan is active automatically switches it to `auto`. SiliconFlow's official transcription API documents only `file` and `model`, so Echo Notes does not send a non-standard language field to SiliconFlow; that provider still auto-detects the audio language.
 
 AgentPlan transcripts always show a speaker label, including single-speaker recordings. The setting **Speaker label style** selects either speaker-only labels or the default speaker-and-time form:
 
@@ -186,7 +184,7 @@ Transcript text.
 1. Open the Echo Notes settings tab.
 2. Choose **Real-time transcription** or **Offline transcription** above Provider. New installs default to offline mode with Alibaba Bailian.
 3. Real-time mode: enter the dedicated AgentPlan API key and choose language, speaker-label style, and microphone. The official Base URL and model are read-only. Microphone permission is requested only when refreshing devices or starting a session.
-4. Offline mode: choose Alibaba Bailian, SiliconFlow, or an OpenAI-compatible provider, then confirm Base URL, model, API key, and language.
+4. Offline mode: choose Alibaba Bailian, SiliconFlow, Ollama, or LM Studio, then confirm Base URL, model, API key, and language.
 5. Choose the copy language for inserted links and generated template labels.
 
 Real-time commands:
@@ -204,9 +202,8 @@ Recommended defaults:
 | Volcengine AgentPlan | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
-| OpenAI（OpenAI） | `https://api.openai.com/v1` | `whisper-1` | `zh` |
-| Groq（Groq） | `https://api.groq.com/openai/v1` | `whisper-large-v3-turbo` | `zh` |
-| 自定义兼容接口（Custom OpenAI-compatible） | your endpoint | `whisper-1` | `zh` |
+| Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
+| LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |
 
 ## Configure the Obsidian Core Plugin Audio Recorder
 

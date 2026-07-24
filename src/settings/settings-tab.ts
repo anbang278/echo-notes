@@ -961,22 +961,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
 				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
-			case "openai":
-				return "OpenAI API 基础地址，默认 https://api.openai.com/v1。";
-			case "groq":
-				return "Groq OpenAI 兼容 API 基础地址，默认 https://api.groq.com/openai/v1。";
 			case "ollama":
 				return "Ollama OpenAI 兼容基础地址，默认 http://localhost:11434/v1。需确认本地服务支持音频转写接口。";
-			case "ollama-open-webui":
-				return "Open WebUI 基础地址，默认 http://localhost:3000/api。插件会调用 {Base URL}/audio/transcriptions。";
 			case "lm-studio":
 				return "LM Studio OpenAI 兼容基础地址，默认 http://localhost:1234/v1。需确认本地服务支持音频转写接口。";
-			case "custom-openai-compatible":
-				return "自定义 OpenAI 兼容转写接口基础地址，插件会调用 {Base URL}/audio/transcriptions。";
 			case "siliconflow":
 				return "硅基流动（SiliconFlow）API 基础地址。";
 			default:
-				return "该服务商的基础地址。新增服务商默认按 OpenAI-compatible 音频转写接口调用 {Base URL}/audio/transcriptions。";
+				return "该服务商的基础地址。";
 		}
 	}
 

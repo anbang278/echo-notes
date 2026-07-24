@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import {
-	isOfflineTranscriptionProviderId,
+	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
 	type OfflineTranscriptionProviderId,
 	type TranscriptionConfig
@@ -18,30 +18,25 @@ export function createTranscriptionProvider(
 	switch (settings.provider) {
 		case "aliyun-bailian":
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
-		case "openai":
-			return new OpenAICompatibleAudioProvider(app, settings, apiKey, "openai", PROVIDER_LABELS.openai);
-		case "groq":
-			return new OpenAICompatibleAudioProvider(app, settings, apiKey, "groq", PROVIDER_LABELS.groq);
-		case "custom-openai-compatible":
+		case "siliconflow":
+			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
+		case "ollama":
+		case "lm-studio":
 			return new OpenAICompatibleAudioProvider(
 				app,
 				settings,
 				apiKey,
-				"custom-openai-compatible",
-				PROVIDER_LABELS["custom-openai-compatible"]
+				settings.provider,
+				PROVIDER_LABELS[settings.provider]
 			);
-		case "siliconflow":
-			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
 		default:
-			if (isOfflineTranscriptionProviderId(settings.provider)) {
-				return new OpenAICompatibleAudioProvider(
-					app,
-					settings,
-					apiKey,
-					settings.provider,
-					PROVIDER_LABELS[settings.provider]
-				);
-			}
-			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
+			return new AliyunBailianQwenAsrProvider(
+				app,
+				{
+					provider: "aliyun-bailian",
+					...PROVIDER_DEFAULTS["aliyun-bailian"]
+				},
+				apiKey
+			);
 	}
 }

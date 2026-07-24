@@ -1253,11 +1253,20 @@ for (const [templateId, keyword, firstHeading, finalHeading, guidance] of roleTe
 assert.equal(Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, "volcengine-agentplan"), true);
 assert.equal(Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, "volcengine-agentplan"), true);
 assert.equal(Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS, "volcengine-agentplan"), false);
+assert.deepEqual(Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS), [
+	"siliconflow",
+	"aliyun-bailian",
+	"ollama",
+	"lm-studio"
+]);
 assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(ANALYSIS_PROVIDER_LABELS));
 assert.equal(isProviderId("volcengine-agentplan"), true);
 assert.equal(isOfflineTranscriptionProviderId("volcengine-agentplan"), false);
 assert.equal(isOfflineTranscriptionProviderId("aliyun-bailian"), true);
+assert.equal(isOfflineTranscriptionProviderId("openai"), false);
 assert.equal(isAnalysisProviderId("volcengine-agentplan"), true);
+assert.equal(isAnalysisProviderId("openai"), true);
+assert.equal(isAnalysisProviderId("custom-openai-compatible"), true);
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["volcengine-agentplan"].analysisBaseUrl, AGENTPLAN_ANALYSIS_BASE_URL);
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["volcengine-agentplan"].analysisModel, "doubao-seed-2.0-lite");
 assert.ok(AGENTPLAN_ANALYSIS_MODELS.some((option) => option.id === "doubao-seed-2.0-pro"));
@@ -1276,8 +1285,8 @@ assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.language, "auto");
-assert.equal(PROVIDER_DEFAULTS.openai.language, "zh");
-assert.equal(PROVIDER_DEFAULTS["custom-openai-compatible"].language, "zh");
+assert.equal(PROVIDER_DEFAULTS.ollama.baseUrl, "http://localhost:11434/v1");
+assert.equal(PROVIDER_DEFAULTS["lm-studio"].baseUrl, "http://localhost:1234/v1");
 assert.deepEqual(PROVIDER_DEFAULTS["volcengine-agentplan"], {
 	baseUrl: "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async",
 	model: "doubao-seed-asr-2.0",
@@ -1313,19 +1322,20 @@ assert.deepEqual([...SILICONFLOW_TRANSCRIPTION_MODELS], [
 	"FunAudioLLM/SenseVoiceSmall",
 	"TeleAI/TeleSpeechASR"
 ]);
-assert.equal(getTranscriptionProviderCapability("openai").maxAudioBytes, 25 * 1024 * 1024);
-assert.equal(getTranscriptionProviderCapability("openai").supportsLanguage, true);
-assert.equal(getTranscriptionProviderCapability("openai").supportsTimestamp, false);
+assert.equal(getTranscriptionProviderCapability("ollama").maxAudioBytes, 25 * 1024 * 1024);
+assert.equal(getTranscriptionProviderCapability("lm-studio").supportsLanguage, true);
+assert.equal(getTranscriptionProviderCapability("lm-studio").supportsTimestamp, false);
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").uploadMode, "websocket-stream");
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").endpointShape, "agentplan-asr-websocket");
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsChunking, false);
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsTimestamp, true);
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsSpeakerDiarization, true);
-assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "openai-audio");
+assert.equal(getTranscriptionProviderCapability("openai").endpointShape, "chat-audio");
+assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "chat-audio");
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("siliconflow")).includes("长音频分段：支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("siliconflow")).includes("单次时长上限：1 小时"));
-assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("openai")).includes("长音频分段：暂不支持"));
+assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("ollama")).includes("长音频分段：暂不支持"));
 assert.ok(
 	getProviderCapabilitySummary(getTranscriptionProviderCapability("volcengine-agentplan")).includes(
 		"实时音频：单连接持续发送"
@@ -1336,6 +1346,7 @@ assert.ok(
 		"说话人分离：支持"
 	)
 );
+assert.deepEqual([...OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS], ["ollama", "lm-studio"]);
 for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
 	const capability = getTranscriptionProviderCapability(providerId);
 	assert.equal(capability.endpointShape, "openai-audio");
@@ -1645,10 +1656,14 @@ const sensitiveErrorText = [
 ].join("\n");
 assert.equal(getTranscriptionApiKeySecretId("aliyun-bailian"), "echo-notes-transcription-api-key-aliyun-bailian");
 assert.equal(
-	getTranscriptionApiKeySecretId("custom-openai-compatible"),
-	"echo-notes-transcription-api-key-custom-openai-compatible"
+	getTranscriptionApiKeySecretId("lm-studio"),
+	"echo-notes-transcription-api-key-lm-studio"
 );
 assert.equal(getAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key-openai");
+assert.equal(
+	getAnalysisApiKeySecretId("custom-openai-compatible"),
+	"echo-notes-analysis-api-key-custom-openai-compatible"
+);
 assert.equal(
 	getAnalysisApiKeySecretId("volcengine-agentplan"),
 	"echo-notes-analysis-api-key-volcengine-agentplan"
@@ -1890,7 +1905,7 @@ assert.ok(missingProviderDiagnostics.items.some((item) => item.severity === "err
 const warningProviderDiagnostics = diagnoseTranscriptionProviderSettings(
 	{
 		...DEFAULT_SETTINGS.offlineTranscription,
-		provider: "custom-openai-compatible",
+		provider: "ollama",
 		baseUrl: "http://example.com/v1",
 		model: "custom-whisper",
 		language: "zh"
@@ -1906,6 +1921,20 @@ const validProviderDiagnostics = diagnoseTranscriptionProviderSettings(DEFAULT_S
 assert.equal(validProviderDiagnostics.canAttemptTranscription, true);
 assert.equal(validProviderDiagnostics.providerLabel, PROVIDER_LABELS["aliyun-bailian"]);
 assert.equal(validProviderDiagnostics.items.some((item) => item.severity === "error"), false);
+const removedProviderDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		provider: "openai",
+		baseUrl: "https://api.openai.com/v1",
+		model: "whisper-1",
+		language: "en"
+	} as never,
+	"sk-valid"
+);
+assert.equal(removedProviderDiagnostics.providerLabel, PROVIDER_LABELS["aliyun-bailian"]);
+assert.equal(
+	removedProviderDiagnostics.items.some((item) => item.title === "OpenAI-compatible 音频端点"),
+	false
+);
 const validAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
 	{
 		...DEFAULT_SETTINGS.realtimeTranscription,
@@ -1991,7 +2020,7 @@ assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "");
 assert.equal(normalizeTranscriptionLanguageForProvider("volcengine-agentplan", "zh"), "zh");
 assert.equal(normalizeTranscriptionLanguageForProvider("volcengine-agentplan", "zh-CN"), "zh-CN");
 assert.equal(normalizeTranscriptionLanguageForProvider("volcengine-agentplan", "en"), "auto");
-assert.equal(normalizeTranscriptionLanguageForProvider("openai", "en"), "en");
+assert.equal(normalizeTranscriptionLanguageForProvider("ollama", "en"), "en");
 assert.deepEqual(parseHotkeyInput("Control + L"), { modifiers: ["Ctrl"], key: "L" });
 assert.deepEqual(parseHotkeyInput("Cmd+Shift+P"), { modifiers: ["Meta", "Shift"], key: "P" });
 assert.equal(parseHotkeyInput("not a hotkey"), undefined);
@@ -2118,6 +2147,25 @@ assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.provider,
 assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.model, "qwen3-asr-flash");
 assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.language, "zh");
+const removedLegacyTranscriptionProviderSettings = normalizeEchoNotesSettings({
+	provider: "openai",
+	baseUrl: "https://api.openai.com/v1",
+	model: "whisper-1",
+	language: "en"
+});
+assert.deepEqual(removedLegacyTranscriptionProviderSettings.offlineTranscription, DEFAULT_SETTINGS.offlineTranscription);
+for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
+	const customConfig = {
+		provider,
+		baseUrl: `https://${provider}.example.test/v1`,
+		model: `${provider}-custom-model`,
+		language: "yue"
+	};
+	assert.deepEqual(
+		normalizeEchoNotesSettings({ offlineTranscription: customConfig }).offlineTranscription,
+		customConfig
+	);
+}
 assert.equal(
 	normalizeEchoNotesSettings({ provider: "aliyun-bailian", language: "cmn" }).offlineTranscription.language,
 	"cmn"
@@ -2161,12 +2209,7 @@ const nestedModeSettings = normalizeEchoNotesSettings({
 	}
 });
 assert.equal(nestedModeSettings.transcriptionMode, "realtime");
-assert.deepEqual(nestedModeSettings.offlineTranscription, {
-	provider: "custom-openai-compatible",
-	baseUrl: "https://asr.example.net/v1",
-	model: "custom-asr",
-	language: "yue"
-});
+assert.deepEqual(nestedModeSettings.offlineTranscription, DEFAULT_SETTINGS.offlineTranscription);
 assert.deepEqual(nestedModeSettings.realtimeTranscription, {
 	provider: "volcengine-agentplan",
 	baseUrl: "wss://custom.example.net/agentplan",

@@ -3,6 +3,13 @@ import type { Hotkey, Modifier } from "obsidian";
 export type OfflineTranscriptionProviderId =
 	| "siliconflow"
 	| "aliyun-bailian"
+	| "ollama"
+	| "lm-studio";
+
+export type AnalysisProviderId =
+	| "volcengine-agentplan"
+	| "siliconflow"
+	| "aliyun-bailian"
 	| "openai"
 	| "ollama"
 	| "ollama-open-webui"
@@ -24,8 +31,6 @@ export type OfflineTranscriptionProviderId =
 	| "cerebras"
 	| "z-ai"
 	| "custom-openai-compatible";
-
-export type AnalysisProviderId = OfflineTranscriptionProviderId | "volcengine-agentplan";
 
 export type RealtimeTranscriptionProviderId = "volcengine-agentplan";
 
@@ -156,108 +161,13 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 		model: "qwen3-asr-flash",
 		language: "zh"
 	},
-	openai: {
-		baseUrl: "https://api.openai.com/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
 	ollama: {
 		baseUrl: "http://localhost:11434/v1",
 		model: "whisper-1",
 		language: "zh"
 	},
-	"ollama-open-webui": {
-		baseUrl: "http://localhost:3000/api",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"google-gemini": {
-		baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-		model: "whisper-1",
-		language: "zh"
-	},
-	openrouter: {
-		baseUrl: "https://openrouter.ai/api/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
 	"lm-studio": {
 		baseUrl: "http://localhost:1234/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	groq: {
-		baseUrl: "https://api.groq.com/openai/v1",
-		model: "whisper-large-v3-turbo",
-		language: "zh"
-	},
-	"302-ai": {
-		baseUrl: "https://api.302.ai/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	anthropic: {
-		baseUrl: "https://api.anthropic.com/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"mistral-ai": {
-		baseUrl: "https://api.mistral.ai/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"together-ai": {
-		baseUrl: "https://api.together.xyz/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"fireworks-ai": {
-		baseUrl: "https://api.fireworks.ai/inference/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"perplexity-ai": {
-		baseUrl: "https://api.perplexity.ai",
-		model: "whisper-1",
-		language: "zh"
-	},
-	deepseek: {
-		baseUrl: "https://api.deepseek.com/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	xai: {
-		baseUrl: "https://api.x.ai/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"novita-ai": {
-		baseUrl: "https://api.novita.ai/v3/openai",
-		model: "whisper-1",
-		language: "zh"
-	},
-	deepinfra: {
-		baseUrl: "https://api.deepinfra.com/v1/openai",
-		model: "openai/whisper-large-v3",
-		language: "zh"
-	},
-	sambanova: {
-		baseUrl: "https://api.sambanova.ai/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	cerebras: {
-		baseUrl: "https://api.cerebras.ai/v1",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"z-ai": {
-		baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-		model: "whisper-1",
-		language: "zh"
-	},
-	"custom-openai-compatible": {
-		baseUrl: "https://example.com/v1",
 		model: "whisper-1",
 		language: "zh"
 	}
@@ -295,10 +205,12 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 	"custom-openai-compatible": "自定义兼容接口（Custom OpenAI-compatible）"
 };
 
-export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> =
-	Object.fromEntries(
-		Object.entries(ANALYSIS_PROVIDER_LABELS).filter(([provider]) => provider !== "volcengine-agentplan")
-	) as Record<OfflineTranscriptionProviderId, string>;
+export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> = {
+	siliconflow: "【免费】硅基流动（SiliconFlow）",
+	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
+	ollama: "Ollama",
+	"lm-studio": "LM Studio"
+};
 
 export const PROVIDER_LABELS: Record<TranscriptionProviderId, string> = {
 	"volcengine-agentplan": "火山引擎 AgentPlan",
@@ -912,23 +824,30 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		? rawOfflineProvider
 		: DEFAULT_SETTINGS.offlineTranscription.provider;
 	const offlineDefaults = PROVIDER_DEFAULTS[offlineProvider];
+	const shouldPreserveOfflineConfig = isOfflineTranscriptionProviderId(rawOfflineProvider);
 	settings.offlineTranscription = {
 		provider: offlineProvider,
-		baseUrl: normalizeConfigString(
-			nestedOffline.baseUrl,
-			legacyProvider === offlineProvider ? raw.baseUrl : undefined,
-			offlineDefaults.baseUrl
-		),
-		model: normalizeConfigString(
-			nestedOffline.model,
-			legacyProvider === offlineProvider ? raw.model : undefined,
-			offlineDefaults.model
-		),
-		language: normalizeConfigString(
-			nestedOffline.language,
-			legacyProvider === offlineProvider ? raw.language : undefined,
-			offlineDefaults.language
-		)
+		baseUrl: shouldPreserveOfflineConfig
+			? normalizeConfigString(
+				nestedOffline.baseUrl,
+				legacyProvider === offlineProvider ? raw.baseUrl : undefined,
+				offlineDefaults.baseUrl
+			)
+			: offlineDefaults.baseUrl,
+		model: shouldPreserveOfflineConfig
+			? normalizeConfigString(
+				nestedOffline.model,
+				legacyProvider === offlineProvider ? raw.model : undefined,
+				offlineDefaults.model
+			)
+			: offlineDefaults.model,
+		language: shouldPreserveOfflineConfig
+			? normalizeConfigString(
+				nestedOffline.language,
+				legacyProvider === offlineProvider ? raw.language : undefined,
+				offlineDefaults.language
+			)
+			: offlineDefaults.language
 	};
 	const legacyRealtimeBaseUrl =
 		legacyProvider === "volcengine-agentplan" && typeof raw.baseUrl === "string"

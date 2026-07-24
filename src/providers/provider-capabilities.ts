@@ -31,42 +31,21 @@ const SILICONFLOW_MAX_AUDIO_BYTES = 50 * MB;
 const BAILIAN_MAX_BASE64_DATA_URL_BYTES = 10 * MB;
 
 export const OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS = [
-	"openai",
 	"ollama",
-	"ollama-open-webui",
-	"google-gemini",
-	"openrouter",
-	"lm-studio",
-	"groq",
-	"302-ai",
-	"anthropic",
-	"mistral-ai",
-	"together-ai",
-	"fireworks-ai",
-	"perplexity-ai",
-	"deepseek",
-	"xai",
-	"novita-ai",
-	"deepinfra",
-	"sambanova",
-	"cerebras",
-	"z-ai",
-	"custom-openai-compatible"
+	"lm-studio"
 ] as const satisfies readonly TranscriptionProviderId[];
 
 type OpenAICompatibleTranscriptionProviderId = (typeof OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS)[number];
 
-const OPENAI_COMPATIBLE_RECOMMENDED_MODELS: Partial<Record<OpenAICompatibleTranscriptionProviderId, string[]>> = {
-	openai: ["whisper-1"],
-	groq: ["whisper-large-v3-turbo"],
-	deepinfra: ["openai/whisper-large-v3"],
-	"custom-openai-compatible": ["whisper-1"]
+const OPENAI_COMPATIBLE_RECOMMENDED_MODELS: Record<OpenAICompatibleTranscriptionProviderId, string[]> = {
+	ollama: ["whisper-1"],
+	"lm-studio": ["whisper-1"]
 };
 
 const openAICompatibleCapabilities = Object.fromEntries(
 	OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS.map((providerId) => [
 		providerId,
-		createOpenAICompatibleCapability(OPENAI_COMPATIBLE_RECOMMENDED_MODELS[providerId] ?? ["whisper-1"])
+		createOpenAICompatibleCapability(OPENAI_COMPATIBLE_RECOMMENDED_MODELS[providerId])
 	])
 ) as Record<OpenAICompatibleTranscriptionProviderId, ProviderCapability>;
 
@@ -132,7 +111,7 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 };
 
 export function getTranscriptionProviderCapability(providerId: string): ProviderCapability {
-	const normalizedProviderId = isProviderId(providerId) ? providerId : "custom-openai-compatible";
+	const normalizedProviderId = isProviderId(providerId) ? providerId : "aliyun-bailian";
 	return TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
 }
 

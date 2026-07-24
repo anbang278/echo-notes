@@ -29,7 +29,7 @@ export function diagnoseTranscriptionProviderSettings(
 	options: ProviderDiagnosticOptions = {}
 ): ProviderDiagnosticResult {
 	const items: ProviderDiagnosticItem[] = [];
-	const providerId = isProviderId(settings.provider) ? settings.provider : "custom-openai-compatible";
+	const providerId = isProviderId(settings.provider) ? settings.provider : "aliyun-bailian";
 	const providerLabel = PROVIDER_LABELS[providerId] ?? settings.provider;
 	const capability = getTranscriptionProviderCapability(providerId);
 	const trimmedApiKey = apiKey.trim();

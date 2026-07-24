@@ -1,6 +1,6 @@
 import { App, requestUrl } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
-import type { TranscriptionConfig, TranscriptionProviderId } from "../settings/settings";
+import type { OfflineTranscriptionProviderId, TranscriptionConfig } from "../settings/settings";
 import {
 	createHttpTranscriptionError,
 	createNetworkTranscriptionError,
@@ -16,15 +16,23 @@ interface OpenAICompatibleTranscriptionResponse {
 	text?: string;
 }
 
+type LocalOpenAICompatibleTranscriptionProviderId = "ollama" | "lm-studio";
+
 export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
-	id: TranscriptionProviderId;
+	id: LocalOpenAICompatibleTranscriptionProviderId;
 	name: string;
 
 	private app: App;
-	private settings: TranscriptionConfig;
+	private settings: TranscriptionConfig<OfflineTranscriptionProviderId>;
 	private apiKey: string;
 
-	constructor(app: App, settings: TranscriptionConfig, apiKey: string, id: TranscriptionProviderId, name: string) {
+	constructor(
+		app: App,
+		settings: TranscriptionConfig<OfflineTranscriptionProviderId>,
+		apiKey: string,
+		id: LocalOpenAICompatibleTranscriptionProviderId,
+		name: string
+	) {
 		this.app = app;
 		this.settings = settings;
 		this.apiKey = apiKey;
