@@ -92,11 +92,11 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 - 【免费】硅基流动（SiliconFlow）：官方模型可选 `FunAudioLLM/SenseVoiceSmall`、`TeleAI/TeleSpeechASR`，也可填写自定义模型 ID
 - 阿里百炼（Alibaba Bailian）：默认模型 `qwen3-asr-flash`
-- MOSI（多说话人转写）：固定使用 `moss-transcribe-diarize`，返回说话人编号和分段时间
+- MOSI（可选说话人分离）：可在普通转写 `moss-transcribe` 与多说话人转写 `moss-transcribe-diarize` 之间切换
 - Ollama：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
 - LM Studio：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
 
-AgentPlan 的官方 Base URL 和模型在实时模式中只读；MOSI 也会锁定官方 Base URL 和模型，确保始终使用已验证的多说话人协议；其他离线 Provider 的默认值仍可修改。设置页会根据当前模式展示相应 API Key、语言、麦克风或离线 Provider 配置，以及接口形态、大小限制、分段、时间戳和说话人分离能力。
+AgentPlan 的官方 Base URL 和模型在实时模式中只读；MOSI 的官方 Base URL 也保持只读，模型由“说话人分离”开关自动派生：开启时使用 `moss-transcribe-diarize`，关闭时使用 `moss-transcribe`。其他离线 Provider 的默认值仍可修改。设置页会根据当前模式展示相应 API Key、语言、麦克风或离线 Provider 配置，以及接口形态、大小限制、分段、时间戳和说话人分离能力。
 
 设置页还提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
 
@@ -118,9 +118,9 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL。
 
-离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，同步请求非流式说话人分离；超过 3 分钟的文件会先在本地解码成约 3 分钟一段的 16 kHz mono WAV，每完成一段立即写回同一份转写稿，Vault 中不会生成临时分段文件。实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
+离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求；开启说话人分离时请求说话人和时间范围，关闭时只请求普通正文。超过 3 分钟的文件会先在本地解码成约 3 分钟一段的 16 kHz mono WAV，每完成一段立即写回同一份转写稿，Vault 中不会生成临时分段文件。实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
 
-AgentPlan 和 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 分析时使用其专属 Chat API 和套餐额度。转写和分析 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿或日志。转写稿、录音和 AI 纪要内容保存在你的 Obsidian Vault。
+AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 分析时使用其专属 Chat API 和套餐额度。转写和分析 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿或日志。转写稿、录音和 AI 纪要内容保存在你的 Obsidian Vault。
 
 如果在设置页开启“手动转写前确认上传”，Echo Notes 会在手动转写上传前显示确认弹窗，列出 Provider、Base URL、模型、文件大小和 HTTP 风险提示。开启该模式后，自动化转写会跳过需要确认的上传，避免后台未经确认发送音频。
 
@@ -142,7 +142,7 @@ AgentPlan 和 MOSI 返回的说话人编号只能区分声音，不能识别真�
 - 自动重试和缩段会产生额外 Provider 请求，但不会自动切换 Provider、API Key 或模型。已经成功的分段不会重传，失败时会保留已写入正文、Trace ID 和失败时间范围。
 - 限制与模型列表以[硅基流动转写接口文档](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions)为准。
 - 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
-- MOSI `moss-transcribe-diarize`：Echo Notes 使用官方同步非流式 multipart 请求，固定传入 `diarize=true` 和版本 `moss-transcribe-diarize-20260325`。超过 3 分钟时在本地切成约 3 分钟的 WAV 分段并逐段回写；HTTP `500/502/503/504` 按 1 秒、3 秒重试，仍失败、收到 `413` 或明确过长/过大响应时，只缩小当前失败段，最短 30 秒、最多四层。MOSI 未公布稳定的文件大小上限；详见 [MOSI 转写接口文档](https://platform.mosi.cn/docs/reference/transcriptions)。
+- MOSI：开启“说话人分离”时使用 `moss-transcribe-diarize`、版本 `moss-transcribe-diarize-20260325` 并传入 `diarize=true`；关闭时使用普通模型 `moss-transcribe` 和版本 `moss-transcribe-v1`，不发送 `diarize`。两种模式都使用官方同步非流式 multipart 请求。超过 3 分钟时在本地切成约 3 分钟的 WAV 分段并逐段回写；HTTP `500/502/503/504` 按 1 秒、3 秒重试，仍失败、收到 `413` 或明确过长/过大响应时，只缩小当前失败段，最短 30 秒、最多四层。MOSI 未公布稳定的文件大小上限；详见 [MOSI 转写接口文档](https://platform.mosi.cn/docs/reference/transcriptions)。
 - Ollama 和 LM Studio：超过 25 MB 的文件会在上传前被阻止。
 
 能力矩阵：
@@ -152,14 +152,14 @@ AgentPlan 和 MOSI 返回的说话人编号只能区分声音，不能识别真�
 | 火山引擎 AgentPlan `doubao-seed-asr-2.0` | 麦克风 PCM 鉴权优化双流 WebSocket | `/api/v3/plan/sauc/bigmodel_async` | 仅桌面端、本地文件系统 Vault | 不分段，单实时会话 | 中文或 auto | utterance 级支持 | 支持 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
 | 硅基流动 `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
-| MOSI `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | segment 级支持 | 支持 |
+| MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | 仅分离模式支持 segment 级时间 | 可选 |
 | Ollama 和 LM Studio | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
-长音频分段只属于离线流程，目前适用于阿里百炼 `qwen3-asr-flash`、硅基流动的官方或自定义转写模型，以及 MOSI。极端超长音频仍需由 Web Audio 在本地完整解码，可能受设备可用内存限制；解码失败会保留转写草稿并给出明确错误，不会安装或调用 FFmpeg。实时 AgentPlan 会话直接消费麦克风 PCM：约每 500 ms 合并刷新临时文字，新增确定分句、停止、完成或失败时强制落盘。AgentPlan 中断后本地录音继续；停止时任务中心会提供离线重试，但不会自动上传。离线分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。由于独立 MOSI 请求不能保证说话人 ID 跨段稳定，说话人编号会在每个分段内重新开始，时间范围仍对应原音频的绝对时间。
+长音频分段只属于离线流程，目前适用于阿里百炼 `qwen3-asr-flash`、硅基流动的官方或自定义转写模型，以及 MOSI。极端超长音频仍需由 Web Audio 在本地完整解码，可能受设备可用内存限制；解码失败会保留转写草稿并给出明确错误，不会安装或调用 FFmpeg。实时 AgentPlan 会话直接消费麦克风 PCM：约每 500 ms 合并刷新临时文字，新增确定分句、停止、完成或失败时强制落盘。AgentPlan 中断后本地录音继续；停止时任务中心会提供离线重试，但不会自动上传。离线分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。MOSI 开启说话人分离时，由于独立请求不能保证说话人 ID 跨段稳定，编号会在每个分段内重新开始，时间范围仍对应原音频的绝对时间；普通模式保留分段标题但不输出任何说话人标签。
 
 默认转写语言只会发送给支持语言参数的 Provider，例如阿里百炼、Ollama 和 LM Studio。AgentPlan 说话人分离只使用中文或省略 language；选择其他语言时会自动切换为 `auto`。Echo Notes 不会向 SiliconFlow 或 MOSI 发送 language 字段，由服务端自动识别音频语言。
 
-AgentPlan 与 MOSI 的说话人分离转写稿会显示说话人标签。设置项“说话人标签样式”可选择仅显示说话人，或使用默认的“说话人＋时间”：
+AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签。MOSI 另有“说话人分离”开关；关闭后会隐藏“说话人标签样式”并只输出普通正文。开启标签时，可选择仅显示说话人，或使用默认的“说话人＋时间”：
 
 ```markdown
 **说话人 1（00:00-00:12）**
@@ -172,7 +172,7 @@ AgentPlan 与 MOSI 的说话人分离转写稿会显示说话人标签。设置�
 1. 打开 Obsidian 设置中的 Echo Notes。
 2. 在 Provider 上方选择“实时转写”或“离线转写”。新安装默认离线模式和阿里百炼。
 3. 实时模式：填写 AgentPlan 专属 API Key，选择语言、说话人标签样式和麦克风；官方 Base URL 与模型只读。只有刷新麦克风或开始录音时才会申请权限。
-4. 离线模式：选择阿里百炼、硅基流动、MOSI、Ollama 或 LM Studio，填写 API Key 并确认可用配置；MOSI 的官方 Base URL 与模型只读。
+4. 离线模式：选择阿里百炼、硅基流动、MOSI、Ollama 或 LM Studio，填写 API Key 并确认可用配置；MOSI 的官方 Base URL 只读，通过“说话人分离”开关切换自动派生的只读模型。
 5. 在“文案语言”中选择中文或英文，控制回写链接和生成文稿中的固定文案。
 
 实时命令：
@@ -190,7 +190,7 @@ AgentPlan 与 MOSI 的说话人分离转写稿会显示说话人标签。设置�
 | 火山引擎 AgentPlan | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
-| MOSI（多说话人转写） | `https://api.mosi.cn/v1` | `moss-transcribe-diarize` | `auto` |
+| MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | 默认 `moss-transcribe-diarize`；关闭后 `moss-transcribe` | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
 | LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |
 
@@ -359,7 +359,7 @@ npm run build
 
 ## 当前限制
 
-- 说话人分离和时间范围适用于火山引擎 AgentPlan 实时转写与 MOSI 离线转写，只能标记说话人编号，不能识别真实姓名。
+- 火山引擎 AgentPlan 实时转写始终提供说话人分离和时间范围，MOSI 离线转写可选择开启；这些标签只能标记说话人编号，不能识别真实姓名。
 - 实时转写仅支持 Obsidian 桌面端和本地文件系统 Vault；移动端与非 `FileSystemAdapter` Vault 可继续使用离线转写。
 - 首版实时录音只有开始和停止，没有暂停/恢复；异常退出最多可能丢失尚未产生的最后一个短 WebM 分片。
 - 暂不输出逐词时间戳。

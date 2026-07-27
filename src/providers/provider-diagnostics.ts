@@ -2,9 +2,11 @@ import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
 import type { TranscriptionConfig } from "../settings/settings";
 import {
 	AGENTPLAN_ASYNC_BASE_URL,
+	MOSI_PLAIN_TRANSCRIPTION_MODEL,
 	MOSI_TRANSCRIPTION_BASE_URL,
 	MOSI_TRANSCRIPTION_MODEL,
 	PROVIDER_LABELS,
+	isMosiSpeakerDiarizationModel,
 	isProviderId
 } from "../settings/settings";
 import { getTranscriptionProviderCapability } from "./provider-capabilities";
@@ -115,7 +117,7 @@ export function diagnoseTranscriptionProviderSettings(
 			items.push({
 				severity: "error",
 				title: "MOSI Base URL 不匹配",
-				detail: `MOSI 多说话人转写固定使用官方地址 ${MOSI_TRANSCRIPTION_BASE_URL}。`
+				detail: `MOSI 转写固定使用官方地址 ${MOSI_TRANSCRIPTION_BASE_URL}。`
 			});
 		}
 	}
@@ -132,11 +134,15 @@ export function diagnoseTranscriptionProviderSettings(
 			title: "AgentPlan 模型不匹配",
 			detail: "当前接入固定使用 doubao-seed-asr-2.0。"
 		});
-	} else if (providerId === "mosi" && trimmedModel !== MOSI_TRANSCRIPTION_MODEL) {
+	} else if (
+		providerId === "mosi" &&
+		trimmedModel !== MOSI_TRANSCRIPTION_MODEL &&
+		trimmedModel !== MOSI_PLAIN_TRANSCRIPTION_MODEL
+	) {
 		items.push({
 			severity: "error",
 			title: "MOSI 模型不匹配",
-			detail: `MOSI 多说话人转写固定使用 ${MOSI_TRANSCRIPTION_MODEL}。`
+			detail: `MOSI 仅使用官方普通转写模型 ${MOSI_PLAIN_TRANSCRIPTION_MODEL} 或多说话人模型 ${MOSI_TRANSCRIPTION_MODEL}。`
 		});
 	} else if (capability.recommendedModels.length > 0 && !capability.recommendedModels.includes(trimmedModel)) {
 		items.push({
@@ -182,11 +188,17 @@ export function diagnoseTranscriptionProviderSettings(
 		});
 	}
 	if (providerId === "mosi") {
+		const speakerDiarizationEnabled =
+			isMosiSpeakerDiarizationModel(trimmedModel);
 		items.push({
 			severity: "info",
 			title: "MOSI 长音频渐进转写",
 			detail:
-				"3 分钟以内使用单次同步请求；超过 3 分钟会在本地按约 3 分钟切成 WAV 分段，每完成一段立即回写。分段请求的说话人编号仅在本段有效，时间保持原音频绝对时间；请求仍固定启用 diarize，不发送 language、stream 或 async 参数。"
+				`3 分钟以内使用单次同步请求；超过 3 分钟会在本地按约 3 分钟切成 WAV 分段，每完成一段立即回写。${
+					speakerDiarizationEnabled
+						? "当前开启说话人分离，分段内编号独立且时间保持原音频绝对时间。"
+						: "当前使用普通转写模式，只输出正文，不请求或渲染说话人编号。"
+				} 两种模式都不发送 language、stream 或 async 参数。`
 		});
 	}
 

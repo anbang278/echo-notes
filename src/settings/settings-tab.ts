@@ -35,6 +35,7 @@ import {
 	TRANSCRIPTION_LANGUAGE_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
+	getMosiTranscriptionModel,
 	isAnalysisProviderId,
 	isOfflineTranscriptionProviderId,
 	normalizeTranscriptionLanguageForProvider,
@@ -285,6 +286,25 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				});
 		});
 
+		if (isMosi) {
+			new Setting(containerEl)
+				.setName("说话人分离")
+				.setDesc(
+					"开启时使用 MOSI 多说话人模型并输出说话人和时间范围；关闭时使用官方普通转写模型，只输出正文。"
+				)
+				.addToggle((toggle) =>
+					toggle
+						.setValue(this.plugin.settings.mosiSpeakerDiarizationEnabled)
+						.onChange(async (value) => {
+							this.plugin.settings.mosiSpeakerDiarizationEnabled = value;
+							this.plugin.settings.offlineTranscription.model =
+								getMosiTranscriptionModel(value);
+							await this.plugin.saveSettings();
+							this.refreshSettings();
+						})
+				);
+		}
+
 		new Setting(containerEl)
 			.setName("Base URL")
 			.setDesc(this.getBaseUrlDescription())
@@ -348,7 +368,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					isRealtime
 						? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。"
 						: isMosi
-							? "MOSI 多说话人转写固定使用 moss-transcribe-diarize。"
+							? this.plugin.settings.mosiSpeakerDiarizationEnabled
+								? "已开启说话人分离，固定使用 moss-transcribe-diarize。"
+								: "已关闭说话人分离，固定使用普通转写模型 moss-transcribe。"
 							: "离线转写模型名称。"
 				)
 				.addText((text) => {
@@ -414,12 +436,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				});
 		}
 
-		if (providerCapability.supportsSpeakerDiarization) {
+		if (
+			providerCapability.supportsSpeakerDiarization &&
+			(!isMosi || this.plugin.settings.mosiSpeakerDiarizationEnabled)
+		) {
 			new Setting(containerEl)
 				.setName("说话人标签样式")
 				.setDesc(
 					isMosi
-						? "MOSI 始终启用多说话人分离；服务端说话人编号会按首次出现顺序显示。"
+						? "MOSI 服务端说话人编号会按首次出现顺序显示；长音频的编号仅在当前分段内有效。"
 						: "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
 				)
 				.addDropdown((dropdown) =>
@@ -939,7 +964,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private applyOfflineProviderDefaults(provider: OfflineTranscriptionProviderId): void {
 		const defaults = PROVIDER_DEFAULTS[provider];
 		this.plugin.settings.offlineTranscription.baseUrl = defaults.baseUrl;
-		this.plugin.settings.offlineTranscription.model = defaults.model;
+		this.plugin.settings.offlineTranscription.model =
+			provider === "mosi"
+				? getMosiTranscriptionModel(
+						this.plugin.settings.mosiSpeakerDiarizationEnabled
+					)
+				: defaults.model;
 		this.plugin.settings.offlineTranscription.language = defaults.language;
 	}
 
@@ -980,7 +1010,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			case "siliconflow":
 				return "硅基流动（SiliconFlow）API 基础地址。";
 			case "mosi":
-				return "MOSI 多说话人转写官方 API 基础地址；为保证已验证协议，当前保持只读。";
+				return "MOSI 官方转写 API 基础地址；普通转写与说话人分离共用该只读地址。";
 			default:
 				return "该服务商的基础地址。";
 		}
@@ -1091,7 +1121,7 @@ function getEndpointShapeLabel(endpointShape: string): string {
 			return "/chat/completions + input_audio";
 		case "agentplan-asr-websocket":
 			return "AgentPlan ASR WebSocket";
-		case "mosi-diarization":
+		case "mosi-transcription":
 			return "MOSI /v1/audio/transcriptions";
 		case "custom":
 			return "专用接口";

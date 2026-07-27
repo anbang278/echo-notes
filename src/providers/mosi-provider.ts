@@ -9,7 +9,7 @@ import {
 	type WavAudioSegment
 } from "../audio/audio-segmenter";
 import {
-	MOSI_TRANSCRIPTION_MODEL,
+	isMosiSpeakerDiarizationModel,
 	type TranscriptionConfig
 } from "../settings/settings";
 import {
@@ -47,7 +47,7 @@ interface MosiProviderDependencies {
 	sleep?: (delayMs: number) => Promise<void>;
 }
 
-export class MosiDiarizationProvider implements TranscriptionProvider {
+export class MosiTranscriptionProvider implements TranscriptionProvider {
 	id = "mosi";
 	name = "MOSI";
 
@@ -86,7 +86,7 @@ export class MosiDiarizationProvider implements TranscriptionProvider {
 		const mimeType = getAudioMimeType(input.audioFile);
 		const policy = resolveProviderTranscriptionPolicy({
 			provider: "mosi",
-			model: MOSI_TRANSCRIPTION_MODEL
+			model: this.settings.model
 		});
 		const durationSeconds = await this.probeDuration(audioBuffer, mimeType);
 		if (
@@ -111,7 +111,7 @@ export class MosiDiarizationProvider implements TranscriptionProvider {
 			return {
 				text: result.text,
 				provider: this.id,
-				model: MOSI_TRANSCRIPTION_MODEL,
+				model: this.settings.model,
 				traceId: result.traceId,
 				utterances: result.utterances,
 				raw: result.raw
@@ -187,7 +187,7 @@ export class MosiDiarizationProvider implements TranscriptionProvider {
 		return {
 			text: pipelineResult.text,
 			provider: this.id,
-			model: MOSI_TRANSCRIPTION_MODEL,
+			model: this.settings.model,
 			traceId: pipelineResult.traceId,
 			segments: pipelineResult.segments,
 			raw: {
@@ -276,7 +276,8 @@ export class MosiDiarizationProvider implements TranscriptionProvider {
 					boundary,
 					audioBuffer,
 					fileName,
-					mimeType
+					mimeType,
+					isMosiSpeakerDiarizationModel(this.settings.model)
 				)
 			});
 		} catch (error) {
@@ -289,7 +290,10 @@ export class MosiDiarizationProvider implements TranscriptionProvider {
 			throw createMosiHttpError(response.status, message, traceId);
 		}
 
-		const normalized = normalizeMosiTranscriptionResponse(response.json);
+		const normalized = normalizeMosiTranscriptionResponse(
+			response.json,
+			isMosiSpeakerDiarizationModel(this.settings.model)
+		);
 		return {
 			text: normalized.text,
 			traceId,

@@ -1,4 +1,6 @@
 import {
+	MOSI_PLAIN_TRANSCRIPTION_MODEL,
+	MOSI_PLAIN_TRANSCRIPTION_VERSION,
 	MOSI_TRANSCRIPTION_MODEL,
 	MOSI_TRANSCRIPTION_VERSION
 } from "../settings/settings";
@@ -28,20 +30,21 @@ export function buildMosiMultipartBody(
 	boundary: string,
 	audioBuffer: ArrayBuffer,
 	fileName: string,
-	mimeType: string
+	mimeType: string,
+	speakerDiarizationEnabled = true
 ): ArrayBuffer {
-	return buildMultipartBody(boundary, [
+	const parts: MultipartPart[] = [
 		{
 			name: "model",
-			value: MOSI_TRANSCRIPTION_MODEL
+			value: speakerDiarizationEnabled
+				? MOSI_TRANSCRIPTION_MODEL
+				: MOSI_PLAIN_TRANSCRIPTION_MODEL
 		},
 		{
 			name: "version",
-			value: MOSI_TRANSCRIPTION_VERSION
-		},
-		{
-			name: "diarize",
-			value: "true"
+			value: speakerDiarizationEnabled
+				? MOSI_TRANSCRIPTION_VERSION
+				: MOSI_PLAIN_TRANSCRIPTION_VERSION
 		},
 		{
 			name: "response_format",
@@ -53,14 +56,38 @@ export function buildMosiMultipartBody(
 			contentType: mimeType,
 			value: audioBuffer
 		}
-	]);
+	];
+	if (speakerDiarizationEnabled) {
+		parts.splice(2, 0, {
+			name: "diarize",
+			value: "true"
+		});
+	}
+	return buildMultipartBody(boundary, parts);
 }
 
-export function normalizeMosiTranscriptionResponse(data: unknown): NormalizedMosiTranscription {
-	if (!isRecord(data) || typeof data.text !== "string" || !Array.isArray(data.segments)) {
+export function normalizeMosiTranscriptionResponse(
+	data: unknown,
+	speakerDiarizationEnabled = true
+): NormalizedMosiTranscription {
+	if (!isRecord(data) || typeof data.text !== "string") {
 		throw new TranscriptionError(
 			"invalid_response",
-			"MOSI API 响应缺少有效的 text 或 segments 字段。"
+			"MOSI API 响应缺少有效的 text 字段。"
+		);
+	}
+
+	if (!speakerDiarizationEnabled) {
+		return {
+			text: data.text.trim(),
+			utterances: undefined
+		};
+	}
+
+	if (!Array.isArray(data.segments)) {
+		throw new TranscriptionError(
+			"invalid_response",
+			"MOSI 多说话人响应缺少有效的 segments 字段。"
 		);
 	}
 

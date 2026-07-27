@@ -118,6 +118,10 @@ import {
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
 	formatHotkey,
+	getMosiTranscriptionModel,
+	isMosiSpeakerDiarizationModel,
+	MOSI_PLAIN_TRANSCRIPTION_MODEL,
+	MOSI_PLAIN_TRANSCRIPTION_VERSION,
 	MOSI_TRANSCRIPTION_BASE_URL,
 	MOSI_TRANSCRIPTION_MODEL,
 	MOSI_TRANSCRIPTION_VERSION,
@@ -756,6 +760,13 @@ assert.equal(mosiPolicy.minSegmentSeconds, 30);
 assert.deepEqual(mosiPolicy.retryableHttpStatuses, [500, 502, 503, 504]);
 assert.deepEqual(mosiPolicy.retryDelaysMs, [1000, 3000]);
 assert.equal(mosiPolicy.maxSplitDepth, 4);
+const mosiPlainPolicy = resolveProviderTranscriptionPolicy({
+	provider: "mosi",
+	model: MOSI_PLAIN_TRANSCRIPTION_MODEL
+});
+assert.equal(mosiPlainPolicy.model, MOSI_PLAIN_TRANSCRIPTION_MODEL);
+assert.equal(mosiPlainPolicy.supportsChunking, true);
+assert.equal(mosiPlainPolicy.targetSegmentSeconds, 180);
 assert.equal(
 	shouldPreChunkTranscription({
 		policy: mosiPolicy,
@@ -1099,6 +1110,7 @@ const renderedSegments = renderTranscriptionSegments(transcriptSegments, "zh");
 assert.match(renderedSegments, /## 分段 01（00:00-03:00）/);
 assert.match(renderedSegments, /<!-- trace_id: trace-1 -->/);
 assert.match(renderedSegments, /## 分段 02（03:00-05:21）/);
+assert.doesNotMatch(renderedSegments, /说话人|Speaker/);
 const renderedDiarizedSegments = renderTranscriptionSegments(
 	[
 		{
@@ -1369,6 +1381,7 @@ assert.equal(DEFAULT_SETTINGS.offlineTranscription.language, "zh");
 assert.equal(DEFAULT_SETTINGS.realtimeTranscription.provider, "volcengine-agentplan");
 assert.equal(DEFAULT_SETTINGS.realtimeTranscription.inputDeviceId, "");
 assert.equal(DEFAULT_SETTINGS.agentPlanSpeakerLabelStyle, "speaker-with-time");
+assert.equal(DEFAULT_SETTINGS.mosiSpeakerDiarizationEnabled, true);
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
@@ -1379,7 +1392,11 @@ assert.deepEqual(PROVIDER_DEFAULTS.mosi, {
 	model: MOSI_TRANSCRIPTION_MODEL,
 	language: "auto"
 });
-assert.equal(PROVIDER_LABELS.mosi, "MOSI（多说话人转写）");
+assert.equal(PROVIDER_LABELS.mosi, "MOSI（可选说话人分离）");
+assert.equal(getMosiTranscriptionModel(true), MOSI_TRANSCRIPTION_MODEL);
+assert.equal(getMosiTranscriptionModel(false), MOSI_PLAIN_TRANSCRIPTION_MODEL);
+assert.equal(isMosiSpeakerDiarizationModel(MOSI_TRANSCRIPTION_MODEL), true);
+assert.equal(isMosiSpeakerDiarizationModel(MOSI_PLAIN_TRANSCRIPTION_MODEL), false);
 assert.equal(isOfflineTranscriptionProviderId("mosi"), true);
 assert.equal(PROVIDER_DEFAULTS.ollama.baseUrl, "http://localhost:11434/v1");
 assert.equal(PROVIDER_DEFAULTS["lm-studio"].baseUrl, "http://localhost:1234/v1");
@@ -1427,12 +1444,16 @@ assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supports
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsTimestamp, true);
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsSpeakerDiarization, true);
 assert.equal(getTranscriptionProviderCapability("mosi").uploadMode, "multipart");
-assert.equal(getTranscriptionProviderCapability("mosi").endpointShape, "mosi-diarization");
+assert.equal(getTranscriptionProviderCapability("mosi").endpointShape, "mosi-transcription");
 assert.equal(getTranscriptionProviderCapability("mosi").supportsChunking, true);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsLanguage, false);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsTimestamp, true);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsSpeakerDiarization, true);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsStreaming, false);
+assert.deepEqual(getTranscriptionProviderCapability("mosi").recommendedModels, [
+	"moss-transcribe",
+	"moss-transcribe-diarize"
+]);
 assert.equal(
 	getTranscriptionProviderCapability("mosi").transcriptionPolicy?.targetSegmentSeconds,
 	180
@@ -1482,6 +1503,28 @@ assert.match(mosiMultipartBody, /Content-Type: audio\/wav\r\n\r\nABC\r\n/);
 assert.doesNotMatch(mosiMultipartBody, /name="language"/);
 assert.doesNotMatch(mosiMultipartBody, /name="stream"/);
 assert.doesNotMatch(mosiMultipartBody, /name="async"/);
+const mosiPlainMultipartBody = new TextDecoder().decode(
+	buildMosiMultipartBody(
+		"mosi-plain-test-boundary",
+		new Uint8Array([65, 66, 67]).buffer,
+		"普通转写.wav",
+		"audio/wav",
+		false
+	)
+);
+assert.match(
+	mosiPlainMultipartBody,
+	new RegExp(`name="model"\\r\\n\\r\\n${MOSI_PLAIN_TRANSCRIPTION_MODEL}\\r\\n`)
+);
+assert.match(
+	mosiPlainMultipartBody,
+	new RegExp(`name="version"\\r\\n\\r\\n${MOSI_PLAIN_TRANSCRIPTION_VERSION}\\r\\n`)
+);
+assert.doesNotMatch(mosiPlainMultipartBody, /name="diarize"/);
+assert.match(mosiPlainMultipartBody, /name="response_format"\r\n\r\njson\r\n/);
+assert.doesNotMatch(mosiPlainMultipartBody, /name="language"/);
+assert.doesNotMatch(mosiPlainMultipartBody, /name="stream"/);
+assert.doesNotMatch(mosiPlainMultipartBody, /name="async"/);
 const normalizedMosiResponse = normalizeMosiTranscriptionResponse({
 	task: "transcribe",
 	duration: 3.5,
@@ -1509,6 +1552,32 @@ assert.deepEqual(normalizeMosiTranscriptionResponse({ text: "", segments: [] }),
 	text: "",
 	utterances: undefined
 });
+assert.deepEqual(
+	normalizeMosiTranscriptionResponse({ text: "普通转写正文" }, false),
+	{
+		text: "普通转写正文",
+		utterances: undefined
+	}
+);
+assert.deepEqual(
+	normalizeMosiTranscriptionResponse(
+		{
+			text: "普通转写正文",
+			segments: [
+				{ start: 0, end: 1, text: "普通转写正文", speaker: "unexpected" }
+			]
+		},
+		false
+	),
+	{
+		text: "普通转写正文",
+		utterances: undefined
+	}
+);
+assert.throws(
+	() => normalizeMosiTranscriptionResponse({ segments: [] }, false),
+	(error: unknown) => error instanceof TranscriptionError && error.code === "invalid_response"
+);
 assert.throws(
 	() => normalizeMosiTranscriptionResponse({ text: "缺少分段" }),
 	(error: unknown) => error instanceof TranscriptionError && error.code === "invalid_response"
@@ -2208,6 +2277,30 @@ const mosiDiagnostics = diagnoseTranscriptionProviderSettings(
 );
 assert.equal(mosiDiagnostics.canAttemptTranscription, true);
 assert.ok(mosiDiagnostics.items.some((item) => item.title === "MOSI 长音频渐进转写"));
+assert.ok(
+	mosiDiagnostics.items.some(
+		(item) =>
+			item.title === "MOSI 长音频渐进转写" &&
+			/当前开启说话人分离/.test(item.detail)
+	)
+);
+const mosiPlainDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		provider: "mosi",
+		baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
+		model: MOSI_PLAIN_TRANSCRIPTION_MODEL,
+		language: "auto"
+	},
+	"mosi-valid"
+);
+assert.equal(mosiPlainDiagnostics.canAttemptTranscription, true);
+assert.ok(
+	mosiPlainDiagnostics.items.some(
+		(item) =>
+			item.title === "MOSI 长音频渐进转写" &&
+			/当前使用普通转写模式/.test(item.detail)
+	)
+);
 const invalidMosiDiagnostics = diagnoseTranscriptionProviderSettings(
 	{
 		provider: "mosi",
@@ -2256,6 +2349,7 @@ assert.equal(normalizedSettings.offlineTranscription.provider, "aliyun-bailian")
 assert.equal(normalizedSettings.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(normalizedSettings.offlineTranscription.model, "qwen3-asr-flash");
 assert.equal(normalizedSettings.agentPlanSpeakerLabelStyle, "speaker-with-time");
+assert.equal(normalizedSettings.mosiSpeakerDiarizationEnabled, true);
 assert.equal(normalizedSettings.analysisProvider, "aliyun-bailian");
 assert.equal(normalizedSettings.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(normalizedSettings.analysisModel, "deepseek-v4-pro");
@@ -2361,6 +2455,9 @@ const removedLegacyTranscriptionProviderSettings = normalizeEchoNotesSettings({
 });
 assert.deepEqual(removedLegacyTranscriptionProviderSettings.offlineTranscription, DEFAULT_SETTINGS.offlineTranscription);
 for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
+	if (provider === "mosi") {
+		continue;
+	}
 	const customConfig = {
 		provider,
 		baseUrl: `https://${provider}.example.test/v1`,
@@ -2372,6 +2469,45 @@ for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
 		customConfig
 	);
 }
+const normalizedMosiDiarizationSettings = normalizeEchoNotesSettings({
+	offlineTranscription: {
+		provider: "mosi",
+		baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
+		model: MOSI_PLAIN_TRANSCRIPTION_MODEL,
+		language: "auto"
+	}
+});
+assert.equal(normalizedMosiDiarizationSettings.mosiSpeakerDiarizationEnabled, true);
+assert.equal(
+	normalizedMosiDiarizationSettings.offlineTranscription.model,
+	MOSI_TRANSCRIPTION_MODEL
+);
+const normalizedMosiPlainSettings = normalizeEchoNotesSettings({
+	mosiSpeakerDiarizationEnabled: false,
+	offlineTranscription: {
+		provider: "mosi",
+		baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
+		model: MOSI_TRANSCRIPTION_MODEL,
+		language: "auto"
+	}
+});
+assert.equal(normalizedMosiPlainSettings.mosiSpeakerDiarizationEnabled, false);
+assert.equal(
+	normalizedMosiPlainSettings.offlineTranscription.model,
+	MOSI_PLAIN_TRANSCRIPTION_MODEL
+);
+assert.equal(
+	normalizeEchoNotesSettings({
+		mosiSpeakerDiarizationEnabled: "false",
+		offlineTranscription: {
+			provider: "mosi",
+			baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
+			model: MOSI_PLAIN_TRANSCRIPTION_MODEL,
+			language: "auto"
+		}
+	}).mosiSpeakerDiarizationEnabled,
+	true
+);
 assert.equal(
 	normalizeEchoNotesSettings({ provider: "aliyun-bailian", language: "cmn" }).offlineTranscription.language,
 	"cmn"

@@ -6,7 +6,7 @@ export type ProviderEndpointShape =
 	| "openai-audio"
 	| "chat-audio"
 	| "agentplan-asr-websocket"
-	| "mosi-diarization"
+	| "mosi-transcription"
 	| "custom";
 
 export interface ProviderCapability {
@@ -120,8 +120,8 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		supportsSpeakerDiarization: true,
 		supportsStreaming: false,
 		uploadMode: "multipart",
-		endpointShape: "mosi-diarization",
-		recommendedModels: ["moss-transcribe-diarize"],
+		endpointShape: "mosi-transcription",
+		recommendedModels: ["moss-transcribe", "moss-transcribe-diarize"],
 		transcriptionPolicy: {
 			targetSegmentSeconds: 3 * 60,
 			minSegmentSeconds: 30,
@@ -129,9 +129,9 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 			maxSplitDepth: 4
 		},
 		notes: [
-			"使用 MOSI 官方同步非流式多说话人转写接口，固定开启 diarize 并显式使用已验证的模型版本。",
+			"可在官方普通转写 moss-transcribe 与多说话人转写 moss-transcribe-diarize 之间切换；两种模式都使用同步非流式接口和固定版本。",
 			"超过 3 分钟时会在本地解码为约 3 分钟一段的 16 kHz mono WAV，并在每段完成后立即回写。",
-			"独立请求的说话人编号只在当前分段内有效；时间范围会偏移到原音频的绝对时间轴。",
+			"开启说话人分离时，独立请求的说话人编号只在当前分段内有效；时间范围会偏移到原音频的绝对时间轴。关闭后只输出普通正文。",
 			"官方未公布稳定的文件大小上限；HTTP 500/502/503/504 重试后仍失败、收到 413 或明确过长错误时，只缩小当前失败段。"
 		]
 	},

@@ -68,6 +68,8 @@ export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/ap
 export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
 export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
 export const MOSI_TRANSCRIPTION_VERSION = "moss-transcribe-diarize-20260325";
+export const MOSI_PLAIN_TRANSCRIPTION_MODEL = "moss-transcribe";
+export const MOSI_PLAIN_TRANSCRIPTION_VERSION = "moss-transcribe-v1";
 
 export interface AgentPlanAnalysisModelOption {
 	id: string;
@@ -125,6 +127,7 @@ export interface EchoNotesSettings {
 	realtimeTranscription: RealtimeTranscriptionConfig;
 	apiKey?: string;
 	agentPlanSpeakerLabelStyle: AgentPlanSpeakerLabelStyle;
+	mosiSpeakerDiarizationEnabled: boolean;
 	outputStrategy: OutputStrategy;
 	customOutputFolder: string;
 	insertStyle: InsertStyle;
@@ -217,7 +220,7 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> = {
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
-	mosi: "MOSI（多说话人转写）",
+	mosi: "MOSI（可选说话人分离）",
 	ollama: "Ollama",
 	"lm-studio": "LM Studio"
 };
@@ -662,6 +665,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 		inputDeviceId: ""
 	},
 	agentPlanSpeakerLabelStyle: "speaker-with-time",
+	mosiSpeakerDiarizationEnabled: true,
 	outputStrategy: "same-name-subfolder",
 	customOutputFolder: "Transcripts",
 	insertStyle: "linkOnly",
@@ -825,6 +829,10 @@ export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
 export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings {
 	const raw = isRecord(rawData) ? rawData : {};
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
+	const mosiSpeakerDiarizationEnabled =
+		typeof raw.mosiSpeakerDiarizationEnabled === "boolean"
+			? raw.mosiSpeakerDiarizationEnabled
+			: DEFAULT_SETTINGS.mosiSpeakerDiarizationEnabled;
 	const legacyProvider = typeof raw.provider === "string" ? raw.provider : "";
 	const nestedOffline = isRecord(raw.offlineTranscription) ? raw.offlineTranscription : {};
 	const nestedRealtime = isRecord(raw.realtimeTranscription) ? raw.realtimeTranscription : {};
@@ -848,13 +856,16 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 				offlineDefaults.baseUrl
 			)
 			: offlineDefaults.baseUrl,
-		model: shouldPreserveOfflineConfig
-			? normalizeConfigString(
-				nestedOffline.model,
-				legacyProvider === offlineProvider ? raw.model : undefined,
-				offlineDefaults.model
-			)
-			: offlineDefaults.model,
+		model:
+			offlineProvider === "mosi"
+				? getMosiTranscriptionModel(mosiSpeakerDiarizationEnabled)
+				: shouldPreserveOfflineConfig
+					? normalizeConfigString(
+							nestedOffline.model,
+							legacyProvider === offlineProvider ? raw.model : undefined,
+							offlineDefaults.model
+						)
+					: offlineDefaults.model,
 		language: shouldPreserveOfflineConfig
 			? normalizeConfigString(
 				nestedOffline.language,
@@ -901,6 +912,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		raw.agentPlanSpeakerLabelStyle === "speaker"
 			? "speaker"
 			: DEFAULT_SETTINGS.agentPlanSpeakerLabelStyle;
+	settings.mosiSpeakerDiarizationEnabled = mosiSpeakerDiarizationEnabled;
 	const oldAutoAnalyze = raw.autoAnalyzeAfterTranscription === true;
 	const rawDefaultAnalysisTemplateId =
 		typeof raw.defaultAnalysisTemplateId === "string"
@@ -974,6 +986,16 @@ export function getSelectedTranscriptionConfig(settings: EchoNotesSettings): Tra
 	return settings.transcriptionMode === "realtime"
 		? settings.realtimeTranscription
 		: settings.offlineTranscription;
+}
+
+export function getMosiTranscriptionModel(speakerDiarizationEnabled: boolean): string {
+	return speakerDiarizationEnabled
+		? MOSI_TRANSCRIPTION_MODEL
+		: MOSI_PLAIN_TRANSCRIPTION_MODEL;
+}
+
+export function isMosiSpeakerDiarizationModel(model: string): boolean {
+	return model.trim() === MOSI_TRANSCRIPTION_MODEL;
 }
 
 function normalizeAgentPlanBaseUrl(baseUrl: string): string {
