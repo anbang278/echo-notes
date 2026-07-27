@@ -226,6 +226,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const config = this.getSelectedTranscriptionConfig();
 		const isRealtime = this.plugin.settings.transcriptionMode === "realtime";
+		const isMosi = !isRealtime && config.provider === "mosi";
+		const providerCapability = getTranscriptionProviderCapability(config.provider);
 
 		new Setting(containerEl)
 			.setName("Provider")
@@ -290,8 +292,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				text
 					.setPlaceholder(this.getProviderDefaults().baseUrl)
 					.setValue(config.baseUrl)
-					.setDisabled(isRealtime);
-				if (!isRealtime) {
+					.setDisabled(isRealtime || isMosi);
+				if (!isRealtime && !isMosi) {
 					text.onChange(async (value) => {
 						this.plugin.settings.offlineTranscription.baseUrl = value.trim();
 						await this.plugin.saveSettings();
@@ -342,13 +344,19 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		} else {
 			new Setting(containerEl)
 				.setName("Model")
-				.setDesc(isRealtime ? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。" : "离线转写模型名称。")
+				.setDesc(
+					isRealtime
+						? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。"
+						: isMosi
+							? "MOSI 多说话人转写固定使用 moss-transcribe-diarize。"
+							: "离线转写模型名称。"
+				)
 				.addText((text) => {
 					text
 						.setPlaceholder(this.getProviderDefaults().model)
 						.setValue(config.model)
-						.setDisabled(isRealtime);
-					if (!isRealtime) {
+						.setDisabled(isRealtime || isMosi);
+					if (!isRealtime && !isMosi) {
 						text.onChange(async (value) => {
 							this.plugin.settings.offlineTranscription.model = value.trim();
 							await this.plugin.saveSettings();
@@ -406,10 +414,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				});
 		}
 
-		if (isRealtime) {
+		if (providerCapability.supportsSpeakerDiarization) {
 			new Setting(containerEl)
 				.setName("说话人标签样式")
-				.setDesc("AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。")
+				.setDesc(
+					isMosi
+						? "MOSI 始终启用多说话人分离；服务端说话人编号会按首次出现顺序显示。"
+						: "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
+				)
 				.addDropdown((dropdown) =>
 					dropdown
 						.addOption("speaker", "仅说话人")
@@ -420,7 +432,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 							await this.plugin.saveSettings();
 						})
 				);
+		}
 
+		if (isRealtime) {
 			const devices = this.plugin.getCachedAudioInputDevices();
 			new Setting(containerEl)
 				.setName("麦克风")
@@ -965,6 +979,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return "LM Studio OpenAI 兼容基础地址，默认 http://localhost:1234/v1。需确认本地服务支持音频转写接口。";
 			case "siliconflow":
 				return "硅基流动（SiliconFlow）API 基础地址。";
+			case "mosi":
+				return "MOSI 多说话人转写官方 API 基础地址；为保证已验证协议，当前保持只读。";
 			default:
 				return "该服务商的基础地址。";
 		}
@@ -1014,6 +1030,21 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 
+		if (provider === "mosi") {
+			const desc = createFragment();
+			desc.appendText("请在 MOSI API Platform 创建并管理 API Key：");
+			desc.createEl("a", {
+				text: "打开 API Key 管理平台",
+				attr: {
+					href: "https://platform.mosi.cn/app/api-keys",
+					target: "_blank",
+					rel: "noopener noreferrer"
+				}
+			});
+			new Setting(containerEl).setName("MOSI API Key").setDesc(desc);
+			return;
+		}
+
 		if (provider !== "siliconflow") {
 			return;
 		}
@@ -1060,6 +1091,8 @@ function getEndpointShapeLabel(endpointShape: string): string {
 			return "/chat/completions + input_audio";
 		case "agentplan-asr-websocket":
 			return "AgentPlan ASR WebSocket";
+		case "mosi-diarization":
+			return "MOSI /v1/audio/transcriptions";
 		case "custom":
 			return "专用接口";
 		default:

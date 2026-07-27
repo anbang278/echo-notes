@@ -1,6 +1,12 @@
 import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
 import type { TranscriptionConfig } from "../settings/settings";
-import { AGENTPLAN_ASYNC_BASE_URL, PROVIDER_LABELS, isProviderId } from "../settings/settings";
+import {
+	AGENTPLAN_ASYNC_BASE_URL,
+	MOSI_TRANSCRIPTION_BASE_URL,
+	MOSI_TRANSCRIPTION_MODEL,
+	PROVIDER_LABELS,
+	isProviderId
+} from "../settings/settings";
 import { getTranscriptionProviderCapability } from "./provider-capabilities";
 
 export type ProviderDiagnosticSeverity = "error" | "warning" | "info";
@@ -105,6 +111,13 @@ export function diagnoseTranscriptionProviderSettings(
 				detail: `当前地址不是官方默认端点 ${AGENTPLAN_ASYNC_BASE_URL}；仅在你确认该 wss:// 地址兼容 AgentPlan 协议时继续使用。`
 			});
 		}
+		if (providerId === "mosi" && trimmedBaseUrl !== MOSI_TRANSCRIPTION_BASE_URL) {
+			items.push({
+				severity: "error",
+				title: "MOSI Base URL 不匹配",
+				detail: `MOSI 多说话人转写固定使用官方地址 ${MOSI_TRANSCRIPTION_BASE_URL}。`
+			});
+		}
 	}
 
 	if (!trimmedModel) {
@@ -118,6 +131,12 @@ export function diagnoseTranscriptionProviderSettings(
 			severity: "error",
 			title: "AgentPlan 模型不匹配",
 			detail: "当前接入固定使用 doubao-seed-asr-2.0。"
+		});
+	} else if (providerId === "mosi" && trimmedModel !== MOSI_TRANSCRIPTION_MODEL) {
+		items.push({
+			severity: "error",
+			title: "MOSI 模型不匹配",
+			detail: `MOSI 多说话人转写固定使用 ${MOSI_TRANSCRIPTION_MODEL}。`
 		});
 	} else if (capability.recommendedModels.length > 0 && !capability.recommendedModels.includes(trimmedModel)) {
 		items.push({
@@ -160,6 +179,14 @@ export function diagnoseTranscriptionProviderSettings(
 			title: "硅基流动长音频自动恢复",
 			detail:
 				"单次音频必须同时不超过 50 MB 和 1 小时；超过任一限制会按约 10 分钟切分。HTTP 500/502/503/504 重试后仍失败或收到 413 时，只会继续缩小失败段。"
+		});
+	}
+	if (providerId === "mosi") {
+		items.push({
+			severity: "info",
+			title: "MOSI 同步多说话人转写",
+			detail:
+				"Echo Notes 会以 multipart 上传完整音频，固定启用 diarize 并返回说话人时间段；不会发送语言、stream 或 async 参数。"
 		});
 	}
 

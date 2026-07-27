@@ -3,6 +3,7 @@ import type { Hotkey, Modifier } from "obsidian";
 export type OfflineTranscriptionProviderId =
 	| "siliconflow"
 	| "aliyun-bailian"
+	| "mosi"
 	| "ollama"
 	| "lm-studio";
 
@@ -64,6 +65,9 @@ export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/p
 export const LEGACY_AGENTPLAN_NOSTREAM_BASE_URL =
 	"wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream";
 export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
+export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
+export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
+export const MOSI_TRANSCRIPTION_VERSION = "moss-transcribe-diarize-20260325";
 
 export interface AgentPlanAnalysisModelOption {
 	id: string;
@@ -161,6 +165,11 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 		model: "qwen3-asr-flash",
 		language: "zh"
 	},
+	mosi: {
+		baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
+		model: MOSI_TRANSCRIPTION_MODEL,
+		language: "auto"
+	},
 	ollama: {
 		baseUrl: "http://localhost:11434/v1",
 		model: "whisper-1",
@@ -208,6 +217,7 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> = {
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
+	mosi: "MOSI（多说话人转写）",
 	ollama: "Ollama",
 	"lm-studio": "LM Studio"
 };

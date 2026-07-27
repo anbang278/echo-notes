@@ -6,6 +6,7 @@ import {
 	type TranscriptionConfig
 } from "../settings/settings";
 import { AliyunBailianQwenAsrProvider } from "./aliyun-bailian-provider";
+import { MosiDiarizationProvider } from "./mosi-provider";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-provider";
 import { SiliconFlowTeleSpeechProvider } from "./siliconflow-provider";
 import type { TranscriptionProvider } from "./transcription-provider";
@@ -20,6 +21,8 @@ export function createTranscriptionProvider(
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
 		case "siliconflow":
 			return new SiliconFlowTeleSpeechProvider(app, settings, apiKey);
+		case "mosi":
+			return new MosiDiarizationProvider(app, settings, apiKey);
 		case "ollama":
 		case "lm-studio":
 			return new OpenAICompatibleAudioProvider(

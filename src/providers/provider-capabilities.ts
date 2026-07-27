@@ -2,7 +2,12 @@ import { isProviderId, type TranscriptionProviderId } from "../settings/settings
 
 export type ProviderUploadMode = "multipart" | "base64-data-url" | "websocket-stream";
 
-export type ProviderEndpointShape = "openai-audio" | "chat-audio" | "agentplan-asr-websocket" | "custom";
+export type ProviderEndpointShape =
+	| "openai-audio"
+	| "chat-audio"
+	| "agentplan-asr-websocket"
+	| "mosi-diarization"
+	| "custom";
 
 export interface ProviderCapability {
 	maxAudioBytes: number | null;
@@ -105,6 +110,22 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		notes: [
 			"整段音频会先编码为 Base64 Data URL。",
 			"如果编码后超过 10 MB，Echo Notes 会在本地解码并切成 16 kHz mono WAV 分段。"
+		]
+	},
+	mosi: {
+		maxAudioBytes: null,
+		supportsChunking: false,
+		supportsLanguage: false,
+		supportsTimestamp: true,
+		supportsSpeakerDiarization: true,
+		supportsStreaming: false,
+		uploadMode: "multipart",
+		endpointShape: "mosi-diarization",
+		recommendedModels: ["moss-transcribe-diarize"],
+		notes: [
+			"使用 MOSI 官方同步非流式多说话人转写接口，固定开启 diarize 并显式使用已验证的模型版本。",
+			"返回的说话人编号和分段时间会映射为 Echo Notes 说话人段落；编号不能识别真实姓名。",
+			"官方未公布稳定的文件大小上限，Echo Notes 不自动分段；实际限制以服务端错误码为准。"
 		]
 	},
 	...openAICompatibleCapabilities

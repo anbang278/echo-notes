@@ -57,6 +57,12 @@ import {
 	shouldSplitPolicyError
 } from "../src/providers/transcription-policy";
 import {
+	buildMosiMultipartBody,
+	buildMosiTranscriptionsUrl,
+	createMosiHttpError,
+	normalizeMosiTranscriptionResponse
+} from "../src/providers/mosi-protocol";
+import {
 	AGENTPLAN_RESOURCE_ID,
 	AgentPlanClientError,
 	normalizeAgentPlanError,
@@ -111,6 +117,9 @@ import {
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
 	formatHotkey,
+	MOSI_TRANSCRIPTION_BASE_URL,
+	MOSI_TRANSCRIPTION_MODEL,
+	MOSI_TRANSCRIPTION_VERSION,
 	normalizeAnalysisTemplates,
 	normalizeEchoNotesSettings,
 	OFFLINE_TRANSCRIPTION_PROVIDER_LABELS,
@@ -1263,6 +1272,7 @@ assert.equal(Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER
 assert.deepEqual(Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS), [
 	"siliconflow",
 	"aliyun-bailian",
+	"mosi",
 	"ollama",
 	"lm-studio"
 ]);
@@ -1292,6 +1302,13 @@ assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.language, "auto");
+assert.deepEqual(PROVIDER_DEFAULTS.mosi, {
+	baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
+	model: MOSI_TRANSCRIPTION_MODEL,
+	language: "auto"
+});
+assert.equal(PROVIDER_LABELS.mosi, "MOSI（多说话人转写）");
+assert.equal(isOfflineTranscriptionProviderId("mosi"), true);
 assert.equal(PROVIDER_DEFAULTS.ollama.baseUrl, "http://localhost:11434/v1");
 assert.equal(PROVIDER_DEFAULTS["lm-studio"].baseUrl, "http://localhost:1234/v1");
 assert.deepEqual(PROVIDER_DEFAULTS["volcengine-agentplan"], {
@@ -1337,6 +1354,13 @@ assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").endpoint
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsChunking, false);
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsTimestamp, true);
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsSpeakerDiarization, true);
+assert.equal(getTranscriptionProviderCapability("mosi").uploadMode, "multipart");
+assert.equal(getTranscriptionProviderCapability("mosi").endpointShape, "mosi-diarization");
+assert.equal(getTranscriptionProviderCapability("mosi").supportsChunking, false);
+assert.equal(getTranscriptionProviderCapability("mosi").supportsLanguage, false);
+assert.equal(getTranscriptionProviderCapability("mosi").supportsTimestamp, true);
+assert.equal(getTranscriptionProviderCapability("mosi").supportsSpeakerDiarization, true);
+assert.equal(getTranscriptionProviderCapability("mosi").supportsStreaming, false);
 assert.equal(getTranscriptionProviderCapability("openai").endpointShape, "chat-audio");
 assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "chat-audio");
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
@@ -1360,6 +1384,66 @@ for (const providerId of OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS) {
 	assert.equal(capability.uploadMode, "multipart");
 	assert.equal(capability.maxAudioBytes, 25 * 1024 * 1024);
 }
+assert.equal(buildMosiTranscriptionsUrl("https://api.mosi.cn/v1"), "https://api.mosi.cn/v1/audio/transcriptions");
+assert.equal(buildMosiTranscriptionsUrl("https://api.mosi.cn"), "https://api.mosi.cn/v1/audio/transcriptions");
+const mosiMultipartBody = new TextDecoder().decode(
+	buildMosiMultipartBody(
+		"mosi-test-boundary",
+		new Uint8Array([65, 66, 67]).buffer,
+		"双人 验收.wav",
+		"audio/wav"
+	)
+);
+assert.match(mosiMultipartBody, /name="model"\r\n\r\nmoss-transcribe-diarize\r\n/);
+assert.match(
+	mosiMultipartBody,
+	new RegExp(`name="version"\\r\\n\\r\\n${MOSI_TRANSCRIPTION_VERSION}\\r\\n`)
+);
+assert.match(mosiMultipartBody, /name="diarize"\r\n\r\ntrue\r\n/);
+assert.match(mosiMultipartBody, /name="response_format"\r\n\r\njson\r\n/);
+assert.match(mosiMultipartBody, /name="file"; filename="双人 验收\.wav"; filename\*=UTF-8''/);
+assert.match(mosiMultipartBody, /Content-Type: audio\/wav\r\n\r\nABC\r\n/);
+assert.doesNotMatch(mosiMultipartBody, /name="language"/);
+assert.doesNotMatch(mosiMultipartBody, /name="stream"/);
+assert.doesNotMatch(mosiMultipartBody, /name="async"/);
+const normalizedMosiResponse = normalizeMosiTranscriptionResponse({
+	task: "transcribe",
+	duration: 3.5,
+	text: "第一位发言。第二位回答。",
+	segments: [
+		{ type: "segment", id: "1", start: 0, end: 1.5, text: "第一位发言。", speaker: "S01" },
+		{ type: "segment", id: "2", start: 1.5, end: 3.5, text: "第二位回答。", speaker: "S02" }
+	]
+});
+assert.equal(normalizedMosiResponse.text, "第一位发言。第二位回答。");
+assert.deepEqual(normalizedMosiResponse.utterances, [
+	{ speakerId: "S01", text: "第一位发言。", startSeconds: 0, endSeconds: 1.5 },
+	{ speakerId: "S02", text: "第二位回答。", startSeconds: 1.5, endSeconds: 3.5 }
+]);
+assert.deepEqual(normalizeMosiTranscriptionResponse({ text: "单人回退正文", segments: [] }), {
+	text: "单人回退正文",
+	utterances: undefined
+});
+assert.throws(
+	() => normalizeMosiTranscriptionResponse({ text: "缺少分段" }),
+	(error: unknown) => error instanceof TranscriptionError && error.code === "invalid_response"
+);
+assert.throws(
+	() =>
+		normalizeMosiTranscriptionResponse({
+			text: "错误时间",
+			segments: [{ start: 2, end: 1, text: "错误时间", speaker: "S01" }]
+		}),
+	(error: unknown) => error instanceof TranscriptionError && error.code === "invalid_response"
+);
+const mosiFileTooLargeError = createMosiHttpError(413, "request entity too large", "mosi-trace-413");
+assert.equal(mosiFileTooLargeError.code, "file_too_large");
+assert.equal(mosiFileTooLargeError.httpStatus, 413);
+assert.equal(mosiFileTooLargeError.traceId, "mosi-trace-413");
+assert.match(mosiFileTooLargeError.message, /音频文件过大/);
+assert.doesNotMatch(mosiFileTooLargeError.message, /\d+\s*(MB|GB)/i);
+assert.equal(createMosiHttpError(401, "unauthorized").code, "authentication_failed");
+assert.equal(createMosiHttpError(429, "rate limited").code, "rate_limited");
 assert.equal(mapAgentPlanLanguage("zh"), "zh-CN");
 assert.equal(mapAgentPlanLanguage("zh-CN"), "zh-CN");
 assert.equal(mapAgentPlanLanguage("en"), undefined);
@@ -1662,6 +1746,7 @@ const sensitiveErrorText = [
 	"data:audio/wav;base64,QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
 ].join("\n");
 assert.equal(getTranscriptionApiKeySecretId("aliyun-bailian"), "echo-notes-transcription-api-key-aliyun-bailian");
+assert.equal(getTranscriptionApiKeySecretId("mosi"), "echo-notes-transcription-api-key-mosi");
 assert.equal(
 	getTranscriptionApiKeySecretId("lm-studio"),
 	"echo-notes-transcription-api-key-lm-studio"
@@ -2019,8 +2104,29 @@ assert.ok(
 			item.severity === "warning" &&
 			item.title === "当前 Provider 不支持语言参数" &&
 			/不会传给当前 Provider/.test(item.detail)
-	)
+		)
 );
+const mosiDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		provider: "mosi",
+		...PROVIDER_DEFAULTS.mosi
+	},
+	"mosi-valid"
+);
+assert.equal(mosiDiagnostics.canAttemptTranscription, true);
+assert.ok(mosiDiagnostics.items.some((item) => item.title === "MOSI 同步多说话人转写"));
+const invalidMosiDiagnostics = diagnoseTranscriptionProviderSettings(
+	{
+		provider: "mosi",
+		baseUrl: "https://proxy.example.com/v1",
+		model: "custom-diarize",
+		language: "auto"
+	},
+	"mosi-valid"
+);
+assert.equal(invalidMosiDiagnostics.canAttemptTranscription, false);
+assert.ok(invalidMosiDiagnostics.items.some((item) => item.title === "MOSI Base URL 不匹配"));
+assert.ok(invalidMosiDiagnostics.items.some((item) => item.title === "MOSI 模型不匹配"));
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStartHotkey), "");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.officialRecorderStopHotkey), "");
 assert.equal(formatHotkey(DEFAULT_SETTINGS.transcribeAllAudioHotkey), "");

@@ -56,7 +56,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Choose **Real-time transcription** or **Offline transcription** above the Provider setting. Each mode keeps an isolated provider configuration.
 - In real-time mode, Echo Notes captures the microphone independently, immediately creates a WebM recording and `.transcript.md`, and progressively writes provisional text, definite utterances, speakers, and time ranges.
 - If AgentPlan fails, local recording continues and confirmed text is preserved. After stopping, Task Center offers an explicit **Retry with offline provider** action without automatically creating another paid request.
-- Offline mode supports the verified Alibaba Bailian, SiliconFlow, Ollama, and LM Studio providers for audio files already stored in the vault.
+- Offline mode supports the verified Alibaba Bailian, SiliconFlow, MOSI, Ollama, and LM Studio providers for audio files already stored in the vault.
 - Transcribe the selected audio link in the current note.
 - Scan and transcribe all supported audio links in the current note.
 - Generate a Markdown transcript file with source metadata.
@@ -96,10 +96,11 @@ Offline transcription providers:
 
 - 【免费】硅基流动（SiliconFlow） with official choices `FunAudioLLM/SenseVoiceSmall` and `TeleAI/TeleSpeechASR`, plus custom model IDs
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
+- MOSI with the fixed `moss-transcribe-diarize` model for speaker diarization and segment timestamps
 - Ollama through its local OpenAI-compatible `/audio/transcriptions` endpoint
 - LM Studio through its local OpenAI-compatible `/audio/transcriptions` endpoint
 
-AgentPlan's official Base URL and model are read-only in real-time mode. Offline provider defaults remain editable. The settings tab switches API key, language, microphone or offline-provider fields with the selected mode and shows the relevant endpoint, size, chunking, timestamp, and diarization capabilities.
+AgentPlan's official Base URL and model are read-only in real-time mode. MOSI also locks its official Base URL and model so the request stays on the verified diarization contract; other offline-provider defaults remain editable. The settings tab switches API key, language, microphone or offline-provider fields with the selected mode and shows the relevant endpoint, size, chunking, timestamp, and diarization capabilities.
 
 The settings tab also includes a local "Check transcription configuration" action. It checks API key presence, Base URL format, example URLs, non-local HTTP risks, model hints, endpoint shape, and known capability limits. This check does not upload audio and does not call the provider.
 
@@ -113,6 +114,7 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 
 - SiliconFlow default endpoint: `https://api.siliconflow.cn`
 - Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- MOSI transcription endpoint: `https://api.mosi.cn/v1/audio/transcriptions`
 - Volcengine AgentPlan ASR endpoint: `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
 - Volcengine AgentPlan analysis endpoint: `https://ark.cn-beijing.volces.com/api/plan/v3`
 - Ollama transcription default endpoint: `http://localhost:11434/v1`
@@ -120,9 +122,9 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 - AI analysis default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - Other AI analysis endpoints use the Base URL configured for the selected analysis provider.
 
-Offline transcription sends the selected audio to the configured offline provider. Real-time mode does not create or convert a complete WAV first. Echo Notes runs two local paths in parallel: `MediaRecorder` appends WebM Opus chunks to the vault about once per second, while Web Audio continuously downmixes and resamples the microphone to 16 kHz, 16-bit, mono PCM and sends 200 ms packets over one authenticated optimized bidirectional AgentPlan WebSocket. The recording, transcript, audio embed, and transcript link are created as soon as the session starts. Confirmed second-pass utterances are written progressively; unconfirmed text stays in a temporary region. If AgentPlan disconnects, local recording continues and already persisted audio and text remain available.
+Offline transcription sends the selected audio to the configured offline provider. When MOSI is selected, Echo Notes uploads the complete audio as multipart data to `api.mosi.cn`, requests synchronous non-streaming diarization, and maps returned speaker IDs and segment ranges into the local transcript. Real-time mode does not create or convert a complete WAV first. Echo Notes runs two local paths in parallel: `MediaRecorder` appends WebM Opus chunks to the vault about once per second, while Web Audio continuously downmixes and resamples the microphone to 16 kHz, 16-bit, mono PCM and sends 200 ms packets over one authenticated optimized bidirectional AgentPlan WebSocket. The recording, transcript, audio embed, and transcript link are created as soon as the session starts. Confirmed second-pass utterances are written progressively; unconfirmed text stays in a temporary region. If AgentPlan disconnects, local recording continues and already persisted audio and text remain available.
 
-AgentPlan speaker-cluster IDs and utterance ranges distinguish voices but do not identify real names. AI analysis reads only completed final transcript text; when AgentPlan analysis is selected, that text is sent to its plan-specific Chat API and consumes plan quota. Transcription and analysis API keys remain isolated by purpose in Obsidian `SecretStorage`, even when both use AgentPlan. Keys are not written to plugin settings, transcripts, or logs. Recordings, transcripts, and AI analysis output remain in the Obsidian vault.
+AgentPlan and MOSI speaker IDs distinguish voices but do not identify real names. AI analysis reads only completed final transcript text; when AgentPlan analysis is selected, that text is sent to its plan-specific Chat API and consumes plan quota. Transcription and analysis API keys remain isolated by provider and purpose in Obsidian `SecretStorage`. Keys are not written to plugin settings, transcripts, or logs. Recordings, transcripts, and AI analysis output remain in the Obsidian vault.
 
 If "Confirm before manual transcription upload" is enabled in settings, Echo Notes shows a confirmation dialog before manual transcription uploads. The dialog lists the provider, Base URL, model, file size, and HTTP risk warnings. Automation skips uploads while this confirmation mode is enabled so audio is not sent in the background without user confirmation.
 
@@ -156,6 +158,7 @@ Provider limits:
 - Retries and smaller chunks can create extra provider requests, but Echo Notes never changes the selected provider, API key, or model. Completed chunks are not retransmitted; failures keep completed text, trace IDs, and the failed time range.
 - See the [SiliconFlow transcription API reference](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions) for the current limits and model list.
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
+- MOSI `moss-transcribe-diarize`: Echo Notes uses the documented synchronous, non-streaming multipart request with `diarize=true` and version `moss-transcribe-diarize-20260325`. MOSI does not publish a stable file-size limit; Echo Notes sends the full file without chunking and reports service errors such as `413`. See the [MOSI transcription API reference](https://platform.mosi.cn/docs/reference/transcriptions).
 - Ollama and LM Studio: files over 25 MB are blocked before upload.
 
 Capability matrix:
@@ -165,13 +168,14 @@ Capability matrix:
 | Volcengine AgentPlan `doubao-seed-asr-2.0` | microphone PCM over authenticated optimized bidirectional WebSocket | `/api/v3/plan/sauc/bigmodel_async` | desktop and local filesystem vault only | No; one live session | Chinese or auto | Yes, utterance level | Yes |
 | Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
 | SiliconFlow `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / custom model | multipart | dedicated SiliconFlow endpoint | 50 MB and one hour per request | Yes; ~10-minute chunks with adaptive shrinking | No | No | No |
+| MOSI `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | Determined by MOSI | No | No | Yes, segment level | Yes |
 | Ollama and LM Studio | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
 
 Long-audio chunking belongs to the offline path and currently applies to Alibaba Bailian `qwen3-asr-flash` and SiliconFlow official or custom transcription models. Extremely long files still require Web Audio to decode the full source locally and may hit device memory limits; a decode failure keeps the transcript draft and reports a clear local error, without installing or invoking FFmpeg. A real-time AgentPlan session consumes microphone PCM directly: provisional text is coalesced about every 500 ms, while new definite utterances, stop, completion, and failure force a write. If AgentPlan fails, local recording continues; after stopping, Task Center offers an offline retry but does not upload automatically. Offline chunked transcripts include headings such as `## Segment 01（00:00-03:00）`.
 
-Default transcription language is sent only to providers that support a language parameter, such as Alibaba Bailian, Ollama, and LM Studio. AgentPlan speaker diarization supports Chinese or an omitted language; selecting another language while AgentPlan is active automatically switches it to `auto`. SiliconFlow's official transcription API documents only `file` and `model`, so Echo Notes does not send a non-standard language field to SiliconFlow; that provider still auto-detects the audio language.
+Default transcription language is sent only to providers that support a language parameter, such as Alibaba Bailian, Ollama, and LM Studio. AgentPlan speaker diarization supports Chinese or an omitted language; selecting another language while AgentPlan is active automatically switches it to `auto`. SiliconFlow and MOSI do not receive a language field from Echo Notes; those providers detect the audio language.
 
-AgentPlan transcripts always show a speaker label, including single-speaker recordings. The setting **Speaker label style** selects either speaker-only labels or the default speaker-and-time form:
+AgentPlan and MOSI diarized transcripts show speaker labels. The setting **Speaker label style** selects either speaker-only labels or the default speaker-and-time form:
 
 ```markdown
 **Speaker 1 (00:00-00:12)**
@@ -184,7 +188,7 @@ Transcript text.
 1. Open the Echo Notes settings tab.
 2. Choose **Real-time transcription** or **Offline transcription** above Provider. New installs default to offline mode with Alibaba Bailian.
 3. Real-time mode: enter the dedicated AgentPlan API key and choose language, speaker-label style, and microphone. The official Base URL and model are read-only. Microphone permission is requested only when refreshing devices or starting a session.
-4. Offline mode: choose Alibaba Bailian, SiliconFlow, Ollama, or LM Studio, then confirm Base URL, model, API key, and language.
+4. Offline mode: choose Alibaba Bailian, SiliconFlow, MOSI, Ollama, or LM Studio, then confirm the API key and available provider settings. MOSI's official Base URL and model are read-only.
 5. Choose the copy language for inserted links and generated template labels.
 
 Real-time commands:
@@ -202,6 +206,7 @@ Recommended defaults:
 | Volcengine AgentPlan | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
+| MOSI（多说话人转写） | `https://api.mosi.cn/v1` | `moss-transcribe-diarize` | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
 | LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |
 
@@ -396,7 +401,7 @@ Development requires Node.js 22 or newer.
 
 ## Current Limitations
 
-- Speaker diarization and utterance timestamps currently apply only to Volcengine AgentPlan. They identify speaker numbers, not real names.
+- Speaker diarization and timestamps are available for Volcengine AgentPlan real-time transcription and MOSI offline transcription. They identify speaker numbers, not real names.
 - Real-time transcription requires Obsidian desktop and a local filesystem vault. Mobile and non-`FileSystemAdapter` vaults can continue to use offline transcription.
 - The first real-time release supports start and stop only, not pause/resume. A forced exit can lose at most the last short WebM chunk that had not yet been emitted.
 - Word-level timestamps are not rendered.
