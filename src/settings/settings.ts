@@ -1,6 +1,7 @@
 import type { Hotkey, Modifier } from "obsidian";
 
 export type OfflineTranscriptionProviderId =
+	| "volcengine-agentplan"
 	| "siliconflow"
 	| "aliyun-bailian"
 	| "mosi"
@@ -62,7 +63,7 @@ export type EchoNotesHotkeySetting = Hotkey | null;
 
 export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
 export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
-export const LEGACY_AGENTPLAN_NOSTREAM_BASE_URL =
+export const AGENTPLAN_NOSTREAM_BASE_URL =
 	"wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream";
 export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
 export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
@@ -218,6 +219,7 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 };
 
 export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> = {
+	"volcengine-agentplan": "火山引擎 AgentPlan（单流高精度）",
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	mosi: "MOSI（可选说话人分离）",
@@ -226,8 +228,8 @@ export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionP
 };
 
 export const PROVIDER_LABELS: Record<TranscriptionProviderId, string> = {
-	"volcengine-agentplan": "火山引擎 AgentPlan",
-	...OFFLINE_TRANSCRIPTION_PROVIDER_LABELS
+	...OFFLINE_TRANSCRIPTION_PROVIDER_LABELS,
+	"volcengine-agentplan": "火山引擎 AgentPlan"
 };
 
 export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
@@ -845,11 +847,13 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	const offlineProvider = isOfflineTranscriptionProviderId(rawOfflineProvider)
 		? rawOfflineProvider
 		: DEFAULT_SETTINGS.offlineTranscription.provider;
-	const offlineDefaults = PROVIDER_DEFAULTS[offlineProvider];
+	const offlineDefaults = getOfflineTranscriptionProviderDefaults(offlineProvider);
 	const shouldPreserveOfflineConfig = isOfflineTranscriptionProviderId(rawOfflineProvider);
 	settings.offlineTranscription = {
 		provider: offlineProvider,
-		baseUrl: shouldPreserveOfflineConfig
+		baseUrl: offlineProvider === "volcengine-agentplan"
+			? offlineDefaults.baseUrl
+			: shouldPreserveOfflineConfig
 			? normalizeConfigString(
 				nestedOffline.baseUrl,
 				legacyProvider === offlineProvider ? raw.baseUrl : undefined,
@@ -857,7 +861,9 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			)
 			: offlineDefaults.baseUrl,
 		model:
-			offlineProvider === "mosi"
+			offlineProvider === "volcengine-agentplan"
+				? offlineDefaults.model
+				: offlineProvider === "mosi"
 				? getMosiTranscriptionModel(mosiSpeakerDiarizationEnabled)
 				: shouldPreserveOfflineConfig
 					? normalizeConfigString(
@@ -866,28 +872,29 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 							offlineDefaults.model
 						)
 					: offlineDefaults.model,
-		language: shouldPreserveOfflineConfig
-			? normalizeConfigString(
-				nestedOffline.language,
-				legacyProvider === offlineProvider ? raw.language : undefined,
-				offlineDefaults.language
-			)
-			: offlineDefaults.language
+		language:
+			offlineProvider === "volcengine-agentplan"
+				? normalizeTranscriptionLanguageForProvider(
+						offlineProvider,
+						shouldPreserveOfflineConfig
+							? normalizeConfigString(
+									nestedOffline.language,
+									legacyProvider === offlineProvider ? raw.language : undefined,
+									offlineDefaults.language
+								)
+							: offlineDefaults.language
+					)
+				: shouldPreserveOfflineConfig
+					? normalizeConfigString(
+							nestedOffline.language,
+							legacyProvider === offlineProvider ? raw.language : undefined,
+							offlineDefaults.language
+						)
+					: offlineDefaults.language
 	};
-	const legacyRealtimeBaseUrl =
-		legacyProvider === "volcengine-agentplan" && typeof raw.baseUrl === "string"
-			? raw.baseUrl
-			: undefined;
-	const realtimeBaseUrl = normalizeAgentPlanBaseUrl(
-		normalizeConfigString(
-			nestedRealtime.baseUrl,
-			legacyRealtimeBaseUrl,
-			DEFAULT_SETTINGS.realtimeTranscription.baseUrl
-		)
-	);
 	settings.realtimeTranscription = {
 		provider: "volcengine-agentplan",
-		baseUrl: realtimeBaseUrl,
+		baseUrl: AGENTPLAN_ASYNC_BASE_URL,
 		model: DEFAULT_SETTINGS.realtimeTranscription.model,
 		language: normalizeTranscriptionLanguageForProvider(
 			"volcengine-agentplan",
@@ -994,12 +1001,21 @@ export function getMosiTranscriptionModel(speakerDiarizationEnabled: boolean): s
 		: MOSI_PLAIN_TRANSCRIPTION_MODEL;
 }
 
-export function isMosiSpeakerDiarizationModel(model: string): boolean {
-	return model.trim() === MOSI_TRANSCRIPTION_MODEL;
+export function getOfflineTranscriptionProviderDefaults(
+	provider: OfflineTranscriptionProviderId
+): Omit<TranscriptionConfig, "provider"> {
+	if (provider === "volcengine-agentplan") {
+		return {
+			baseUrl: AGENTPLAN_NOSTREAM_BASE_URL,
+			model: "doubao-seed-asr-2.0",
+			language: "zh"
+		};
+	}
+	return PROVIDER_DEFAULTS[provider];
 }
 
-function normalizeAgentPlanBaseUrl(baseUrl: string): string {
-	return baseUrl === LEGACY_AGENTPLAN_NOSTREAM_BASE_URL ? AGENTPLAN_ASYNC_BASE_URL : baseUrl;
+export function isMosiSpeakerDiarizationModel(model: string): boolean {
+	return model.trim() === MOSI_TRANSCRIPTION_MODEL;
 }
 
 function normalizeConfigString(primary: unknown, legacy: unknown, fallback: string): string {

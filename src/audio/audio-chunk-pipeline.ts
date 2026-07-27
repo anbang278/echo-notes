@@ -60,38 +60,47 @@ export async function runAudioChunkPipeline<Chunk extends AudioChunk, RawRespons
 		segments: []
 	});
 
-	for (const chunk of chunks) {
-		await input.onProgress?.({
-			type: "segment-started",
-			segment: chunk,
-			segments: [...completedSegments]
-		});
+	try {
+		for (const chunk of chunks) {
+			await input.onProgress?.({
+				type: "segment-started",
+				segment: chunk,
+				segments: [...completedSegments]
+			});
 
-		let result: AudioChunkTranscriptionResult<RawResponse>;
-		try {
-			result = await input.transcribeChunk(chunk);
-		} finally {
-			if (input.releaseChunkBuffer !== false) {
+			let result: AudioChunkTranscriptionResult<RawResponse>;
+			try {
+				result = await input.transcribeChunk(chunk);
+			} finally {
+				if (input.releaseChunkBuffer !== false) {
+					releaseAudioChunkBuffer(chunk);
+				}
+			}
+			const segment: TranscriptionSegment = {
+				index: chunk.index,
+				total: chunk.total,
+				startSeconds: chunk.startSeconds,
+				endSeconds: chunk.endSeconds,
+				text: result.text,
+				traceId: result.traceId,
+				utterances: result.utterances
+			};
+			completedSegments.push(segment);
+			rawSegments.push(result.raw);
+
+			await input.onProgress?.({
+				type: "segment-completed",
+				segment,
+				segments: [...completedSegments]
+			});
+		}
+	} catch (error) {
+		if (input.releaseChunkBuffer !== false) {
+			for (const chunk of chunks) {
 				releaseAudioChunkBuffer(chunk);
 			}
 		}
-		const segment: TranscriptionSegment = {
-			index: chunk.index,
-			total: chunk.total,
-			startSeconds: chunk.startSeconds,
-			endSeconds: chunk.endSeconds,
-			text: result.text,
-			traceId: result.traceId,
-			utterances: result.utterances
-		};
-		completedSegments.push(segment);
-		rawSegments.push(result.raw);
-
-		await input.onProgress?.({
-			type: "segment-completed",
-			segment,
-			segments: [...completedSegments]
-		});
+		throw error;
 	}
 
 	const traceId = completedSegments

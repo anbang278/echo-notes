@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import { Platform, type App } from "obsidian";
 import {
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
@@ -10,6 +10,7 @@ import { MosiTranscriptionProvider } from "./mosi-provider";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-provider";
 import { SiliconFlowTeleSpeechProvider } from "./siliconflow-provider";
 import type { TranscriptionProvider } from "./transcription-provider";
+import { VolcengineAgentPlanAsrProvider } from "./volcengine-agentplan-provider";
 
 export function createTranscriptionProvider(
 	app: App,
@@ -17,6 +18,10 @@ export function createTranscriptionProvider(
 	apiKey: string
 ): TranscriptionProvider {
 	switch (settings.provider) {
+		case "volcengine-agentplan":
+			return new VolcengineAgentPlanAsrProvider(app, settings, apiKey, {
+				isMobile: () => Platform.isMobile
+			});
 		case "aliyun-bailian":
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
 		case "siliconflow":

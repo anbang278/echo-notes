@@ -8,6 +8,8 @@ const FLAG_LAST_PACKAGE = 0x2;
 const JSON_SERIALIZATION = 0x1;
 const GZIP_COMPRESSION = 0x1;
 
+export type AgentPlanRequestMode = "async" | "nostream";
+
 export interface AgentPlanFullRequestPayload {
 	user: {
 		uid: string;
@@ -26,7 +28,7 @@ export interface AgentPlanFullRequestPayload {
 		enable_punc: true;
 		enable_ddc: true;
 		show_utterances: true;
-		enable_nonstream: true;
+		enable_nonstream?: true;
 		enable_speaker_info: true;
 		ssd_version: "200";
 		result_type: "full";
@@ -70,7 +72,8 @@ export interface AgentPlanResponseFrame {
 
 export function buildAgentPlanFullRequestPayload(
 	language: string,
-	format: AgentPlanFullRequestPayload["audio"]["format"] = "wav"
+	format: AgentPlanFullRequestPayload["audio"]["format"] = "wav",
+	mode: AgentPlanRequestMode = "async"
 ): AgentPlanFullRequestPayload {
 	const mappedLanguage = mapAgentPlanLanguage(language);
 	return {
@@ -91,7 +94,7 @@ export function buildAgentPlanFullRequestPayload(
 			enable_punc: true,
 			enable_ddc: true,
 			show_utterances: true,
-			enable_nonstream: true,
+			...(mode === "async" ? { enable_nonstream: true as const } : {}),
 			enable_speaker_info: true,
 			ssd_version: "200",
 			result_type: "full"

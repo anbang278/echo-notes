@@ -35,6 +35,7 @@ import {
 	TRANSCRIPTION_LANGUAGE_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
+	getOfflineTranscriptionProviderDefaults,
 	getMosiTranscriptionModel,
 	isAnalysisProviderId,
 	isOfflineTranscriptionProviderId,
@@ -228,14 +229,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const config = this.getSelectedTranscriptionConfig();
 		const isRealtime = this.plugin.settings.transcriptionMode === "realtime";
 		const isMosi = !isRealtime && config.provider === "mosi";
-		const providerCapability = getTranscriptionProviderCapability(config.provider);
+		const isAgentPlan = config.provider === "volcengine-agentplan";
+		const providerCapability = getTranscriptionProviderCapability(
+			config.provider,
+			this.plugin.settings.transcriptionMode
+		);
 
 		new Setting(containerEl)
 			.setName("Provider")
 			.setDesc(
 				isRealtime
 					? "实时转写目前固定使用火山引擎 AgentPlan。"
-					: "选择用于已有音频文件转写的服务商；AgentPlan 仅在实时模式中使用。"
+					: "选择用于 Vault 中已有音频文件转写的服务商；AgentPlan 离线模式固定使用单流高精度端点。"
 			)
 			.addDropdown((dropdown) => {
 				if (isRealtime) {
@@ -266,7 +271,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const apiKey = this.plugin.getApiKey(config.provider);
 		const apiKeySetting = new Setting(containerEl)
-			.setName(isRealtime ? "AgentPlan 专属 API Key" : "API Key")
+			.setName(isAgentPlan ? "AgentPlan 专属 API Key" : "API Key")
 			.setDesc("密钥按 Provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
 		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
 		apiKeySetting.addText((text) => {
@@ -312,8 +317,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				text
 					.setPlaceholder(this.getProviderDefaults().baseUrl)
 					.setValue(config.baseUrl)
-					.setDisabled(isRealtime || isMosi);
-				if (!isRealtime && !isMosi) {
+					.setDisabled(isRealtime || isMosi || isAgentPlan);
+				if (!isRealtime && !isMosi && !isAgentPlan) {
 					text.onChange(async (value) => {
 						this.plugin.settings.offlineTranscription.baseUrl = value.trim();
 						await this.plugin.saveSettings();
@@ -367,6 +372,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				.setDesc(
 					isRealtime
 						? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。"
+						: isAgentPlan
+							? "AgentPlan 离线单流转写固定使用 doubao-seed-asr-2.0。"
 						: isMosi
 							? this.plugin.settings.mosiSpeakerDiarizationEnabled
 								? "已开启说话人分离，固定使用 moss-transcribe-diarize。"
@@ -377,8 +384,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					text
 						.setPlaceholder(this.getProviderDefaults().model)
 						.setValue(config.model)
-						.setDisabled(isRealtime || isMosi);
-					if (!isRealtime && !isMosi) {
+						.setDisabled(isRealtime || isMosi || isAgentPlan);
+					if (!isRealtime && !isMosi && !isAgentPlan) {
 						text.onChange(async (value) => {
 							this.plugin.settings.offlineTranscription.model = value.trim();
 							await this.plugin.saveSettings();
@@ -390,7 +397,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("默认转写语言")
-			.setDesc(`${this.getTranscriptionLanguageDescription()} 如需其他代码，可使用下方自定义语言代码。`)
+			.setDesc(
+				isAgentPlan
+					? this.getTranscriptionLanguageDescription()
+					: `${this.getTranscriptionLanguageDescription()} 如需其他代码，可使用下方自定义语言代码。`
+			)
 			.addDropdown((dropdown) => {
 				for (const [value, label] of Object.entries(TRANSCRIPTION_LANGUAGE_LABELS)) {
 					dropdown.addOption(value, label);
@@ -410,7 +421,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					});
 			});
 
-		if (!isRealtime) {
+		if (!isRealtime && !isAgentPlan) {
 			new Setting(containerEl)
 				.setName("自定义语言代码")
 				.setDesc("填写当前离线 Provider 支持的语言代码；清空不会改变当前语言。")
@@ -445,7 +456,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				.setDesc(
 					isMosi
 						? "MOSI 服务端说话人编号会按首次出现顺序显示；长音频的编号仅在当前分段内有效。"
-						: "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
+						: isRealtime
+							? "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
+							: "AgentPlan 离线分段会分别进行说话人聚类；编号仅在当前分段内有效，时间范围保持原录音绝对时间。"
 				)
 				.addDropdown((dropdown) =>
 					dropdown
@@ -809,7 +822,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderProviderCapability(containerEl: HTMLElement): void {
 		const providerId = this.getSelectedTranscriptionConfig().provider;
-		const capability = getTranscriptionProviderCapability(providerId);
+		const capability = getTranscriptionProviderCapability(
+			providerId,
+			this.plugin.settings.transcriptionMode
+		);
 		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
 		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
 		headerEl.createDiv({ cls: "echo-notes-provider-capability-title", text: "当前 Provider 能力" });
@@ -962,7 +978,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private applyOfflineProviderDefaults(provider: OfflineTranscriptionProviderId): void {
-		const defaults = PROVIDER_DEFAULTS[provider];
+		const defaults = getOfflineTranscriptionProviderDefaults(provider);
 		this.plugin.settings.offlineTranscription.baseUrl = defaults.baseUrl;
 		this.plugin.settings.offlineTranscription.model =
 			provider === "mosi"
@@ -981,6 +997,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private getProviderDefaults(): Omit<TranscriptionConfig, "provider"> {
 		const provider = this.getSelectedTranscriptionConfig().provider;
+		if (
+			this.plugin.settings.transcriptionMode === "offline" &&
+			isOfflineTranscriptionProviderId(provider)
+		) {
+			return getOfflineTranscriptionProviderDefaults(provider);
+		}
 		return PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS["aliyun-bailian"];
 	}
 
@@ -1000,7 +1022,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private getBaseUrlDescription(): string {
 		switch (this.getSelectedTranscriptionConfig().provider) {
 			case "volcengine-agentplan":
-				return "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。";
+				return this.plugin.settings.transcriptionMode === "realtime"
+					? "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。"
+					: "AgentPlan ASR 单流高精度 WebSocket 端点；超过约 3 分钟的已有录音会在本地静音附近切段并顺序发送，仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
 				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
 			case "ollama":
@@ -1017,7 +1041,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getTranscriptionLanguageDescription(): string {
-		const capability = getTranscriptionProviderCapability(this.getSelectedTranscriptionConfig().provider);
+		const capability = getTranscriptionProviderCapability(
+			this.getSelectedTranscriptionConfig().provider,
+			this.plugin.settings.transcriptionMode
+		);
 		if (!capability.supportsLanguage) {
 			return "默认 ASR 转写语言。当前 Provider 不支持语言参数，此设置不会传给 Provider，仍由模型自动识别。";
 		}

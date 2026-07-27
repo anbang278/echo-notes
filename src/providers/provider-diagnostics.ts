@@ -2,6 +2,7 @@ import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
 import type { TranscriptionConfig } from "../settings/settings";
 import {
 	AGENTPLAN_ASYNC_BASE_URL,
+	AGENTPLAN_NOSTREAM_BASE_URL,
 	MOSI_PLAIN_TRANSCRIPTION_MODEL,
 	MOSI_TRANSCRIPTION_BASE_URL,
 	MOSI_TRANSCRIPTION_MODEL,
@@ -37,9 +38,10 @@ export function diagnoseTranscriptionProviderSettings(
 	options: ProviderDiagnosticOptions = {}
 ): ProviderDiagnosticResult {
 	const items: ProviderDiagnosticItem[] = [];
+	const usage = options.usage ?? "offline";
 	const providerId = isProviderId(settings.provider) ? settings.provider : "aliyun-bailian";
 	const providerLabel = PROVIDER_LABELS[providerId] ?? settings.provider;
-	const capability = getTranscriptionProviderCapability(providerId);
+	const capability = getTranscriptionProviderCapability(providerId, usage);
 	const trimmedApiKey = apiKey.trim();
 	const trimmedBaseUrl = settings.baseUrl.trim();
 	const trimmedModel = settings.model.trim();
@@ -105,12 +107,15 @@ export function diagnoseTranscriptionProviderSettings(
 
 		if (
 			providerId === "volcengine-agentplan" &&
-			trimmedBaseUrl !== AGENTPLAN_ASYNC_BASE_URL
+			trimmedBaseUrl !==
+				(usage === "realtime" ? AGENTPLAN_ASYNC_BASE_URL : AGENTPLAN_NOSTREAM_BASE_URL)
 		) {
 			items.push({
-				severity: "warning",
-				title: "AgentPlan 使用迁移保留的自定义地址",
-				detail: `当前地址不是官方默认端点 ${AGENTPLAN_ASYNC_BASE_URL}；仅在你确认该 wss:// 地址兼容 AgentPlan 协议时继续使用。`
+				severity: "error",
+				title: "AgentPlan Base URL 不匹配",
+				detail: `AgentPlan ${usage === "realtime" ? "实时" : "离线单流"}转写固定使用 ${
+					usage === "realtime" ? AGENTPLAN_ASYNC_BASE_URL : AGENTPLAN_NOSTREAM_BASE_URL
+				}。`
 			});
 		}
 		if (providerId === "mosi" && trimmedBaseUrl !== MOSI_TRANSCRIPTION_BASE_URL) {
@@ -168,15 +173,26 @@ export function diagnoseTranscriptionProviderSettings(
 		});
 	}
 	if (capability.endpointShape === "agentplan-asr-websocket") {
-		items.push({
-			severity: "info",
-			title: "AgentPlan 麦克风实时转写",
-			detail: "Echo Notes 会把麦克风音频连续降混并重采样为 16 kHz mono PCM16，以 200 ms 分包直接发送；确定分句会持续写入转写稿。"
-		});
+		if (usage === "realtime") {
+			items.push({
+				severity: "info",
+				title: "AgentPlan 麦克风实时转写",
+				detail: "Echo Notes 会把麦克风音频连续降混并重采样为 16 kHz mono PCM16，以 200 ms 分包直接发送；确定分句会持续写入转写稿。"
+			});
+		} else {
+			items.push({
+				severity: "info",
+				title: "AgentPlan 离线单流转写",
+				detail: "已有录音会在本地转换为 16 kHz mono WAV；超过约 3 分钟时在静音附近切段，并通过单流高精度 WebSocket 按顺序逐段发送。"
+			});
+		}
 		items.push({
 			severity: "info",
 			title: "AgentPlan 说话人分离始终开启",
-			detail: "插件会输出说话人编号和 utterance 时间范围，不识别真实姓名；单人录音也会显示说话人 1。非中文语言会自动按 auto 调用。"
+			detail:
+				usage === "realtime"
+					? "插件会输出说话人编号和 utterance 时间范围，不识别真实姓名；单人录音也会显示说话人 1。非中文语言会自动按 auto 调用。"
+					: "插件会输出说话人编号和 utterance 时间范围，不识别真实姓名；分段编号仅在当前分段内有效，时间会偏移到原录音绝对时间轴。"
 		});
 	}
 	if (providerId === "siliconflow") {

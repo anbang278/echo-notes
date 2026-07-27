@@ -6,6 +6,7 @@ import {
 	getAgentPlanWavDurationSeconds,
 	parseAgentPlanResponseFrame,
 	splitAgentPlanAudio,
+	type AgentPlanRequestMode,
 	type AgentPlanResponsePayload
 } from "./volcengine-agentplan-protocol";
 import { TranscriptionError, type TranscriptionUtterance } from "./transcription-provider";
@@ -34,6 +35,7 @@ export interface AgentPlanClientOptions {
 	url: string;
 	apiKey: string;
 	language: string;
+	requestMode?: AgentPlanRequestMode;
 	wavBytes: Uint8Array;
 	createSocket: AgentPlanSocketFactory;
 	sleep?: (milliseconds: number) => Promise<void>;
@@ -243,7 +245,13 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 			traceId = readHeader(headers, "x-tt-logid") ?? traceId;
 		});
 		socket.onOpen(() => {
-			void encodeAgentPlanFullRequest(buildAgentPlanFullRequestPayload(options.language))
+			void encodeAgentPlanFullRequest(
+				buildAgentPlanFullRequestPayload(
+					options.language,
+					"wav",
+					options.requestMode ?? "async"
+				)
+			)
 				.then((frame) => socket.send(frame))
 				.catch((error) => fail(new AgentPlanClientError(error instanceof Error ? error.message : String(error), undefined, traceId)));
 		});

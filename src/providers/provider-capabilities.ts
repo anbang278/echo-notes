@@ -1,4 +1,8 @@
-import { isProviderId, type TranscriptionProviderId } from "../settings/settings";
+import {
+	isProviderId,
+	type TranscriptionMode,
+	type TranscriptionProviderId
+} from "../settings/settings";
 
 export type ProviderUploadMode = "multipart" | "base64-data-url" | "websocket-stream";
 
@@ -138,8 +142,38 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 	...openAICompatibleCapabilities
 };
 
-export function getTranscriptionProviderCapability(providerId: string): ProviderCapability {
+const AGENTPLAN_OFFLINE_TRANSCRIPTION_CAPABILITY: ProviderCapability = {
+	maxAudioBytes: null,
+	supportsChunking: true,
+	supportsLanguage: true,
+	supportsTimestamp: true,
+	supportsSpeakerDiarization: true,
+	supportsStreaming: false,
+	uploadMode: "websocket-stream",
+	endpointShape: "agentplan-asr-websocket",
+	recommendedModels: ["doubao-seed-asr-2.0"],
+	transcriptionPolicy: {
+		targetSegmentSeconds: 3 * 60,
+		minSegmentSeconds: 30,
+		retryableHttpStatuses: [],
+		maxSplitDepth: 0
+	},
+	notes: [
+		"仅支持 Obsidian 桌面端；移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头。",
+		"已有录音固定使用 AgentPlan 单流高精度端点；音频会在本地转换为 16 kHz、16-bit、mono WAV。",
+		"超过约 3 分钟时会在静音附近切段，并按原始时间顺序逐段发送；每完成一段立即写入转写稿。",
+		"每个分段独立执行说话人聚类，编号仅在当前分段内有效；时间范围会偏移到原录音绝对时间轴。"
+	]
+};
+
+export function getTranscriptionProviderCapability(
+	providerId: string,
+	usage: TranscriptionMode = "offline"
+): ProviderCapability {
 	const normalizedProviderId = isProviderId(providerId) ? providerId : "aliyun-bailian";
+	if (normalizedProviderId === "volcengine-agentplan" && usage === "offline") {
+		return AGENTPLAN_OFFLINE_TRANSCRIPTION_CAPABILITY;
+	}
 	return TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
 }
 
@@ -155,7 +189,7 @@ export function getProviderCapabilitySummary(capability: ProviderCapability): st
 			? `单次编码输入上限：${formatProviderCapabilityBytes(capability.maxBase64DataUrlBytes)}`
 			: "单次音频上限：由 Provider 决定";
 	const longAudioSummary =
-		capability.endpointShape === "agentplan-asr-websocket"
+		capability.endpointShape === "agentplan-asr-websocket" && !capability.supportsChunking
 			? "实时音频：单连接持续发送"
 			: capability.supportsChunking
 				? "长音频分段：支持"
