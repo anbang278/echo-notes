@@ -11,6 +11,7 @@ export interface TranscriptionSegmentRange {
 export interface TranscriptionSegment extends TranscriptionSegmentRange {
 	text: string;
 	traceId?: string;
+	utterances?: TranscriptionUtterance[];
 }
 
 export interface TranscriptionUtterance {

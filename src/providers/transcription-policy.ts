@@ -41,6 +41,17 @@ const SILICONFLOW_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
 	maxSplitDepth: 4
 };
 
+const MOSI_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
+	provider: "mosi",
+	supportsChunking: true,
+	maxSourceDurationSeconds: 3 * 60,
+	targetSegmentSeconds: 3 * 60,
+	minSegmentSeconds: 30,
+	retryableHttpStatuses: RETRYABLE_SERVER_STATUSES,
+	retryDelaysMs: DEFAULT_RETRY_DELAYS_MS,
+	maxSplitDepth: 4
+};
+
 const EXACT_MODEL_POLICIES: ProviderTranscriptionPolicy[] = [
 	{
 		...SILICONFLOW_POLICY,
@@ -59,6 +70,10 @@ const EXACT_MODEL_POLICIES: ProviderTranscriptionPolicy[] = [
 		retryableHttpStatuses: [],
 		retryDelaysMs: [],
 		maxSplitDepth: 0
+	},
+	{
+		...MOSI_POLICY,
+		model: "moss-transcribe-diarize"
 	}
 ];
 
@@ -74,6 +89,9 @@ const PROVIDER_POLICIES: Partial<Record<OfflineTranscriptionProviderId, Provider
 		retryableHttpStatuses: [],
 		retryDelaysMs: [],
 		maxSplitDepth: 0
+	},
+	mosi: {
+		...MOSI_POLICY
 	}
 };
 

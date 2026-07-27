@@ -60,7 +60,8 @@ import {
 	buildMosiMultipartBody,
 	buildMosiTranscriptionsUrl,
 	createMosiHttpError,
-	normalizeMosiTranscriptionResponse
+	normalizeMosiTranscriptionResponse,
+	offsetMosiUtterances
 } from "../src/providers/mosi-protocol";
 import {
 	AGENTPLAN_RESOURCE_ID,
@@ -676,6 +677,17 @@ const chunkPipelineResult = await runAudioChunkPipeline({
 	transcribeChunk: async (chunk) => ({
 		text: ` 第 ${chunk.index} 段 `,
 		traceId: `trace-${chunk.index}`,
+		utterances:
+			chunk.index === 1
+				? [
+						{
+							speakerId: "S01",
+							text: "第一段说话。",
+							startSeconds: 0,
+							endSeconds: 5
+						}
+					]
+				: undefined,
 		raw: { index: chunk.index }
 	}),
 	onProgress: (progress) => {
@@ -705,6 +717,7 @@ assert.deepEqual(chunkPipelineEvents, [
 assert.equal(chunkPipelineResult.text, "第 1 段\n\n第 2 段");
 assert.equal(chunkPipelineResult.traceId, "trace-1, trace-2");
 assert.equal(chunkPipelineResult.segments[1].startSeconds, 180);
+assert.equal(chunkPipelineResult.segments[0].utterances?.[0].speakerId, "S01");
 assert.deepEqual(chunkPipelineResult.rawSegments, [{ index: 1 }, { index: 2 }]);
 assert.deepEqual(chunkPipelineChunks.map((chunk) => chunk.audioBuffer.byteLength), [0, 0]);
 
@@ -732,6 +745,35 @@ assert.equal(
 	}).targetSegmentSeconds,
 	180
 );
+const mosiPolicy = resolveProviderTranscriptionPolicy({
+	provider: "mosi",
+	model: "moss-transcribe-diarize"
+});
+assert.equal(mosiPolicy.supportsChunking, true);
+assert.equal(mosiPolicy.maxSourceDurationSeconds, 180);
+assert.equal(mosiPolicy.targetSegmentSeconds, 180);
+assert.equal(mosiPolicy.minSegmentSeconds, 30);
+assert.deepEqual(mosiPolicy.retryableHttpStatuses, [500, 502, 503, 504]);
+assert.deepEqual(mosiPolicy.retryDelaysMs, [1000, 3000]);
+assert.equal(mosiPolicy.maxSplitDepth, 4);
+assert.equal(
+	shouldPreChunkTranscription({
+		policy: mosiPolicy,
+		sourceBytes: 1,
+		durationSeconds: 181
+	}),
+	true
+);
+assert.equal(
+	shouldPreChunkTranscription({
+		policy: mosiPolicy,
+		sourceBytes: 100 * 1024 * 1024,
+		durationSeconds: 180
+	}),
+	false
+);
+assert.equal(shouldSplitPolicyError(mosiPolicy, 500), true);
+assert.equal(shouldSplitPolicyError(mosiPolicy, 429), false);
 assert.equal(
 	resolveProviderTranscriptionPolicy({
 		provider: "openai",
@@ -1057,6 +1099,36 @@ const renderedSegments = renderTranscriptionSegments(transcriptSegments, "zh");
 assert.match(renderedSegments, /## 分段 01（00:00-03:00）/);
 assert.match(renderedSegments, /<!-- trace_id: trace-1 -->/);
 assert.match(renderedSegments, /## 分段 02（03:00-05:21）/);
+const renderedDiarizedSegments = renderTranscriptionSegments(
+	[
+		{
+			index: 1,
+			total: 2,
+			startSeconds: 0,
+			endSeconds: 180,
+			text: "第一段",
+			utterances: [
+				{ speakerId: "S01", text: "第一段发言。", startSeconds: 2, endSeconds: 8 }
+			]
+		},
+		{
+			index: 2,
+			total: 2,
+			startSeconds: 180,
+			endSeconds: 360,
+			text: "第二段",
+			utterances: [
+				{ speakerId: "S99", text: "第二段发言。", startSeconds: 183, endSeconds: 190 }
+			]
+		}
+	],
+	"zh",
+	"speaker-with-time"
+);
+assert.match(renderedDiarizedSegments, /说话人编号仅在各分段内有效/);
+assert.equal((renderedDiarizedSegments.match(/\*\*说话人 1/g) ?? []).length, 2);
+assert.doesNotMatch(renderedDiarizedSegments, /\*\*说话人 2/);
+assert.match(renderedDiarizedSegments, /\*\*说话人 1（03:03-03:10）\*\*/);
 
 const segmentedTranscript = renderTranscriptTemplate({
 	app: templateApp as never,
@@ -1356,11 +1428,15 @@ assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supports
 assert.equal(getTranscriptionProviderCapability("volcengine-agentplan").supportsSpeakerDiarization, true);
 assert.equal(getTranscriptionProviderCapability("mosi").uploadMode, "multipart");
 assert.equal(getTranscriptionProviderCapability("mosi").endpointShape, "mosi-diarization");
-assert.equal(getTranscriptionProviderCapability("mosi").supportsChunking, false);
+assert.equal(getTranscriptionProviderCapability("mosi").supportsChunking, true);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsLanguage, false);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsTimestamp, true);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsSpeakerDiarization, true);
 assert.equal(getTranscriptionProviderCapability("mosi").supportsStreaming, false);
+assert.equal(
+	getTranscriptionProviderCapability("mosi").transcriptionPolicy?.targetSegmentSeconds,
+	180
+);
 assert.equal(getTranscriptionProviderCapability("openai").endpointShape, "chat-audio");
 assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "chat-audio");
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
@@ -1420,8 +1496,17 @@ assert.deepEqual(normalizedMosiResponse.utterances, [
 	{ speakerId: "S01", text: "第一位发言。", startSeconds: 0, endSeconds: 1.5 },
 	{ speakerId: "S02", text: "第二位回答。", startSeconds: 1.5, endSeconds: 3.5 }
 ]);
+assert.deepEqual(offsetMosiUtterances(normalizedMosiResponse.utterances, 180), [
+	{ speakerId: "S01", text: "第一位发言。", startSeconds: 180, endSeconds: 181.5 },
+	{ speakerId: "S02", text: "第二位回答。", startSeconds: 181.5, endSeconds: 183.5 }
+]);
+assert.equal(offsetMosiUtterances(undefined, 180), undefined);
 assert.deepEqual(normalizeMosiTranscriptionResponse({ text: "单人回退正文", segments: [] }), {
 	text: "单人回退正文",
+	utterances: undefined
+});
+assert.deepEqual(normalizeMosiTranscriptionResponse({ text: "", segments: [] }), {
+	text: "",
 	utterances: undefined
 });
 assert.throws(
@@ -1440,8 +1525,16 @@ const mosiFileTooLargeError = createMosiHttpError(413, "request entity too large
 assert.equal(mosiFileTooLargeError.code, "file_too_large");
 assert.equal(mosiFileTooLargeError.httpStatus, 413);
 assert.equal(mosiFileTooLargeError.traceId, "mosi-trace-413");
-assert.match(mosiFileTooLargeError.message, /音频文件过大/);
+assert.match(mosiFileTooLargeError.message, /音频过长或文件过大/);
 assert.doesNotMatch(mosiFileTooLargeError.message, /\d+\s*(MB|GB)/i);
+const mosiAudioTooLongError = createMosiHttpError(
+	400,
+	"InternalError.Algo.InvalidParameter: The audio is too long",
+	"mosi-trace-400"
+);
+assert.equal(mosiAudioTooLongError.code, "file_too_large");
+assert.equal(mosiAudioTooLongError.httpStatus, 400);
+assert.equal(createMosiHttpError(500, "server error").code, "api_error");
 assert.equal(createMosiHttpError(401, "unauthorized").code, "authentication_failed");
 assert.equal(createMosiHttpError(429, "rate limited").code, "rate_limited");
 assert.equal(mapAgentPlanLanguage("zh"), "zh-CN");
@@ -2114,7 +2207,7 @@ const mosiDiagnostics = diagnoseTranscriptionProviderSettings(
 	"mosi-valid"
 );
 assert.equal(mosiDiagnostics.canAttemptTranscription, true);
-assert.ok(mosiDiagnostics.items.some((item) => item.title === "MOSI 同步多说话人转写"));
+assert.ok(mosiDiagnostics.items.some((item) => item.title === "MOSI 长音频渐进转写"));
 const invalidMosiDiagnostics = diagnoseTranscriptionProviderSettings(
 	{
 		provider: "mosi",

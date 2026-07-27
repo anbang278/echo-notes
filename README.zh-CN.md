@@ -118,7 +118,7 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL。
 
-离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会把完整音频以 multipart 方式上传到 `api.mosi.cn`，同步请求非流式说话人分离，并把返回的说话人编号和时间范围写入本地转写稿。实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
+离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，同步请求非流式说话人分离；超过 3 分钟的文件会先在本地解码成约 3 分钟一段的 16 kHz mono WAV，每完成一段立即写回同一份转写稿，Vault 中不会生成临时分段文件。实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
 
 AgentPlan 和 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 分析时使用其专属 Chat API 和套餐额度。转写和分析 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿或日志。转写稿、录音和 AI 纪要内容保存在你的 Obsidian Vault。
 
@@ -142,7 +142,7 @@ AgentPlan 和 MOSI 返回的说话人编号只能区分声音，不能识别真�
 - 自动重试和缩段会产生额外 Provider 请求，但不会自动切换 Provider、API Key 或模型。已经成功的分段不会重传，失败时会保留已写入正文、Trace ID 和失败时间范围。
 - 限制与模型列表以[硅基流动转写接口文档](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions)为准。
 - 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
-- MOSI `moss-transcribe-diarize`：Echo Notes 使用官方同步非流式 multipart 请求，固定传入 `diarize=true` 和版本 `moss-transcribe-diarize-20260325`。MOSI 未公布稳定的文件大小上限，Echo Notes 会整文件上传、不自动分段，并明确报告 `413` 等服务端错误；详见 [MOSI 转写接口文档](https://platform.mosi.cn/docs/reference/transcriptions)。
+- MOSI `moss-transcribe-diarize`：Echo Notes 使用官方同步非流式 multipart 请求，固定传入 `diarize=true` 和版本 `moss-transcribe-diarize-20260325`。超过 3 分钟时在本地切成约 3 分钟的 WAV 分段并逐段回写；HTTP `500/502/503/504` 按 1 秒、3 秒重试，仍失败、收到 `413` 或明确过长/过大响应时，只缩小当前失败段，最短 30 秒、最多四层。MOSI 未公布稳定的文件大小上限；详见 [MOSI 转写接口文档](https://platform.mosi.cn/docs/reference/transcriptions)。
 - Ollama 和 LM Studio：超过 25 MB 的文件会在上传前被阻止。
 
 能力矩阵：
@@ -152,10 +152,10 @@ AgentPlan 和 MOSI 返回的说话人编号只能区分声音，不能识别真�
 | 火山引擎 AgentPlan `doubao-seed-asr-2.0` | 麦克风 PCM 鉴权优化双流 WebSocket | `/api/v3/plan/sauc/bigmodel_async` | 仅桌面端、本地文件系统 Vault | 不分段，单实时会话 | 中文或 auto | utterance 级支持 | 支持 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
 | 硅基流动 `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
-| MOSI `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 暂不支持 | 暂不支持 | segment 级支持 | 支持 |
+| MOSI `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | segment 级支持 | 支持 |
 | Ollama 和 LM Studio | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
-长音频分段只属于离线流程，目前适用于阿里百炼 `qwen3-asr-flash` 和硅基流动的官方或自定义转写模型。极端超长音频仍需由 Web Audio 在本地完整解码，可能受设备可用内存限制；解码失败会保留转写草稿并给出明确错误，不会安装或调用 FFmpeg。实时 AgentPlan 会话直接消费麦克风 PCM：约每 500 ms 合并刷新临时文字，新增确定分句、停止、完成或失败时强制落盘。AgentPlan 中断后本地录音继续；停止时任务中心会提供离线重试，但不会自动上传。离线分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。
+长音频分段只属于离线流程，目前适用于阿里百炼 `qwen3-asr-flash`、硅基流动的官方或自定义转写模型，以及 MOSI。极端超长音频仍需由 Web Audio 在本地完整解码，可能受设备可用内存限制；解码失败会保留转写草稿并给出明确错误，不会安装或调用 FFmpeg。实时 AgentPlan 会话直接消费麦克风 PCM：约每 500 ms 合并刷新临时文字，新增确定分句、停止、完成或失败时强制落盘。AgentPlan 中断后本地录音继续；停止时任务中心会提供离线重试，但不会自动上传。离线分段 transcript 会保留类似 `## 分段 01（00:00-03:00）` 的标题，方便回听核对原录音位置。由于独立 MOSI 请求不能保证说话人 ID 跨段稳定，说话人编号会在每个分段内重新开始，时间范围仍对应原音频的绝对时间。
 
 默认转写语言只会发送给支持语言参数的 Provider，例如阿里百炼、Ollama 和 LM Studio。AgentPlan 说话人分离只使用中文或省略 language；选择其他语言时会自动切换为 `auto`。Echo Notes 不会向 SiliconFlow 或 MOSI 发送 language 字段，由服务端自动识别音频语言。
 

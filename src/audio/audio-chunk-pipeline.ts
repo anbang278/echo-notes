@@ -1,7 +1,8 @@
 import type {
 	TranscriptionProgress,
 	TranscriptionSegment,
-	TranscriptionSegmentRange
+	TranscriptionSegmentRange,
+	TranscriptionUtterance
 } from "../providers/transcription-provider";
 
 export interface AudioChunk extends TranscriptionSegmentRange {
@@ -12,6 +13,7 @@ export interface AudioChunk extends TranscriptionSegmentRange {
 export interface AudioChunkTranscriptionResult<RawResponse = unknown> {
 	text: string;
 	traceId?: string;
+	utterances?: TranscriptionUtterance[];
 	raw: RawResponse;
 }
 
@@ -79,7 +81,8 @@ export async function runAudioChunkPipeline<Chunk extends AudioChunk, RawRespons
 			startSeconds: chunk.startSeconds,
 			endSeconds: chunk.endSeconds,
 			text: result.text,
-			traceId: result.traceId
+			traceId: result.traceId,
+			utterances: result.utterances
 		};
 		completedSegments.push(segment);
 		rawSegments.push(result.raw);
@@ -205,7 +208,8 @@ export async function runAdaptiveAudioChunkPipeline<Chunk extends AudioChunk, Ra
 				startSeconds: chunk.startSeconds,
 				endSeconds: chunk.endSeconds,
 				text: result.text,
-				traceId: result.traceId
+				traceId: result.traceId,
+				utterances: result.utterances
 			};
 			completedSegments.push(segment);
 			rawSegments.push(result.raw);

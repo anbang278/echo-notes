@@ -184,9 +184,9 @@ export function diagnoseTranscriptionProviderSettings(
 	if (providerId === "mosi") {
 		items.push({
 			severity: "info",
-			title: "MOSI 同步多说话人转写",
+			title: "MOSI 长音频渐进转写",
 			detail:
-				"Echo Notes 会以 multipart 上传完整音频，固定启用 diarize 并返回说话人时间段；不会发送语言、stream 或 async 参数。"
+				"3 分钟以内使用单次同步请求；超过 3 分钟会在本地按约 3 分钟切成 WAV 分段，每完成一段立即回写。分段请求的说话人编号仅在本段有效，时间保持原音频绝对时间；请求仍固定启用 diarize，不发送 language、stream 或 async 参数。"
 		});
 	}
 

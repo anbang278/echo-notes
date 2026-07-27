@@ -99,10 +99,6 @@ export function normalizeMosiTranscriptionResponse(data: unknown): NormalizedMos
 	}
 
 	const text = data.text.trim() || utterances.map((utterance) => utterance.text).join("");
-	if (!text) {
-		throw new TranscriptionError("invalid_response", "MOSI API 响应中没有可用的转写文本。");
-	}
-
 	return {
 		text,
 		utterances: utterances.length > 0 ? utterances : undefined
@@ -114,16 +110,37 @@ export function createMosiHttpError(
 	responseText: string,
 	traceId?: string
 ): TranscriptionError {
-	if (status === 413) {
+	if (status === 413 || isMosiSizeOrDurationError(responseText)) {
 		return new TranscriptionError(
 			"file_too_large",
-			"MOSI 拒绝了上传：音频文件过大（HTTP 413）。官方未公布稳定大小上限，请缩短或压缩音频后重试。",
+			`MOSI 拒绝了上传：音频过长或文件过大（HTTP ${status}）。官方未公布稳定上限，Echo Notes 将尝试缩小当前分段。`,
 			traceId,
 			status
 		);
 	}
 
 	return createHttpTranscriptionError("MOSI", status, responseText, traceId);
+}
+
+export function offsetMosiUtterances(
+	utterances: TranscriptionUtterance[] | undefined,
+	offsetSeconds: number
+): TranscriptionUtterance[] | undefined {
+	if (!utterances || utterances.length === 0) {
+		return undefined;
+	}
+
+	return utterances.map((utterance) => ({
+		...utterance,
+		startSeconds:
+			utterance.startSeconds === undefined
+				? undefined
+				: utterance.startSeconds + offsetSeconds,
+		endSeconds:
+			utterance.endSeconds === undefined
+				? undefined
+				: utterance.endSeconds + offsetSeconds
+	}));
 }
 
 type MultipartPart =
@@ -188,4 +205,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidTimestamp(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isMosiSizeOrDurationError(responseText: string): boolean {
+	return /audio.{0,24}too long|file.{0,24}too large|request entity too large|payload too large|exceeds?.{0,24}(limit|maximum)/i.test(
+		responseText
+	);
 }

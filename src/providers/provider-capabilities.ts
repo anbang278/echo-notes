@@ -114,7 +114,7 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 	},
 	mosi: {
 		maxAudioBytes: null,
-		supportsChunking: false,
+		supportsChunking: true,
 		supportsLanguage: false,
 		supportsTimestamp: true,
 		supportsSpeakerDiarization: true,
@@ -122,10 +122,17 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		uploadMode: "multipart",
 		endpointShape: "mosi-diarization",
 		recommendedModels: ["moss-transcribe-diarize"],
+		transcriptionPolicy: {
+			targetSegmentSeconds: 3 * 60,
+			minSegmentSeconds: 30,
+			retryableHttpStatuses: [500, 502, 503, 504],
+			maxSplitDepth: 4
+		},
 		notes: [
 			"使用 MOSI 官方同步非流式多说话人转写接口，固定开启 diarize 并显式使用已验证的模型版本。",
-			"返回的说话人编号和分段时间会映射为 Echo Notes 说话人段落；编号不能识别真实姓名。",
-			"官方未公布稳定的文件大小上限，Echo Notes 不自动分段；实际限制以服务端错误码为准。"
+			"超过 3 分钟时会在本地解码为约 3 分钟一段的 16 kHz mono WAV，并在每段完成后立即回写。",
+			"独立请求的说话人编号只在当前分段内有效；时间范围会偏移到原音频的绝对时间轴。",
+			"官方未公布稳定的文件大小上限；HTTP 500/502/503/504 重试后仍失败、收到 413 或明确过长错误时，只缩小当前失败段。"
 		]
 	},
 	...openAICompatibleCapabilities

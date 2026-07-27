@@ -163,18 +163,33 @@ export function renderProgressTranscriptTemplate(input: ProgressTranscriptTempla
 	].join("\n");
 }
 
-export function renderTranscriptionSegments(segments: TranscriptionSegment[], copyLanguage: CopyLanguage): string {
+export function renderTranscriptionSegments(
+	segments: TranscriptionSegment[],
+	copyLanguage: CopyLanguage,
+	speakerLabelStyle: AgentPlanSpeakerLabelStyle = "speaker-with-time"
+): string {
 	const copy = getLocalizedCopy(copyLanguage);
-	return segments
+	const segmentBody = segments
 		.map((segment) =>
 			[
 				`## ${copy.segmentHeadingPrefix} ${segment.index.toString().padStart(2, "0")}（${formatSegmentTimeRange(segment)}）`,
 				...(segment.traceId ? [`<!-- trace_id: ${escapeHtmlComment(segment.traceId)} -->`] : []),
 				"",
-				segment.text.trim() || copy.emptySegmentText
+				segment.utterances && segment.utterances.length > 0
+					? renderTranscriptionUtterances(
+							segment.utterances,
+							copyLanguage,
+							speakerLabelStyle
+						)
+					: segment.text.trim() || copy.emptySegmentText
 			].join("\n")
 		)
 		.join("\n\n");
+	if (!segments.some((segment) => segment.utterances && segment.utterances.length > 0)) {
+		return segmentBody;
+	}
+
+	return `> ${copy.segmentSpeakerScopeNotice}\n\n${segmentBody}`;
 }
 
 export function renderTranscriptionUtterances(
@@ -297,7 +312,7 @@ function renderTranscriptionBody(
 	}
 
 	if (result.segments && result.segments.length > 0) {
-		return renderTranscriptionSegments(result.segments, copyLanguage);
+		return renderTranscriptionSegments(result.segments, copyLanguage, speakerLabelStyle);
 	}
 
 	return result.text.trim();
@@ -331,9 +346,13 @@ function joinUtteranceText(left: string, right: string): string {
 	return `${left}${separator}${right}`;
 }
 
-function renderSegmentsOrEmpty(segments: TranscriptionSegment[], copyLanguage: CopyLanguage): string {
+function renderSegmentsOrEmpty(
+	segments: TranscriptionSegment[],
+	copyLanguage: CopyLanguage,
+	speakerLabelStyle: AgentPlanSpeakerLabelStyle = "speaker-with-time"
+): string {
 	if (segments.length > 0) {
-		return renderTranscriptionSegments(segments, copyLanguage);
+		return renderTranscriptionSegments(segments, copyLanguage, speakerLabelStyle);
 	}
 
 	return getLocalizedCopy(copyLanguage).emptySegmentText;
@@ -373,7 +392,11 @@ function renderProgressBody(input: ProgressTranscriptTemplateInput): string {
 	} else if (state?.text.trim()) {
 		stable = state.text.trim();
 	} else {
-		stable = renderSegmentsOrEmpty(input.segments, input.copyLanguage);
+		stable = renderSegmentsOrEmpty(
+			input.segments,
+			input.copyLanguage,
+			input.speakerLabelStyle
+		);
 	}
 	if (!provisional) {
 		return stable;
@@ -396,7 +419,11 @@ function renderInterruptedBody(input: FailedTranscriptTemplateInput): string {
 	if (state?.text.trim()) {
 		return state.text.trim();
 	}
-	return renderSegmentsOrEmpty(input.segments ?? [], input.copyLanguage);
+	return renderSegmentsOrEmpty(
+		input.segments ?? [],
+		input.copyLanguage,
+		input.speakerLabelStyle
+	);
 }
 
 function formatProgressTime(seconds: number): string {

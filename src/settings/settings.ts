@@ -740,6 +740,7 @@ export interface LocalizedCopy {
 	transcribingNotice: string;
 	partialFailureNotice: string;
 	segmentHeadingPrefix: string;
+	segmentSpeakerScopeNotice: string;
 	emptySegmentText: string;
 	speakerLabel: string;
 	analysisLinksHeading: string;
@@ -764,6 +765,7 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		transcribingNotice: "音频正在转写，已完成的内容会持续写入本文档。",
 		partialFailureNotice: "音频转写已中断，以下为中断前已完成的内容。",
 		segmentHeadingPrefix: "分段",
+		segmentSpeakerScopeNotice: "长音频由多个独立请求处理，说话人编号仅在各分段内有效；时间范围对应原音频。",
 		emptySegmentText: "（本段暂无转写内容）",
 		speakerLabel: "说话人",
 		analysisLinksHeading: "纪要分析",
@@ -786,6 +788,8 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		transcribingNotice: "Transcription is running. Completed content is written here as it becomes available.",
 		partialFailureNotice: "Transcription stopped. Content completed before the interruption is kept below.",
 		segmentHeadingPrefix: "Segment",
+		segmentSpeakerScopeNotice:
+			"Long audio is processed in separate requests. Speaker numbers reset in each segment; time ranges refer to the original audio.",
 		emptySegmentText: "(No transcript text for this segment yet.)",
 		speakerLabel: "Speaker",
 		analysisLinksHeading: "Analysis",
