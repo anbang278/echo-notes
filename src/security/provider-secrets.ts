@@ -1,4 +1,8 @@
-import type { AnalysisProviderId, TranscriptionProviderId } from "../settings/settings";
+import type {
+	AnalysisProviderId,
+	RemovedAnalysisProviderId,
+	TranscriptionProviderId
+} from "../settings/settings";
 
 const TRANSCRIPTION_SECRET_PREFIX = "echo-notes-transcription-api-key";
 const ANALYSIS_SECRET_PREFIX = "echo-notes-analysis-api-key";
@@ -14,6 +18,26 @@ export function getTranscriptionApiKeySecretId(provider: TranscriptionProviderId
 
 export function getAnalysisApiKeySecretId(provider: AnalysisProviderId): string {
 	return `${ANALYSIS_SECRET_PREFIX}-${provider}`;
+}
+
+export function getRemovedAnalysisApiKeySecretId(provider: RemovedAnalysisProviderId): string {
+	return `${ANALYSIS_SECRET_PREFIX}-${provider}`;
+}
+
+export function migrateSecretIfTargetEmpty(
+	secretStorage: SecretStorageLike,
+	sourceSecretId: string,
+	targetSecretId: string
+): boolean {
+	const sourceSecret = secretStorage.getSecret(sourceSecretId)?.trim() ?? "";
+	const targetSecret = secretStorage.getSecret(targetSecretId)?.trim() ?? "";
+	if (!sourceSecret || targetSecret) {
+		return false;
+	}
+
+	secretStorage.setSecret(targetSecretId, sourceSecret);
+	secretStorage.setSecret(sourceSecretId, "");
+	return true;
 }
 
 export function migrateLegacySecret(

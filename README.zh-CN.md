@@ -56,7 +56,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 在设置页选择“实时转写”或“离线转写”，两种模式使用相互隔离的 Provider 配置。
 - 实时模式由 Echo Notes 独立采集麦克风，立即创建 WebM 录音附件和 `.transcript.md`，并持续写入临时文字、确定分句、说话人和时间范围。
 - AgentPlan 连接失败时继续保存本地录音和已经确定的正文，停止后可在任务中心手动选择“使用离线 Provider 重试”，不会自动产生第二次调用费用。
-- 离线模式支持火山引擎 AgentPlan 录音文件极速版，以及阿里百炼、硅基流动、MOSI、Ollama 和 LM Studio，用于转写 Vault 中已有音频。
+- 离线模式支持阿里百炼、硅基流动、MOSI、Ollama 和 LM Studio，用于转写 Vault 中已有音频。
 - 转写当前笔记中选中的音频链接。
 - 扫描并转写当前笔记中的全部支持音频链接。
 - 生成带 source metadata 的 Markdown 转写稿。
@@ -90,18 +90,17 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 离线转写 Provider：
 
-- 火山引擎 AgentPlan：固定使用 `doubao-seed-asr-2.0` 和官方录音文件极速版 HTTP 端点；整段录音通过一个请求高速上传，需要为 Key 单独开通 `volc.bigasr.auc_turbo`
-- 【免费】硅基流动（SiliconFlow）：官方模型可选 `FunAudioLLM/SenseVoiceSmall`、`TeleAI/TeleSpeechASR`，也可填写自定义模型 ID
 - 阿里百炼（Alibaba Bailian）：默认模型 `qwen3-asr-flash`
+- 【免费】硅基流动（SiliconFlow）：官方模型可选 `FunAudioLLM/SenseVoiceSmall`、`TeleAI/TeleSpeechASR`，也可填写自定义模型 ID
 - MOSI（可选说话人分离）：可在普通转写 `moss-transcribe` 与多说话人转写 `moss-transcribe-diarize` 之间切换
 - Ollama：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
 - LM Studio：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
 
-AgentPlan 的官方 Base URL 和模型在两种模式中均只读：实时配置固定为 `bigmodel_async`，离线配置固定为录音文件极速版 HTTP 端点，切换模式不会互相覆盖；两种 ASR 模式复用同一个 AgentPlan 专属 API Key，但离线 Key 还必须具有 `volc.bigasr.auc_turbo` 资源权限。MOSI 的官方 Base URL 也保持只读，模型由“说话人分离”开关自动派生：开启时使用 `moss-transcribe-diarize`，关闭时使用 `moss-transcribe`。其他离线 Provider 的默认值仍可修改。设置页会根据当前模式展示相应语言、麦克风或离线 Provider 配置，以及接口形态、大小限制、分段、时间戳和说话人分离能力。
+AgentPlan 实时转写的官方 `bigmodel_async` Base URL 和模型保持只读。MOSI 的官方 Base URL 也保持只读，模型由“说话人分离”开关自动派生：开启时使用 `moss-transcribe-diarize`，关闭时使用 `moss-transcribe`。其他离线 Provider 的默认值仍可修改。设置页会根据当前模式展示相应语言、麦克风或离线 Provider 配置，以及接口形态、大小限制、分段、时间戳和说话人分离能力。
 
 设置页还提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
 
-AI 纪要分析使用独立配置，默认仍是阿里百炼 `deepseek-v4-pro`，调用 OpenAI-compatible `/chat/completions` 接口。分析 Provider 也支持火山引擎 AgentPlan：选择后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
+AI 纪要分析按顺序支持硅基流动、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
 
 AgentPlan 套餐官方限定文本生成与向量化能力用于 AI 工具场景。使用 Echo Notes 接入前，请确认你的使用方式符合当前套餐规则；在非 AI 工具或不符合规则的场景中使用专属 Base URL 和 API Key，可能触发订阅停用或账号限制。
 
@@ -113,18 +112,17 @@ Echo Notes 只在触发转写或 AI 纪要分析时发起网络请求。
 - 阿里百炼默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - MOSI 转写地址：`https://api.mosi.cn/v1/audio/transcriptions`
 - 火山引擎 AgentPlan 实时 ASR 地址：`wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
-- 火山引擎 AgentPlan 离线极速 ASR 地址：`https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash`
 - 火山引擎 AgentPlan 文本分析地址：`https://ark.cn-beijing.volces.com/api/plan/v3`
 - Ollama 转写默认地址：`http://localhost:11434/v1`
 - LM Studio 转写默认地址：`http://localhost:1234/v1`
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
 - 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL。
 
-离线转写会把所选音频发送到当前离线 Provider。选择 AgentPlan 时，Echo Notes 使用[火山录音文件极速版 HTTP 接口](https://docs.volcengine.com/docs/6561/1631584?lang=zh)：WAV、MP3、OGG Opus 优先直接上传，M4A、MP4、WebM 会先在本地转换为 16 kHz、16-bit、mono WAV。完整音频会编码为 Base64 JSON 并立即发起一次请求，不再按 200 ms 实时节奏等待；接口不返回中间识别正文，请求完成后才一次性写入最终稿。单次音频最多 2 小时且音频数据不超过 100 MB，Base64 编码还会额外占用本地内存。网络错误、服务繁忙或限流只会在等待 1 秒后完整重试一次；鉴权、额度、参数和无效响应错误不重试，所有 `X-Tt-Logid` 都会保留用于排查。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求；开启说话人分离时请求说话人和时间范围，关闭时只请求普通正文。Vault 中不会生成临时分段文件。
+离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求；开启说话人分离时请求说话人和时间范围，关闭时只请求普通正文。Vault 中不会生成临时分段文件。
 
 实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
 
-AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。离线 AgentPlan 只写入一次最终的请求级统一说话人聚类结果和绝对时间轴；MOSI 的说话人编号仍只在每个独立分段内有效。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 分析时使用其专属 Chat API 和套餐额度。转写和分析 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿或日志。转写稿、录音和 AI 纪要内容保存在你的 Obsidian Vault。
+实时 AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。MOSI 的说话人编号只在每个独立分段内有效。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 分析时使用其专属 Chat API 和套餐额度。转写和分析 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿或日志。转写稿、录音和 AI 纪要内容保存在你的 Obsidian Vault。
 
 如果在设置页开启“手动转写前确认上传”，Echo Notes 会在手动转写上传前显示确认弹窗，列出 Provider、Base URL、模型、文件大小和 HTTP 风险提示。开启该模式后，自动化转写会跳过需要确认的上传，避免后台未经确认发送音频。
 
@@ -141,7 +139,7 @@ AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区�
 
 服务商限制：
 
-- 火山引擎 AgentPlan `doubao-seed-asr-2.0`：实时模式固定使用 `bigmodel_async`，要求 Obsidian 桌面端和本地文件系统 Vault；离线模式使用录音文件极速版 HTTP 和资源 `volc.bigasr.auc_turbo`，单次音频最多 2 小时且音频数据不超过 100 MB。WAV、MP3、OGG Opus 优先直接上传，其他受支持格式转换为一个 16 kHz mono WAV；接口只返回最终结果，不提供中间正文。两种模式都始终开启说话人聚类，并复用同一个 AgentPlan 专属 API Key；普通方舟 API Key 不可混用。
+- 火山引擎 AgentPlan `doubao-seed-asr-2.0`：实时模式固定使用 `bigmodel_async`，要求 Obsidian 桌面端和本地文件系统 Vault，并始终开启说话人聚类与 utterance 时间范围；普通方舟 API Key 不可混用。
 - 硅基流动：单次音频必须同时不超过 50 MB 和 1 小时；超过任一限制时，会先在本地解码并转换为约 10 分钟一段的 16 kHz mono WAV，再按顺序逐段转写。读取不到媒体时长时仍会先按文件大小判断并尝试正常请求。
 - 小音频遇到 HTTP `500/502/503/504` 时会按 1 秒、3 秒退避重试；仍失败则自动进入分段。单个分段持续失败时只二分该段，`413` 会直接触发二分，最短 60 秒、最多四层；鉴权、额度、限流和模型错误不会拆分。
 - 自动重试和缩段会产生额外 Provider 请求，但不会自动切换 Provider、API Key 或模型。已经成功的分段不会重传，失败时会保留已写入正文、Trace ID 和失败时间范围。
@@ -155,13 +153,12 @@ AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区�
 | Provider 类型 | 上传方式 | 接口形态 | 限制 | Echo Notes 分段 | 语言参数 | 时间戳 | 说话人分离 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 火山引擎 AgentPlan 实时 `doubao-seed-asr-2.0` | 麦克风 PCM 鉴权优化双流 WebSocket | `/api/v3/plan/sauc/bigmodel_async` | 仅桌面端、本地文件系统 Vault | 不分段，单实时会话 | 中文或 auto | utterance 级支持 | 支持 |
-| 火山引擎 AgentPlan 离线 `doubao-seed-asr-2.0` | 鉴权极速 HTTP Base64 JSON | `/api/v3/auc/bigmodel/recognize/flash` | 100 MB 音频数据、2 小时；需 `volc.bigasr.auc_turbo` | 不分段；整段立即上传 | 中文或 auto | utterance 级，绝对时间轴 | 支持；本次请求统一聚类 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
 | 硅基流动 `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
 | MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | 仅分离模式支持 segment 级时间 | 可选 |
 | Ollama 和 LM Studio | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
-长音频分段只属于离线流程，目前适用于阿里百炼 `qwen3-asr-flash`、硅基流动的官方或自定义转写模型，以及 MOSI。AgentPlan 离线不分段，而是立即发起一次整文件极速 HTTP 请求，并在完成后一次性写入请求级最终结果。M4A、MP4、WebM 仍需由 Web Audio 在本地完整解码，可能受设备可用内存限制；Echo Notes 不会安装或调用 FFmpeg。实时 AgentPlan 会话直接消费麦克风 PCM：约每 500 ms 合并刷新临时文字，新增确定分句、停止、完成或失败时强制落盘。AgentPlan 中断后本地录音继续；停止时任务中心会提供离线重试，但不会自动上传。MOSI 分段稿继续保留类似 `## 分段 01（00:00-03:00）` 的标题；开启说话人分离时编号会在每个分段内重新开始，时间范围仍对应原音频的绝对时间，普通模式不输出说话人标签。
+长音频分段只属于离线流程，目前适用于阿里百炼 `qwen3-asr-flash`、硅基流动的官方或自定义转写模型，以及 MOSI。M4A、MP4、WebM 仍需由 Web Audio 在本地完整解码，可能受设备可用内存限制；Echo Notes 不会安装或调用 FFmpeg。实时 AgentPlan 会话直接消费麦克风 PCM：约每 500 ms 合并刷新临时文字，新增确定分句、停止、完成或失败时强制落盘。AgentPlan 中断后本地录音继续；停止时任务中心会提供离线重试，但不会自动上传。MOSI 分段稿继续保留类似 `## 分段 01（00:00-03:00）` 的标题；开启说话人分离时编号会在每个分段内重新开始，时间范围仍对应原音频的绝对时间，普通模式不输出说话人标签。
 
 默认转写语言只会发送给支持语言参数的 Provider，例如阿里百炼、Ollama 和 LM Studio。AgentPlan 说话人分离只使用中文或省略 language；选择其他语言时会自动切换为 `auto`。Echo Notes 不会向 SiliconFlow 或 MOSI 发送 language 字段，由服务端自动识别音频语言。
 
@@ -178,7 +175,7 @@ AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签�
 1. 打开 Obsidian 设置中的 Echo Notes。
 2. 在 Provider 上方选择“实时转写”或“离线转写”。新安装默认离线模式和阿里百炼。
 3. 实时模式：填写 AgentPlan 专属 API Key，选择语言、说话人标签样式和麦克风；官方 Base URL 与模型只读。只有刷新麦克风或开始录音时才会申请权限。
-4. 离线模式：选择火山引擎 AgentPlan、阿里百炼、硅基流动、MOSI、Ollama 或 LM Studio，填写 API Key 并确认可用配置；AgentPlan 的极速版 Base URL 与模型只读，并与实时模式复用 AgentPlan 专属 API Key，同时需要单独开通 `volc.bigasr.auc_turbo`；MOSI 的官方 Base URL 只读，通过“说话人分离”开关切换自动派生的只读模型。
+4. 离线模式：选择阿里百炼、硅基流动、MOSI、Ollama 或 LM Studio，填写 API Key 并确认可用配置；MOSI 的官方 Base URL 只读，通过“说话人分离”开关切换自动派生的只读模型。
 5. 在“文案语言”中选择中文或英文，控制回写链接和生成文稿中的固定文案。
 
 实时命令：
@@ -194,9 +191,8 @@ AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签�
 | 服务商 | Base URL | Model | 默认语言 |
 | --- | --- | --- | --- |
 | 火山引擎 AgentPlan（实时） | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
-| 火山引擎 AgentPlan（离线） | `https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash` | `doubao-seed-asr-2.0` | `zh` |
-| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
+| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | 默认 `moss-transcribe-diarize`；关闭后 `moss-transcribe` | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
 | LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |
@@ -218,9 +214,9 @@ Obsidian `Audio recorder` Core plugin 仅用于离线流程：它停止录音后
 ## 配置 AI 纪要分析
 
 1. 在 Echo Notes 设置页打开“启用 AI 纪要分析”。
-2. 分析 Provider 默认使用 `阿里百炼`；也可选择 `火山引擎 AgentPlan`。
-3. 阿里百炼分析 Base URL 默认是 `https://dashscope.aliyuncs.com/compatible-mode/v1`。选择 AgentPlan 后，专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3` 为只读，避免误走普通方舟按量接口。
-4. 阿里百炼默认模型是 `deepseek-v4-pro`。选择 AgentPlan 后，从设置页列出的套餐文本模型中选择，默认 `doubao-seed-2.0-lite`。
+2. 分析 Provider 可选硅基流动、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 或自定义兼容接口；全局默认仍为阿里百炼。
+3. 阿里百炼分析 Base URL 默认是 `https://dashscope.aliyuncs.com/compatible-mode/v1`，硅基流动默认是 `https://api.siliconflow.cn/v1`。选择 AgentPlan 后，专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3` 为只读，避免误走普通方舟按量接口。
+4. 阿里百炼默认模型是 `deepseek-v4-pro`，硅基流动默认模型是 `Qwen/Qwen3.5-4B`。选择 AgentPlan 后，从设置页列出的套餐文本模型中选择，默认 `doubao-seed-2.0-lite`。
 5. 输入独立的分析 API Key。AgentPlan 必须使用其控制台创建的专属 API Key；分析密钥不会复用或覆盖实时转写密钥。
 6. 执行“检查分析配置”，本地验证 API Key、Base URL、HTTPS 和模型。
 7. 长会议或访谈建议保持“长文本分块分析”开启。默认每块 24,000 字符，可在 4,000～100,000 之间调整。
@@ -366,11 +362,19 @@ npm run build
 
 ## 当前限制
 
-- 火山引擎 AgentPlan 的实时和离线转写始终提供说话人分离和时间范围，MOSI 离线转写可选择开启；这些标签只能标记说话人编号，不能识别真实姓名。
-- 实时转写仅支持 Obsidian 桌面端和本地文件系统 Vault。离线 AgentPlan 使用 HTTP，不要求 `FileSystemAdapter`，但大体积 Base64 请求和本地 WAV 转换仍受设备内存限制。
+- 火山引擎 AgentPlan 实时转写始终提供说话人分离和时间范围，MOSI 离线转写可选择开启；这些标签只能标记说话人编号，不能识别真实姓名。
+- 实时转写仅支持 Obsidian 桌面端和本地文件系统 Vault。
 - 首版实时录音只有开始和停止，没有暂停/恢复；异常退出最多可能丢失尚未产生的最后一个短 WebM 分片。
 - 暂不输出逐词时间戳。
-- 暂不支持所有 Provider 通用的大文件自动切片；共享 AudioChunkPipeline 已覆盖阿里百炼 `qwen3-asr-flash`、硅基流动官方或自定义模型与 MOSI，AgentPlan 离线改用单次整文件极速 HTTP 请求。
+- 暂不支持所有 Provider 通用的大文件自动切片；共享 AudioChunkPipeline 已覆盖阿里百炼 `qwen3-asr-flash`、硅基流动官方或自定义模型与 MOSI。
 - 不支持本地 Whisper。
 - 长文本分析采用“逐块提取 + 最终汇总”，会增加模型调用次数和成本；Obsidian 重启后暂不支持从已完成分块继续。
 - 任务中心目前是内存型状态面板，暂不支持持久化队列、暂停/取消和重启后续跑。
+
+## 联系与反馈
+
+如有问题、建议或合作交流，欢迎通过微信联系作者。
+
+- 微信号：`ccanbang`
+
+<img src="./assets/wechat-contact.png" alt="微信号 ccanbang 的添加好友二维码" width="320">

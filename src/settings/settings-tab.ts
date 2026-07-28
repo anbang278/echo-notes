@@ -164,14 +164,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			cls: "echo-notes-settings-intro",
 			attr: { "aria-labelledby": headingId }
 		});
-		const headingEl = introEl.createEl("h2", {
-			cls: "echo-notes-settings-intro-title"
-		});
-		headingEl.id = headingId;
-		const titleMarkEl = headingEl.createSpan({ cls: "echo-notes-settings-intro-title-mark" });
+		const headingContent = createFragment();
+		const titleMarkEl = headingContent.createSpan({ cls: "echo-notes-settings-intro-title-mark" });
 		titleMarkEl.setAttribute("aria-hidden", "true");
 		setIcon(titleMarkEl, "audio-waveform");
-		headingEl.createSpan({ text: "记录行动，构建面向未来的 AI Memory" });
+		headingContent.createSpan({ text: "记录行动，构建面向未来的 AI Memory" });
+		const headingSetting = new Setting(introEl)
+			.setName(headingContent)
+			.setClass("echo-notes-settings-intro-heading")
+			.setHeading();
+		const headingEl = headingSetting.nameEl;
+		headingEl.addClass("echo-notes-settings-intro-title");
+		headingEl.id = headingId;
 		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
 		conceptEl.createSpan({
 			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
@@ -583,7 +587,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				isRealtime
 					? "实时转写目前固定使用火山引擎 AgentPlan。"
-					: "选择用于 Vault 中已有音频文件转写的服务商；AgentPlan 离线模式固定使用录音文件极速版 HTTP 端点。"
+					: "选择用于 Vault 中已有音频文件转写的服务商。"
 			)
 			.addDropdown((dropdown) => {
 				if (isRealtime) {
@@ -715,8 +719,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				.setDesc(
 					isRealtime
 						? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。"
-						: isAgentPlan
-							? "AgentPlan 离线极速转写固定使用 doubao-seed-asr-2.0。"
 						: isMosi
 							? this.plugin.settings.mosiSpeakerDiarizationEnabled
 								? "已开启说话人分离，固定使用 moss-transcribe-diarize。"
@@ -799,9 +801,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				.setDesc(
 					isMosi
 						? "MOSI 服务端说话人编号会按首次出现顺序显示；长音频的编号仅在当前分段内有效。"
-						: isRealtime
-							? "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
-							: "AgentPlan 离线极速版完成后一次性返回本次请求统一的说话人聚类结果和绝对时间轴。"
+						: "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
 				)
 				.addDropdown((dropdown) =>
 					dropdown
@@ -1394,9 +1394,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private getBaseUrlDescription(): string {
 		switch (this.getSelectedTranscriptionConfig().provider) {
 			case "volcengine-agentplan":
-				return this.plugin.settings.transcriptionMode === "realtime"
-					? "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。"
-					: "AgentPlan 录音文件极速版 HTTP 端点；整段音频一次性高速上传，完成后写入最终稿。需单独开通 volc.bigasr.auc_turbo，单次上限 2 小时、100 MB。";
+				return "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
 				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
 			case "ollama":

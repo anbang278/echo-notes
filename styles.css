@@ -5,6 +5,15 @@
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.echo-notes-settings-intro-heading {
+	padding: 0;
+	border: 0;
+}
+
+.echo-notes-settings-intro-heading .setting-item-info {
+	min-width: 0;
+}
+
 .echo-notes-settings-intro-title-mark {
 	display: inline-flex;
 	align-items: center;

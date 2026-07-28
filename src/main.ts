@@ -59,6 +59,7 @@ import { loadAgentPlanSocketFactory } from "./providers/volcengine-agentplan-soc
 import {
 	cloneHotkey,
 	getSelectedTranscriptionConfig,
+	isRemovedAnalysisProviderId,
 	normalizeEchoNotesSettings,
 	type AnalysisTemplateConfig,
 	type EchoNotesHotkeySetting,
@@ -69,8 +70,10 @@ import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction
 import { redactAnalysisInputText } from "./security/content-redaction";
 import {
 	getAnalysisApiKeySecretId,
+	getRemovedAnalysisApiKeySecretId,
 	getTranscriptionApiKeySecretId,
-	migrateLegacySecret
+	migrateLegacySecret,
+	migrateSecretIfTargetEmpty
 } from "./security/provider-secrets";
 import {
 	buildTranscriptionUploadPreview,
@@ -231,6 +234,7 @@ export default class EchoNotesPlugin extends Plugin {
 			Boolean(loadedSettings) &&
 			JSON.stringify(loadedSettings) !== JSON.stringify(this.settings);
 		await this.migrateApiKeyToSecretStorage();
+		this.migrateRemovedAnalysisProviderApiKey(loadedSettings);
 		await this.migrateAnalysisApiKeyToSecretStorage();
 		if (shouldPersistSettingsMigration) {
 			await this.saveData(this.settings);
@@ -633,6 +637,19 @@ export default class EchoNotesPlugin extends Plugin {
 			delete this.settings.analysisApiKey;
 			await this.saveData(this.settings);
 		}
+	}
+
+	private migrateRemovedAnalysisProviderApiKey(loadedSettings: Record<string, unknown> | null): void {
+		const provider = typeof loadedSettings?.analysisProvider === "string" ? loadedSettings.analysisProvider : "";
+		if (!isRemovedAnalysisProviderId(provider)) {
+			return;
+		}
+
+		migrateSecretIfTargetEmpty(
+			this.app.secretStorage,
+			getRemovedAnalysisApiKeySecretId(provider),
+			getAnalysisApiKeySecretId("custom-openai-compatible")
+		);
 	}
 
 	private registerAutomation(): void {

@@ -70,16 +70,6 @@ import {
 	transcribeAgentPlanWav,
 	type AgentPlanSocket
 } from "../src/providers/volcengine-agentplan-client";
-import {
-	AGENTPLAN_FLASH_MAX_AUDIO_BYTES,
-	AGENTPLAN_FLASH_MAX_DURATION_SECONDS,
-	AGENTPLAN_FLASH_RESOURCE_ID,
-	transcribeAgentPlanFlash
-} from "../src/providers/volcengine-agentplan-flash-client";
-import {
-	isRetryableAgentPlanOfflineError,
-	VolcengineAgentPlanAsrProvider
-} from "../src/providers/volcengine-agentplan-provider";
 import { AgentPlanRealtimeSession } from "../src/providers/volcengine-agentplan-realtime-session";
 import {
 	buildAgentPlanFullRequestPayload,
@@ -105,8 +95,10 @@ import { redactAnalysisInputText } from "../src/security/content-redaction";
 import { sanitizeSensitiveText } from "../src/security/redaction";
 import {
 	getAnalysisApiKeySecretId,
+	getRemovedAnalysisApiKeySecretId,
 	getTranscriptionApiKeySecretId,
 	migrateLegacySecret,
+	migrateSecretIfTargetEmpty,
 	type SecretStorageLike
 } from "../src/security/provider-secrets";
 import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
@@ -121,7 +113,6 @@ import {
 	createCustomAnalysisTemplate,
 	AGENTPLAN_ANALYSIS_BASE_URL,
 	AGENTPLAN_ANALYSIS_MODELS,
-	AGENTPLAN_FLASH_BASE_URL,
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
@@ -129,7 +120,6 @@ import {
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
 	DEFAULT_ANALYSIS_TEMPLATES,
 	formatHotkey,
-	getOfflineTranscriptionProviderDefaults,
 	getMosiTranscriptionModel,
 	isMosiSpeakerDiarizationModel,
 	MOSI_PLAIN_TRANSCRIPTION_MODEL,
@@ -148,6 +138,8 @@ import {
 	isAnalysisProviderId,
 	isOfflineTranscriptionProviderId,
 	isProviderId,
+	isRemovedAnalysisProviderId,
+	REMOVED_ANALYSIS_PROVIDER_IDS,
 	normalizeTranscriptionLanguageForProvider
 } from "../src/settings/settings";
 import {
@@ -780,17 +772,6 @@ const mosiPlainPolicy = resolveProviderTranscriptionPolicy({
 assert.equal(mosiPlainPolicy.model, MOSI_PLAIN_TRANSCRIPTION_MODEL);
 assert.equal(mosiPlainPolicy.supportsChunking, true);
 assert.equal(mosiPlainPolicy.targetSegmentSeconds, 180);
-const agentPlanOfflinePolicy = resolveProviderTranscriptionPolicy({
-	provider: "volcengine-agentplan",
-	model: "doubao-seed-asr-2.0"
-});
-assert.equal(agentPlanOfflinePolicy.supportsChunking, false);
-assert.equal(agentPlanOfflinePolicy.maxSourceBytes, AGENTPLAN_FLASH_MAX_AUDIO_BYTES);
-assert.equal(agentPlanOfflinePolicy.maxSourceDurationSeconds, AGENTPLAN_FLASH_MAX_DURATION_SECONDS);
-assert.equal(agentPlanOfflinePolicy.targetSegmentSeconds, undefined);
-assert.equal(agentPlanOfflinePolicy.minSegmentSeconds, undefined);
-assert.deepEqual(agentPlanOfflinePolicy.retryDelaysMs, [1000]);
-assert.equal(agentPlanOfflinePolicy.maxSplitDepth, 0);
 assert.equal(
 	shouldPreChunkTranscription({
 		policy: mosiPolicy,
@@ -811,7 +792,7 @@ assert.equal(shouldSplitPolicyError(mosiPolicy, 500), true);
 assert.equal(shouldSplitPolicyError(mosiPolicy, 429), false);
 assert.equal(
 	resolveProviderTranscriptionPolicy({
-		provider: "openai",
+		provider: "ollama",
 		model: "whisper-1"
 	}).supportsChunking,
 	false
@@ -1241,20 +1222,6 @@ assert.match(progressTranscript, /音频正在转写/);
 assert.match(progressTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(progressTranscript, /第一段内容。/);
 
-const flashProgressTranscript = renderProgressTranscriptTemplate({
-	app: templateApp as never,
-	audioFile: audioFile as never,
-	transcriptPath: "Recording 20260531001942.transcript.md",
-	provider: "volcengine-agentplan",
-	model: "doubao-seed-asr-2.0",
-	segments: [],
-	speakerLabelStyle: "speaker-with-time",
-	copyLanguage: "zh"
-});
-assert.match(flashProgressTranscript, /整段音频正在上传至 AgentPlan 极速版/);
-assert.match(flashProgressTranscript, /请求完成后将一次性写入最终转写稿/);
-assert.doesNotMatch(flashProgressTranscript, /已发送/);
-
 const realtimeProgressTranscript = renderProgressTranscriptTemplate({
 	app: templateApp as never,
 	audioFile: audioFile as never,
@@ -1364,26 +1331,32 @@ for (const [templateId, keyword, firstHeading, finalHeading, guidance] of roleTe
 }
 assert.equal(Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, "volcengine-agentplan"), true);
 assert.equal(Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, "volcengine-agentplan"), true);
-assert.equal(Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS, "volcengine-agentplan"), true);
-assert.equal(
-	OFFLINE_TRANSCRIPTION_PROVIDER_LABELS["volcengine-agentplan"],
-	"火山引擎 AgentPlan（录音文件极速版）"
-);
+assert.equal(Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS, "volcengine-agentplan"), false);
 assert.deepEqual(Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS), [
-	"volcengine-agentplan",
-	"siliconflow",
 	"aliyun-bailian",
+	"siliconflow",
 	"mosi",
 	"ollama",
 	"lm-studio"
 ]);
+assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), [
+	"siliconflow",
+	"aliyun-bailian",
+	"deepseek",
+	"volcengine-agentplan",
+	"ollama",
+	"lm-studio",
+	"custom-openai-compatible"
+]);
 assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_DEFAULTS), Object.keys(ANALYSIS_PROVIDER_LABELS));
 assert.equal(isProviderId("volcengine-agentplan"), true);
-assert.equal(isOfflineTranscriptionProviderId("volcengine-agentplan"), true);
+assert.equal(isOfflineTranscriptionProviderId("volcengine-agentplan"), false);
 assert.equal(isOfflineTranscriptionProviderId("aliyun-bailian"), true);
 assert.equal(isOfflineTranscriptionProviderId("openai"), false);
 assert.equal(isAnalysisProviderId("volcengine-agentplan"), true);
-assert.equal(isAnalysisProviderId("openai"), true);
+assert.equal(isAnalysisProviderId("openai"), false);
+assert.equal(isRemovedAnalysisProviderId("openai"), true);
+assert.equal(isRemovedAnalysisProviderId("unknown-provider"), false);
 assert.equal(isAnalysisProviderId("custom-openai-compatible"), true);
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["volcengine-agentplan"].analysisBaseUrl, AGENTPLAN_ANALYSIS_BASE_URL);
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["volcengine-agentplan"].analysisModel, "doubao-seed-2.0-lite");
@@ -1422,11 +1395,6 @@ assert.deepEqual(PROVIDER_DEFAULTS["volcengine-agentplan"], {
 	model: "doubao-seed-asr-2.0",
 	language: "zh"
 });
-assert.deepEqual(getOfflineTranscriptionProviderDefaults("volcengine-agentplan"), {
-	baseUrl: AGENTPLAN_FLASH_BASE_URL,
-	model: "doubao-seed-asr-2.0",
-	language: "zh"
-});
 assert.equal(TRANSCRIPTION_LANGUAGE_LABELS.zh, "中文（zh）");
 assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
@@ -1435,11 +1403,9 @@ assert.equal(DEFAULT_SETTINGS.redactTranscriptBeforeAnalysis, false);
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisBaseUrl, "https://api.deepseek.com/v1");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisBaseUrl, "https://api.siliconflow.cn/v1");
-assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "deepseek-ai/DeepSeek-V3");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "Qwen/Qwen3.5-4B");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "deepseek-v4-pro");
-assert.equal(ANALYSIS_PROVIDER_DEFAULTS.openai.analysisModel, "gpt-4o-mini");
-assert.equal(ANALYSIS_PROVIDER_DEFAULTS.groq.analysisModel, "llama-3.3-70b-versatile");
-assert.deepEqual(Object.keys(TRANSCRIPTION_PROVIDER_CAPABILITIES), Object.keys(PROVIDER_LABELS));
+assert.deepEqual(Object.keys(TRANSCRIPTION_PROVIDER_CAPABILITIES).sort(), Object.keys(PROVIDER_LABELS).sort());
 assert.equal(formatProviderCapabilityBytes(25 * 1024 * 1024), "25 MB");
 assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsChunking, true);
 assert.equal(getTranscriptionProviderCapability("aliyun-bailian").uploadMode, "base64-data-url");
@@ -1460,17 +1426,7 @@ assert.deepEqual([...SILICONFLOW_TRANSCRIPTION_MODELS], [
 assert.equal(getTranscriptionProviderCapability("ollama").maxAudioBytes, 25 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("lm-studio").supportsLanguage, true);
 assert.equal(getTranscriptionProviderCapability("lm-studio").supportsTimestamp, false);
-const offlineAgentPlanCapability = getTranscriptionProviderCapability("volcengine-agentplan", "offline");
 const realtimeAgentPlanCapability = getTranscriptionProviderCapability("volcengine-agentplan", "realtime");
-assert.equal(offlineAgentPlanCapability.uploadMode, "base64-json");
-assert.equal(offlineAgentPlanCapability.endpointShape, "agentplan-asr-flash-http");
-assert.equal(offlineAgentPlanCapability.maxAudioBytes, 100 * 1024 * 1024);
-assert.equal(offlineAgentPlanCapability.maxAudioDurationSeconds, 2 * 60 * 60);
-assert.equal(offlineAgentPlanCapability.supportsChunking, false);
-assert.equal(offlineAgentPlanCapability.supportsStreaming, false);
-assert.equal(offlineAgentPlanCapability.transcriptionPolicy, undefined);
-assert.equal(offlineAgentPlanCapability.supportsTimestamp, true);
-assert.equal(offlineAgentPlanCapability.supportsSpeakerDiarization, true);
 assert.equal(realtimeAgentPlanCapability.supportsChunking, false);
 assert.equal(getTranscriptionProviderCapability("mosi").uploadMode, "multipart");
 assert.equal(getTranscriptionProviderCapability("mosi").endpointShape, "mosi-transcription");
@@ -1496,16 +1452,6 @@ assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("ollam
 assert.ok(
 	getProviderCapabilitySummary(realtimeAgentPlanCapability).includes(
 		"实时音频：单连接持续发送"
-	)
-);
-assert.ok(
-	getProviderCapabilitySummary(offlineAgentPlanCapability).includes(
-		"长音频处理：单次极速上传"
-	)
-);
-assert.ok(
-	getProviderCapabilitySummary(offlineAgentPlanCapability).includes(
-		"说话人分离：支持"
 	)
 );
 assert.deepEqual([...OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS], ["ollama", "lm-studio"]);
@@ -1802,415 +1748,6 @@ const normalizedAgentPlanQuotaError = normalizeAgentPlanError(
 assert.equal(normalizedAgentPlanQuotaError.code, "quota_exceeded");
 assert.equal(normalizedAgentPlanQuotaError.traceId, "trace-quota");
 assert.match(normalizedAgentPlanQuotaError.message, /额度不足/);
-assert.equal(
-	isRetryableAgentPlanOfflineError(new TranscriptionError("network_error", "timeout")),
-	true
-);
-assert.equal(
-	isRetryableAgentPlanOfflineError(new TranscriptionError("rate_limited", "server busy")),
-	true
-);
-assert.equal(
-	isRetryableAgentPlanOfflineError(new TranscriptionError("api_error", "invalid parameter")),
-	false
-);
-assert.equal(
-	isRetryableAgentPlanOfflineError(new TranscriptionError("authentication_failed", "unauthorized")),
-	false
-);
-let capturedFlashRequest: { url: string; headers?: Record<string, string>; body?: string | ArrayBuffer } | undefined;
-const flashClientResult = await transcribeAgentPlanFlash({
-	url: AGENTPLAN_FLASH_BASE_URL,
-	apiKey: "ark-flash-test-secret",
-	language: "zh",
-	audioBytes: Uint8Array.from([1, 2, 3]),
-	createRequestId: () => "11111111-1111-4111-8111-111111111111",
-	request: async (request) => {
-		assert.equal(typeof request, "object");
-		capturedFlashRequest = request as typeof capturedFlashRequest;
-		return {
-			status: 200,
-			headers: {
-				"X-Api-Status-Code": "20000000",
-				"X-Tt-Logid": "trace-flash-client"
-			},
-			arrayBuffer: new ArrayBuffer(0),
-			json: {
-				code: 20000000,
-				result: {
-					text: "极速版模拟转写",
-					utterances: [{
-						text: "极速版模拟转写",
-						start_time: 0,
-						end_time: 1000,
-						additions: { speaker_id: "speaker-a" }
-					}]
-				}
-			},
-			text: ""
-		};
-	}
-});
-assert.equal(capturedFlashRequest?.url, AGENTPLAN_FLASH_BASE_URL);
-assert.equal(capturedFlashRequest?.headers?.["X-Api-Key"], "ark-flash-test-secret");
-assert.equal(capturedFlashRequest?.headers?.["X-Api-Resource-Id"], AGENTPLAN_FLASH_RESOURCE_ID);
-assert.equal(capturedFlashRequest?.headers?.["X-Api-Request-Id"], "11111111-1111-4111-8111-111111111111");
-assert.equal(capturedFlashRequest?.headers?.["X-Api-Sequence"], "-1");
-const flashRequestPayload = JSON.parse(String(capturedFlashRequest?.body)) as {
-	audio: { data: string; language?: string };
-	request: Record<string, unknown>;
-};
-assert.equal(flashRequestPayload.audio.data, "AQID");
-assert.equal(flashRequestPayload.audio.language, "zh-CN");
-assert.equal(flashRequestPayload.request.model_name, "bigmodel");
-assert.equal(flashRequestPayload.request.show_utterances, true);
-assert.equal(flashRequestPayload.request.enable_speaker_info, true);
-assert.equal(flashRequestPayload.request.ssd_version, "200");
-assert.equal(flashClientResult.text, "极速版模拟转写");
-assert.equal(flashClientResult.traceId, "trace-flash-client");
-
-await assert.rejects(
-	() => transcribeAgentPlanFlash({
-		url: AGENTPLAN_FLASH_BASE_URL,
-		apiKey: "ark-flash-test-secret",
-		language: "auto",
-		audioBytes: Uint8Array.from([1]),
-		request: async () => ({
-			status: 200,
-			headers: {
-				"X-Api-Status-Code": "55000031",
-				"X-Api-Message": "server busy",
-				"X-Tt-Logid": "trace-server-busy"
-			},
-			arrayBuffer: new ArrayBuffer(0),
-			json: { code: 55000031, message: "server busy" },
-			text: ""
-		})
-	}),
-	(error: unknown) => {
-		assert.ok(error instanceof TranscriptionError);
-		assert.equal(error.code, "rate_limited");
-		assert.equal(error.traceId, "trace-server-busy");
-		return true;
-	}
-);
-
-await assert.rejects(
-	() => transcribeAgentPlanFlash({
-		url: AGENTPLAN_FLASH_BASE_URL,
-		apiKey: "ark-flash-test-secret",
-		language: "auto",
-		audioBytes: Uint8Array.from([1]),
-		request: async () => ({
-			status: 403,
-			headers: {
-				"X-Api-Status-Code": "45000403",
-				"X-Api-Message": "resource volc.bigasr.auc_turbo not enabled"
-			},
-			arrayBuffer: new ArrayBuffer(0),
-			json: { code: 45000403, message: "resource not enabled" },
-			text: ""
-		})
-	}),
-	(error: unknown) => {
-		assert.ok(error instanceof TranscriptionError);
-		assert.equal(error.code, "authentication_failed");
-		assert.match(error.message, /volc\.bigasr\.auc_turbo/);
-		return true;
-	}
-);
-
-const offlineAgentPlanAudioFile = {
-	name: "offline-agentplan.m4a",
-	basename: "offline-agentplan",
-	path: "Recordings/offline-agentplan.m4a",
-	extension: "m4a",
-	stat: {
-		size: 1024,
-		mtime: 1780900000000
-	}
-};
-const offlineAgentPlanWav = new Uint8Array(45);
-offlineAgentPlanWav[44] = 7;
-let offlineAgentPlanWavCreations = 0;
-let offlineAgentPlanRequests = 0;
-const offlineAgentPlanRetrySleeps: number[] = [];
-const offlineAgentPlanProgressEvents: string[] = [];
-const offlineAgentPlanProvider = new VolcengineAgentPlanAsrProvider(
-	{
-		vault: {
-			readBinary: async () => Uint8Array.from([9]).buffer
-		}
-	} as never,
-	{
-		provider: "volcengine-agentplan",
-		...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-	},
-	"ark-offline-secret",
-	{
-		probeDuration: async () => 430,
-		createWavBuffer: async () => {
-			offlineAgentPlanWavCreations += 1;
-			return offlineAgentPlanWav.buffer;
-		},
-		transcribeFlash: async (options) => {
-			offlineAgentPlanRequests += 1;
-			assert.equal(options.url, AGENTPLAN_FLASH_BASE_URL);
-			assert.equal(options.audioBytes.byteLength, offlineAgentPlanWav.byteLength);
-			if (offlineAgentPlanRequests === 1) {
-				throw new TranscriptionError(
-					"network_error",
-					"首次极速请求网络失败",
-					"trace-attempt-1",
-					503
-				);
-			}
-
-			return {
-				text: "完整的 430 秒极速转写",
-				traceId: "trace-attempt-2",
-				raw: {
-					result: {
-						text: "完整的 430 秒极速转写",
-						utterances: [
-							{
-								text: "三分钟前由第一位说话人发言。",
-								start_time: 10000,
-								end_time: 20000,
-								additions: { speaker_id: "speaker-a" }
-							},
-							{
-								text: "第二位说话人回应。",
-								start_time: 100000,
-								end_time: 110000,
-								additions: { speaker_id: "speaker-b" }
-							},
-							{
-								text: "三分钟后仍由第一位说话人发言。",
-								start_time: 200000,
-								end_time: 210000,
-								additions: { speaker_id: "speaker-a" }
-							}
-						]
-					}
-				}
-			};
-		},
-		sleep: async (delayMs) => {
-			offlineAgentPlanRetrySleeps.push(delayMs);
-		}
-	}
-);
-const offlineAgentPlanProviderResult = await offlineAgentPlanProvider.transcribe({
-	audioFile: offlineAgentPlanAudioFile as never,
-	language: "zh",
-	onProgress: (progress) => {
-		if (progress.type === "whole-audio-request-started") {
-			offlineAgentPlanProgressEvents.push(`upload:${progress.attempt}/${progress.totalAttempts}`);
-		} else if (progress.type === "segment-retrying") {
-			offlineAgentPlanProgressEvents.push(`retry:${progress.attempt}/${progress.maxAttempts}`);
-		} else if (progress.type === "streaming-result") {
-			offlineAgentPlanProgressEvents.push("unexpected-streaming-result");
-		}
-	}
-});
-assert.equal(offlineAgentPlanWavCreations, 1);
-assert.equal(offlineAgentPlanRequests, 2);
-assert.deepEqual(offlineAgentPlanRetrySleeps, [1000]);
-assert.deepEqual(offlineAgentPlanProgressEvents, ["upload:1/2", "retry:2/2", "upload:2/2"]);
-assert.equal(offlineAgentPlanProviderResult.text, "完整的 430 秒极速转写");
-assert.equal(offlineAgentPlanProviderResult.segments, undefined);
-assert.equal(offlineAgentPlanProviderResult.traceId, "trace-attempt-1, trace-attempt-2");
-assert.equal(offlineAgentPlanProviderResult.utterances?.[0].speakerId, "speaker-a");
-assert.equal(offlineAgentPlanProviderResult.utterances?.[2].speakerId, "speaker-a");
-const continuousAgentPlanTranscript = renderTranscriptTemplate({
-	app: templateApp as never,
-	audioFile: offlineAgentPlanAudioFile as never,
-	transcriptPath: "offline-agentplan.transcript.md",
-	result: offlineAgentPlanProviderResult,
-	copyLanguage: "zh",
-	speakerLabelStyle: "speaker-with-time"
-});
-assert.doesNotMatch(continuousAgentPlanTranscript, /## 分段/);
-assert.doesNotMatch(continuousAgentPlanTranscript, /说话人编号仅在各分段内有效/);
-assert.equal((continuousAgentPlanTranscript.match(/\*\*说话人 1/g) ?? []).length, 2);
-assert.match(continuousAgentPlanTranscript, /说话人 1（03:20-03:30）/);
-
-let directUploadWavConversions = 0;
-const directUploadResult = await new VolcengineAgentPlanAsrProvider(
-	{
-		vault: {
-			readBinary: async () => Uint8Array.from([82, 73, 70, 70]).buffer
-		}
-	} as never,
-	{
-		provider: "volcengine-agentplan",
-		...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-	},
-	"ark-offline-secret",
-	{
-		probeDuration: async () => 10,
-		createWavBuffer: async () => {
-			directUploadWavConversions += 1;
-			return new ArrayBuffer(0);
-		},
-		transcribeFlash: async (options) => ({
-			text: `直接上传 ${options.audioBytes.byteLength} 字节`,
-			raw: { result: { text: "直接上传" } }
-		})
-	}
-).transcribe({
-	audioFile: {
-		...offlineAgentPlanAudioFile,
-		name: "direct.wav",
-		path: "Recordings/direct.wav",
-		extension: "wav",
-		stat: { ...offlineAgentPlanAudioFile.stat, size: 4 }
-	} as never
-});
-assert.equal(directUploadWavConversions, 0);
-assert.equal(directUploadResult.text, "直接上传 4 字节");
-
-let failedAgentPlanRequests = 0;
-const failedAgentPlanSleeps: number[] = [];
-const failedAgentPlanProgressTypes: string[] = [];
-const failedAgentPlanProvider = new VolcengineAgentPlanAsrProvider(
-	{
-		vault: {
-			readBinary: async () => Uint8Array.from([9]).buffer
-		}
-	} as never,
-	{
-		provider: "volcengine-agentplan",
-		...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-	},
-	"ark-offline-secret",
-	{
-		probeDuration: async () => 430,
-		createWavBuffer: async () => offlineAgentPlanWav.buffer,
-		transcribeFlash: async () => {
-			failedAgentPlanRequests += 1;
-			throw new TranscriptionError(
-				failedAgentPlanRequests === 1 ? "rate_limited" : "network_error",
-				"极速请求失败",
-				failedAgentPlanRequests === 1 ? "trace-first-failure" : "trace-second-failure"
-			);
-		},
-		sleep: async (delayMs) => {
-			failedAgentPlanSleeps.push(delayMs);
-		}
-	}
-);
-let failedAgentPlanError: unknown;
-try {
-	await failedAgentPlanProvider.transcribe({
-		audioFile: offlineAgentPlanAudioFile as never,
-		onProgress: (progress) => {
-			failedAgentPlanProgressTypes.push(progress.type);
-		}
-	});
-} catch (error) {
-	failedAgentPlanError = error;
-}
-assert.ok(failedAgentPlanError instanceof TranscriptionError);
-assert.equal(failedAgentPlanError.code, "network_error");
-assert.equal(failedAgentPlanError.traceId, "trace-first-failure, trace-second-failure");
-assert.equal(failedAgentPlanRequests, 2);
-assert.deepEqual(failedAgentPlanSleeps, [1000]);
-assert.deepEqual(failedAgentPlanProgressTypes, [
-	"whole-audio-request-started",
-	"segment-retrying",
-	"whole-audio-request-started"
-]);
-
-let invalidAgentPlanRequests = 0;
-const invalidAgentPlanProvider = new VolcengineAgentPlanAsrProvider(
-	{
-		vault: {
-			readBinary: async () => Uint8Array.from([9]).buffer
-		}
-	} as never,
-	{
-		provider: "volcengine-agentplan",
-		...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-	},
-	"ark-offline-secret",
-	{
-		probeDuration: async () => 10,
-		createWavBuffer: async () => offlineAgentPlanWav.buffer,
-		transcribeFlash: async () => {
-			invalidAgentPlanRequests += 1;
-			throw new TranscriptionError("authentication_failed", "401 unauthorized", "trace-auth", 401);
-		}
-	}
-);
-await assert.rejects(
-	() => invalidAgentPlanProvider.transcribe({
-		audioFile: offlineAgentPlanAudioFile as never
-	}),
-	(error: unknown) => {
-		assert.ok(error instanceof TranscriptionError);
-		assert.equal(error.code, "authentication_failed");
-		assert.equal(error.traceId, "trace-auth");
-		return true;
-	}
-);
-assert.equal(invalidAgentPlanRequests, 1);
-
-let oversizedAgentPlanReads = 0;
-await assert.rejects(
-	() => new VolcengineAgentPlanAsrProvider(
-		{
-			vault: {
-				readBinary: async () => {
-					oversizedAgentPlanReads += 1;
-					return Uint8Array.from([1]).buffer;
-				}
-			}
-		} as never,
-		{
-			provider: "volcengine-agentplan",
-			...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-		},
-		"ark-offline-secret"
-	).transcribe({
-		audioFile: {
-			...offlineAgentPlanAudioFile,
-			name: "oversized.mp3",
-			path: "Recordings/oversized.mp3",
-			extension: "mp3",
-			stat: { ...offlineAgentPlanAudioFile.stat, size: AGENTPLAN_FLASH_MAX_AUDIO_BYTES + 1 }
-		} as never
-	}),
-	(error: unknown) => error instanceof TranscriptionError && error.code === "file_too_large"
-);
-assert.equal(oversizedAgentPlanReads, 0);
-
-let overlongAgentPlanConversions = 0;
-await assert.rejects(
-	() => new VolcengineAgentPlanAsrProvider(
-		{
-			vault: {
-				readBinary: async () => Uint8Array.from([1]).buffer
-			}
-		} as never,
-		{
-			provider: "volcengine-agentplan",
-			...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-		},
-		"ark-offline-secret",
-		{
-			probeDuration: async () => AGENTPLAN_FLASH_MAX_DURATION_SECONDS + 1,
-			createWavBuffer: async () => {
-				overlongAgentPlanConversions += 1;
-				return offlineAgentPlanWav.buffer;
-			}
-		}
-	).transcribe({ audioFile: offlineAgentPlanAudioFile as never }),
-	(error: unknown) => error instanceof TranscriptionError && error.code === "file_too_large"
-);
-assert.equal(overlongAgentPlanConversions, 0);
-
 const fakeRealtimeAgentPlanSocket = createFakeAgentPlanSocket();
 let capturedRealtimeAgentPlanHeaders: Record<string, string> | undefined;
 const realtimeAgentPlanProgress: Array<{ text: string; provisionalText: string }> = [];
@@ -2317,7 +1854,7 @@ assert.equal(
 	getTranscriptionApiKeySecretId("lm-studio"),
 	"echo-notes-transcription-api-key-lm-studio"
 );
-assert.equal(getAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key-openai");
+assert.equal(getRemovedAnalysisApiKeySecretId("openai"), "echo-notes-analysis-api-key-openai");
 assert.equal(
 	getAnalysisApiKeySecretId("custom-openai-compatible"),
 	"echo-notes-analysis-api-key-custom-openai-compatible"
@@ -2382,9 +1919,45 @@ assert.equal(failedMigrationStorage.getSecret(legacyTranscriptionSecretId), "leg
 assert.equal(failedMigrationStorage.writes.length, 0);
 
 const settingsMigrationStorage = new MemorySecretStorage(new Map());
-const migratedAnalysisSecretId = getAnalysisApiKeySecretId("openai");
+const migratedAnalysisSecretId = getAnalysisApiKeySecretId("aliyun-bailian");
 migrateLegacySecret(settingsMigrationStorage, "echo-notes-analysis-api-key", migratedAnalysisSecretId, " settings-key ");
 assert.equal(settingsMigrationStorage.getSecret(migratedAnalysisSecretId), "settings-key");
+const removedAnalysisSecretId = getRemovedAnalysisApiKeySecretId("openai");
+const customAnalysisSecretId = getAnalysisApiKeySecretId("custom-openai-compatible");
+const removedAnalysisMigrationStorage = new MemorySecretStorage(
+	new Map([[removedAnalysisSecretId, "removed-provider-key"]])
+);
+assert.equal(
+	migrateSecretIfTargetEmpty(removedAnalysisMigrationStorage, removedAnalysisSecretId, customAnalysisSecretId),
+	true
+);
+assert.equal(removedAnalysisMigrationStorage.getSecret(customAnalysisSecretId), "removed-provider-key");
+assert.equal(removedAnalysisMigrationStorage.getSecret(removedAnalysisSecretId), "");
+const collidedAnalysisMigrationStorage = new MemorySecretStorage(
+	new Map([
+		[removedAnalysisSecretId, "removed-provider-key"],
+		[customAnalysisSecretId, "existing-custom-key"]
+	])
+);
+assert.equal(
+	migrateSecretIfTargetEmpty(collidedAnalysisMigrationStorage, removedAnalysisSecretId, customAnalysisSecretId),
+	false
+);
+assert.equal(collidedAnalysisMigrationStorage.getSecret(customAnalysisSecretId), "existing-custom-key");
+assert.equal(collidedAnalysisMigrationStorage.getSecret(removedAnalysisSecretId), "removed-provider-key");
+assert.equal(collidedAnalysisMigrationStorage.writes.length, 0);
+const blankTargetAnalysisMigrationStorage = new MemorySecretStorage(
+	new Map([
+		[removedAnalysisSecretId, "removed-provider-key"],
+		[customAnalysisSecretId, "   "]
+	])
+);
+assert.equal(
+	migrateSecretIfTargetEmpty(blankTargetAnalysisMigrationStorage, removedAnalysisSecretId, customAnalysisSecretId),
+	true
+);
+assert.equal(blankTargetAnalysisMigrationStorage.getSecret(customAnalysisSecretId), "removed-provider-key");
+assert.equal(blankTargetAnalysisMigrationStorage.getSecret(removedAnalysisSecretId), "");
 const missingAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
 	{
 		...DEFAULT_SETTINGS.realtimeTranscription,
@@ -2605,25 +2178,6 @@ const validAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
 assert.equal(validAgentPlanDiagnostics.canAttemptTranscription, true);
 assert.ok(validAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 麦克风实时转写"));
 assert.ok(validAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 说话人分离始终开启"));
-const validOfflineAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
-	{
-		provider: "volcengine-agentplan",
-		...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-	},
-	"ark-valid",
-	{ isMobile: false, isFileSystemVault: true, usage: "offline" }
-);
-assert.equal(validOfflineAgentPlanDiagnostics.canAttemptTranscription, true);
-assert.ok(
-	validOfflineAgentPlanDiagnostics.items.some(
-		(item) => item.title === "AgentPlan 离线极速转写"
-	)
-);
-assert.ok(
-	validOfflineAgentPlanDiagnostics.items.some(
-		(item) => item.title === "AgentPlan 极速版资源需单独开通"
-	)
-);
 const customAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
 	{ ...DEFAULT_SETTINGS.realtimeTranscription, baseUrl: "wss://custom.example.net/agentplan" },
 	"ark-valid",
@@ -2659,19 +2213,6 @@ const mobileAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
 );
 assert.equal(mobileAgentPlanDiagnostics.canAttemptTranscription, false);
 assert.ok(mobileAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 仅支持桌面端"));
-const mobileOfflineAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
-	{
-		provider: "volcengine-agentplan",
-		...getOfflineTranscriptionProviderDefaults("volcengine-agentplan")
-	},
-	"ark-valid",
-	{ isMobile: true, usage: "offline" }
-);
-assert.equal(mobileOfflineAgentPlanDiagnostics.canAttemptTranscription, true);
-assert.equal(
-	mobileOfflineAgentPlanDiagnostics.items.some((item) => item.title === "AgentPlan 仅支持桌面端"),
-	false
-);
 const invalidAgentPlanDiagnostics = diagnoseTranscriptionProviderSettings(
 	{
 		...DEFAULT_SETTINGS,
@@ -2848,16 +2389,20 @@ assert.equal(Object.prototype.hasOwnProperty.call(migratedDefaultTemplateSetting
 const siliconFlowAnalysisSettings = normalizeEchoNotesSettings({ analysisProvider: "siliconflow" });
 assert.equal(siliconFlowAnalysisSettings.analysisProvider, "siliconflow");
 assert.equal(siliconFlowAnalysisSettings.analysisBaseUrl, "https://api.siliconflow.cn/v1");
-assert.equal(siliconFlowAnalysisSettings.analysisModel, "deepseek-ai/DeepSeek-V3");
+assert.equal(siliconFlowAnalysisSettings.analysisModel, "Qwen/Qwen3.5-4B");
 assert.equal(normalizeEchoNotesSettings({ redactTranscriptBeforeAnalysis: true }).redactTranscriptBeforeAnalysis, true);
 const customOpenAIAnalysisSettings = normalizeEchoNotesSettings({
 	analysisProvider: "openai",
 	analysisBaseUrl: "https://proxy.example.com/v1",
 	analysisModel: "my-chat-model"
 });
-assert.equal(customOpenAIAnalysisSettings.analysisProvider, "openai");
+assert.equal(customOpenAIAnalysisSettings.analysisProvider, "custom-openai-compatible");
 assert.equal(customOpenAIAnalysisSettings.analysisBaseUrl, "https://proxy.example.com/v1");
 assert.equal(customOpenAIAnalysisSettings.analysisModel, "my-chat-model");
+for (const provider of REMOVED_ANALYSIS_PROVIDER_IDS) {
+	assert.equal(isAnalysisProviderId(provider), false);
+	assert.equal(isRemovedAnalysisProviderId(provider), true);
+}
 const invalidAnalysisProviderSettings = normalizeEchoNotesSettings({
 	analysisProvider: "unknown-provider",
 	analysisBaseUrl: "https://example.invalid/v1",
@@ -2891,7 +2436,7 @@ const removedLegacyTranscriptionProviderSettings = normalizeEchoNotesSettings({
 });
 assert.deepEqual(removedLegacyTranscriptionProviderSettings.offlineTranscription, DEFAULT_SETTINGS.offlineTranscription);
 for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
-	if (provider === "mosi" || provider === "volcengine-agentplan") {
+	if (provider === "mosi") {
 		continue;
 	}
 	const customConfig = {
@@ -2914,12 +2459,7 @@ assert.deepEqual(
 			language: "en"
 		}
 	}).offlineTranscription,
-	{
-		provider: "volcengine-agentplan",
-		baseUrl: AGENTPLAN_FLASH_BASE_URL,
-		model: "doubao-seed-asr-2.0",
-		language: "auto"
-	}
+	DEFAULT_SETTINGS.offlineTranscription
 );
 const normalizedMosiDiarizationSettings = normalizeEchoNotesSettings({
 	offlineTranscription: {

@@ -52,16 +52,6 @@ const MOSI_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
 	maxSplitDepth: 4
 };
 
-const AGENTPLAN_OFFLINE_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
-	provider: "volcengine-agentplan",
-	supportsChunking: false,
-	maxSourceBytes: 100 * MB,
-	maxSourceDurationSeconds: 2 * 60 * 60,
-	retryableHttpStatuses: [],
-	retryDelaysMs: [1000],
-	maxSplitDepth: 0
-};
-
 const EXACT_MODEL_POLICIES: ProviderTranscriptionPolicy[] = [
 	{
 		...SILICONFLOW_POLICY,
@@ -88,9 +78,6 @@ const EXACT_MODEL_POLICIES: ProviderTranscriptionPolicy[] = [
 ];
 
 const PROVIDER_POLICIES: Partial<Record<OfflineTranscriptionProviderId, ProviderTranscriptionPolicy>> = {
-	"volcengine-agentplan": {
-		...AGENTPLAN_OFFLINE_POLICY
-	},
 	siliconflow: {
 		...SILICONFLOW_POLICY
 	},

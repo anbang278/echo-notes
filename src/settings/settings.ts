@@ -1,38 +1,42 @@
 import type { Hotkey, Modifier } from "obsidian";
 
 export type OfflineTranscriptionProviderId =
-	| "volcengine-agentplan"
-	| "siliconflow"
 	| "aliyun-bailian"
+	| "siliconflow"
 	| "mosi"
 	| "ollama"
 	| "lm-studio";
 
 export type AnalysisProviderId =
-	| "volcengine-agentplan"
 	| "siliconflow"
 	| "aliyun-bailian"
-	| "openai"
-	| "ollama"
-	| "ollama-open-webui"
-	| "google-gemini"
-	| "openrouter"
-	| "lm-studio"
-	| "groq"
-	| "302-ai"
-	| "anthropic"
-	| "mistral-ai"
-	| "together-ai"
-	| "fireworks-ai"
-	| "perplexity-ai"
 	| "deepseek"
-	| "xai"
-	| "novita-ai"
-	| "deepinfra"
-	| "sambanova"
-	| "cerebras"
-	| "z-ai"
+	| "volcengine-agentplan"
+	| "ollama"
+	| "lm-studio"
 	| "custom-openai-compatible";
+
+export const REMOVED_ANALYSIS_PROVIDER_IDS = [
+	"openai",
+	"ollama-open-webui",
+	"google-gemini",
+	"openrouter",
+	"groq",
+	"302-ai",
+	"anthropic",
+	"mistral-ai",
+	"together-ai",
+	"fireworks-ai",
+	"perplexity-ai",
+	"xai",
+	"novita-ai",
+	"deepinfra",
+	"sambanova",
+	"cerebras",
+	"z-ai"
+] as const;
+
+export type RemovedAnalysisProviderId = (typeof REMOVED_ANALYSIS_PROVIDER_IDS)[number];
 
 export type RealtimeTranscriptionProviderId = "volcengine-agentplan";
 
@@ -63,8 +67,6 @@ export type EchoNotesHotkeySetting = Hotkey | null;
 
 export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
 export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
-export const AGENTPLAN_FLASH_BASE_URL =
-	"https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
 export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
 export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
 export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
@@ -192,44 +194,26 @@ export const SILICONFLOW_TRANSCRIPTION_MODELS = [
 ] as const;
 
 export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
-	"volcengine-agentplan": "火山引擎 AgentPlan",
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
-	openai: "OpenAI（OpenAI）",
-	ollama: "Ollama",
-	"ollama-open-webui": "Ollama（Open WebUI）",
-	"google-gemini": "Google Gemini",
-	openrouter: "OpenRouter",
-	"lm-studio": "LM Studio",
-	groq: "Groq（Groq）",
-	"302-ai": "302.AI",
-	anthropic: "Anthropic",
-	"mistral-ai": "Mistral AI",
-	"together-ai": "Together AI",
-	"fireworks-ai": "Fireworks AI",
-	"perplexity-ai": "Perplexity AI",
 	deepseek: "DeepSeek",
-	xai: "xAI（Grok）",
-	"novita-ai": "Novita AI",
-	deepinfra: "DeepInfra",
-	sambanova: "SambaNova",
-	cerebras: "Cerebras",
-	"z-ai": "Z.AI",
+	"volcengine-agentplan": "火山引擎 AgentPlan",
+	ollama: "Ollama",
+	"lm-studio": "LM Studio",
 	"custom-openai-compatible": "自定义兼容接口（Custom OpenAI-compatible）"
 };
 
 export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> = {
-	"volcengine-agentplan": "火山引擎 AgentPlan（录音文件极速版）",
-	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
+	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	mosi: "MOSI（可选说话人分离）",
 	ollama: "Ollama",
 	"lm-studio": "LM Studio"
 };
 
 export const PROVIDER_LABELS: Record<TranscriptionProviderId, string> = {
-	...OFFLINE_TRANSCRIPTION_PROVIDER_LABELS,
-	"volcengine-agentplan": "火山引擎 AgentPlan"
+	"volcengine-agentplan": "火山引擎 AgentPlan",
+	...OFFLINE_TRANSCRIPTION_PROVIDER_LABELS
 };
 
 export const COPY_LANGUAGE_LABELS: Record<CopyLanguage, string> = {
@@ -246,97 +230,29 @@ export const TRANSCRIPTION_LANGUAGE_LABELS: Record<string, string> = {
 };
 
 export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNotesSettings, "analysisBaseUrl" | "analysisModel">> = {
-	"volcengine-agentplan": {
-		analysisBaseUrl: AGENTPLAN_ANALYSIS_BASE_URL,
-		analysisModel: "doubao-seed-2.0-lite"
-	},
 	siliconflow: {
 		analysisBaseUrl: "https://api.siliconflow.cn/v1",
-		analysisModel: "deepseek-ai/DeepSeek-V3"
+		analysisModel: "Qwen/Qwen3.5-4B"
 	},
 	"aliyun-bailian": {
 		analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
 		analysisModel: "deepseek-v4-pro"
 	},
-	openai: {
-		analysisBaseUrl: "https://api.openai.com/v1",
-		analysisModel: "gpt-4o-mini"
+	deepseek: {
+		analysisBaseUrl: "https://api.deepseek.com/v1",
+		analysisModel: "deepseek-v4-pro"
+	},
+	"volcengine-agentplan": {
+		analysisBaseUrl: AGENTPLAN_ANALYSIS_BASE_URL,
+		analysisModel: "doubao-seed-2.0-lite"
 	},
 	ollama: {
 		analysisBaseUrl: "http://localhost:11434/v1",
 		analysisModel: "llama3.1"
 	},
-	"ollama-open-webui": {
-		analysisBaseUrl: "http://localhost:3000/api",
-		analysisModel: "llama3.1"
-	},
-	"google-gemini": {
-		analysisBaseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-		analysisModel: "gemini-2.0-flash"
-	},
-	openrouter: {
-		analysisBaseUrl: "https://openrouter.ai/api/v1",
-		analysisModel: "openai/gpt-4o-mini"
-	},
 	"lm-studio": {
 		analysisBaseUrl: "http://localhost:1234/v1",
 		analysisModel: "local-model"
-	},
-	groq: {
-		analysisBaseUrl: "https://api.groq.com/openai/v1",
-		analysisModel: "llama-3.3-70b-versatile"
-	},
-	"302-ai": {
-		analysisBaseUrl: "https://api.302.ai/v1",
-		analysisModel: "gpt-4o-mini"
-	},
-	anthropic: {
-		analysisBaseUrl: "https://api.anthropic.com/v1",
-		analysisModel: "claude-3-5-haiku-latest"
-	},
-	"mistral-ai": {
-		analysisBaseUrl: "https://api.mistral.ai/v1",
-		analysisModel: "mistral-small-latest"
-	},
-	"together-ai": {
-		analysisBaseUrl: "https://api.together.xyz/v1",
-		analysisModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-	},
-	"fireworks-ai": {
-		analysisBaseUrl: "https://api.fireworks.ai/inference/v1",
-		analysisModel: "accounts/fireworks/models/llama-v3p3-70b-instruct"
-	},
-	"perplexity-ai": {
-		analysisBaseUrl: "https://api.perplexity.ai",
-		analysisModel: "sonar-pro"
-	},
-	deepseek: {
-		analysisBaseUrl: "https://api.deepseek.com/v1",
-		analysisModel: "deepseek-v4-pro"
-	},
-	xai: {
-		analysisBaseUrl: "https://api.x.ai/v1",
-		analysisModel: "grok-3-mini"
-	},
-	"novita-ai": {
-		analysisBaseUrl: "https://api.novita.ai/v3/openai",
-		analysisModel: "deepseek/deepseek-v3-0324"
-	},
-	deepinfra: {
-		analysisBaseUrl: "https://api.deepinfra.com/v1/openai",
-		analysisModel: "meta-llama/Meta-Llama-3.1-8B-Instruct"
-	},
-	sambanova: {
-		analysisBaseUrl: "https://api.sambanova.ai/v1",
-		analysisModel: "Meta-Llama-3.1-8B-Instruct"
-	},
-	cerebras: {
-		analysisBaseUrl: "https://api.cerebras.ai/v1",
-		analysisModel: "llama3.1-8b"
-	},
-	"z-ai": {
-		analysisBaseUrl: "https://open.bigmodel.cn/api/paas/v4",
-		analysisModel: "glm-4-flash"
 	},
 	"custom-openai-compatible": {
 		analysisBaseUrl: "https://example.com/v1",
@@ -824,6 +740,10 @@ export function isAnalysisProviderId(value: string): value is AnalysisProviderId
 	return Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, value);
 }
 
+export function isRemovedAnalysisProviderId(value: string): value is RemovedAnalysisProviderId {
+	return (REMOVED_ANALYSIS_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
 export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
 	return BUILTIN_ANALYSIS_TEMPLATE_IDS.map((id) => cloneAnalysisTemplate(DEFAULT_ANALYSIS_TEMPLATES[id]));
 }
@@ -851,9 +771,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	const shouldPreserveOfflineConfig = isOfflineTranscriptionProviderId(rawOfflineProvider);
 	settings.offlineTranscription = {
 		provider: offlineProvider,
-		baseUrl: offlineProvider === "volcengine-agentplan"
-			? offlineDefaults.baseUrl
-			: shouldPreserveOfflineConfig
+		baseUrl: shouldPreserveOfflineConfig
 			? normalizeConfigString(
 				nestedOffline.baseUrl,
 				legacyProvider === offlineProvider ? raw.baseUrl : undefined,
@@ -861,9 +779,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			)
 			: offlineDefaults.baseUrl,
 		model:
-			offlineProvider === "volcengine-agentplan"
-				? offlineDefaults.model
-				: offlineProvider === "mosi"
+			offlineProvider === "mosi"
 				? getMosiTranscriptionModel(mosiSpeakerDiarizationEnabled)
 				: shouldPreserveOfflineConfig
 					? normalizeConfigString(
@@ -872,25 +788,13 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 							offlineDefaults.model
 						)
 					: offlineDefaults.model,
-		language:
-			offlineProvider === "volcengine-agentplan"
-				? normalizeTranscriptionLanguageForProvider(
-						offlineProvider,
-						shouldPreserveOfflineConfig
-							? normalizeConfigString(
-									nestedOffline.language,
-									legacyProvider === offlineProvider ? raw.language : undefined,
-									offlineDefaults.language
-								)
-							: offlineDefaults.language
-					)
-				: shouldPreserveOfflineConfig
-					? normalizeConfigString(
-							nestedOffline.language,
-							legacyProvider === offlineProvider ? raw.language : undefined,
-							offlineDefaults.language
-						)
-					: offlineDefaults.language
+		language: shouldPreserveOfflineConfig
+			? normalizeConfigString(
+					nestedOffline.language,
+					legacyProvider === offlineProvider ? raw.language : undefined,
+					offlineDefaults.language
+				)
+			: offlineDefaults.language
 	};
 	settings.realtimeTranscription = {
 		provider: "volcengine-agentplan",
@@ -929,19 +833,24 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 				: undefined;
 	const rawAnalysisProvider = typeof raw.analysisProvider === "string" ? raw.analysisProvider : "";
 	const hasValidAnalysisProvider = isAnalysisProviderId(rawAnalysisProvider);
+	const hasRemovedAnalysisProvider = isRemovedAnalysisProviderId(rawAnalysisProvider);
 
-	settings.analysisProvider = hasValidAnalysisProvider ? rawAnalysisProvider : DEFAULT_SETTINGS.analysisProvider;
+	settings.analysisProvider = hasValidAnalysisProvider
+		? rawAnalysisProvider
+		: hasRemovedAnalysisProvider
+			? "custom-openai-compatible"
+			: DEFAULT_SETTINGS.analysisProvider;
 	const analysisDefaults =
 		ANALYSIS_PROVIDER_DEFAULTS[settings.analysisProvider] ??
 		ANALYSIS_PROVIDER_DEFAULTS[DEFAULT_SETTINGS.analysisProvider];
 	settings.analysisBaseUrl =
 		settings.analysisProvider === "volcengine-agentplan"
 			? AGENTPLAN_ANALYSIS_BASE_URL
-			: hasValidAnalysisProvider && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
+			: (hasValidAnalysisProvider || hasRemovedAnalysisProvider) && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
 				? raw.analysisBaseUrl.trim()
 				: analysisDefaults.analysisBaseUrl;
 	settings.analysisModel =
-		hasValidAnalysisProvider && typeof raw.analysisModel === "string" && raw.analysisModel.trim()
+		(hasValidAnalysisProvider || hasRemovedAnalysisProvider) && typeof raw.analysisModel === "string" && raw.analysisModel.trim()
 			? raw.analysisModel.trim()
 			: analysisDefaults.analysisModel;
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
@@ -1004,13 +913,6 @@ export function getMosiTranscriptionModel(speakerDiarizationEnabled: boolean): s
 export function getOfflineTranscriptionProviderDefaults(
 	provider: OfflineTranscriptionProviderId
 ): Omit<TranscriptionConfig, "provider"> {
-	if (provider === "volcengine-agentplan") {
-		return {
-			baseUrl: AGENTPLAN_FLASH_BASE_URL,
-			model: "doubao-seed-asr-2.0",
-			language: "zh"
-		};
-	}
 	return PROVIDER_DEFAULTS[provider];
 }
 

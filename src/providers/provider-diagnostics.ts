@@ -2,7 +2,6 @@ import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
 import type { TranscriptionConfig } from "../settings/settings";
 import {
 	AGENTPLAN_ASYNC_BASE_URL,
-	AGENTPLAN_FLASH_BASE_URL,
 	MOSI_PLAIN_TRANSCRIPTION_MODEL,
 	MOSI_TRANSCRIPTION_BASE_URL,
 	MOSI_TRANSCRIPTION_MODEL,
@@ -111,15 +110,12 @@ export function diagnoseTranscriptionProviderSettings(
 
 		if (
 			providerId === "volcengine-agentplan" &&
-			trimmedBaseUrl !==
-				(usage === "realtime" ? AGENTPLAN_ASYNC_BASE_URL : AGENTPLAN_FLASH_BASE_URL)
+			trimmedBaseUrl !== AGENTPLAN_ASYNC_BASE_URL
 		) {
 			items.push({
 				severity: "error",
 				title: "AgentPlan Base URL 不匹配",
-				detail: `AgentPlan ${usage === "realtime" ? "实时" : "离线极速"}转写固定使用 ${
-					usage === "realtime" ? AGENTPLAN_ASYNC_BASE_URL : AGENTPLAN_FLASH_BASE_URL
-				}。`
+				detail: `AgentPlan 实时转写固定使用 ${AGENTPLAN_ASYNC_BASE_URL}。`
 			});
 		}
 		if (providerId === "mosi" && trimmedBaseUrl !== MOSI_TRANSCRIPTION_BASE_URL) {
@@ -176,38 +172,17 @@ export function diagnoseTranscriptionProviderSettings(
 			detail: "插件会调用 {Base URL}/audio/transcriptions。并非所有 OpenAI-compatible Provider 都实现了音频转写接口。"
 		});
 	}
-	if (
-		capability.endpointShape === "agentplan-asr-websocket" ||
-		capability.endpointShape === "agentplan-asr-flash-http"
-	) {
-		if (usage === "realtime") {
-			items.push({
-				severity: "info",
-				title: "AgentPlan 麦克风实时转写",
-				detail: "Echo Notes 会把麦克风音频连续降混并重采样为 16 kHz mono PCM16，以 200 ms 分包直接发送；确定分句会持续写入转写稿。"
-			});
-		} else {
-			items.push({
-				severity: "info",
-				title: "AgentPlan 离线极速转写",
-				detail: "已有录音会通过录音文件极速版 HTTP 接口一次性上传；WAV、MP3、OGG Opus 优先使用原文件，M4A、MP4、WebM 会先在本地转换为 16 kHz mono WAV。接口完成后一次性返回最终正文。"
-			});
-		}
+	if (capability.endpointShape === "agentplan-asr-websocket") {
+		items.push({
+			severity: "info",
+			title: "AgentPlan 麦克风实时转写",
+			detail: "Echo Notes 会把麦克风音频连续降混并重采样为 16 kHz mono PCM16，以 200 ms 分包直接发送；确定分句会持续写入转写稿。"
+		});
 		items.push({
 			severity: "info",
 			title: "AgentPlan 说话人分离始终开启",
-			detail:
-				usage === "realtime"
-					? "插件会输出说话人编号和 utterance 时间范围，不识别真实姓名；单人录音也会显示说话人 1。非中文语言会自动按 auto 调用。"
-					: "插件会输出本次完整请求统一的说话人编号和 utterance 绝对时间范围，不识别真实姓名；极速接口不返回中间识别正文。"
+			detail: "插件会输出说话人编号和 utterance 时间范围，不识别真实姓名；单人录音也会显示说话人 1。非中文语言会自动按 auto 调用。"
 		});
-		if (usage === "offline") {
-			items.push({
-				severity: "info",
-				title: "AgentPlan 极速版资源需单独开通",
-				detail: "当前 Key 必须具有 volc.bigasr.auc_turbo 资源权限；单次音频最多 2 小时且不超过 100 MB。"
-			});
-		}
 	}
 	if (providerId === "siliconflow") {
 		items.push({
@@ -237,15 +212,11 @@ export function diagnoseTranscriptionProviderSettings(
 			severity: "info",
 			title:
 				providerId === "volcengine-agentplan"
-					? usage === "realtime"
-						? "单连接实时会话"
-						: "单次极速上传"
+					? "单连接实时会话"
 					: "长音频分段暂不支持",
 			detail:
 				providerId === "volcengine-agentplan"
-					? usage === "realtime"
-						? "AgentPlan 使用单条优化双流 WebSocket 持续发送麦克风 PCM；停止录音后等待最终二遍识别结果。"
-						: "AgentPlan 离线模式把整段音频编码为 Base64 JSON 后发起一次 HTTP 请求，不切分为多个识别请求。"
+					? "AgentPlan 使用单条优化双流 WebSocket 持续发送麦克风 PCM；停止录音后等待最终二遍识别结果。"
 					: "该 Provider 当前不会自动分段。超过能力表限制的大文件会在上传前被阻止。"
 		});
 	}
