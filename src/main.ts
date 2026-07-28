@@ -946,6 +946,17 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			new Notice(`已创建转写稿，开始准备音频：${audioFile.name}`);
 			const handleProgress = async (progress: TranscriptionProgress): Promise<void> => {
+				if (progress.type === "whole-audio-request-started") {
+					const attemptText = progress.totalAttempts > 1
+						? `尝试 ${progress.attempt}/${progress.totalAttempts} · `
+						: "";
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `${attemptText}正在高速上传 ${formatMegabytes(progress.audioBytes)} MB 并等待识别`,
+						outputPath: initialTranscriptFile.path
+					});
+					return;
+				}
+
 				if (progress.type === "streaming-result") {
 					streamingState = {
 						text: progress.text,
@@ -2012,6 +2023,10 @@ function isChunkedAnalysisProvider(provider: unknown): provider is ChunkedAnalys
 function getPathBasename(path: string): string {
 	const normalized = path.replace(/\\/g, "/");
 	return normalized.split("/").filter(Boolean).pop() ?? path;
+}
+
+function formatMegabytes(bytes: number): string {
+	return (bytes / (1024 * 1024)).toFixed(1);
 }
 
 class TranscriptionUploadConfirmModal extends Modal {

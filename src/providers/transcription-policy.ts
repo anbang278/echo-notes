@@ -54,12 +54,11 @@ const MOSI_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
 
 const AGENTPLAN_OFFLINE_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
 	provider: "volcengine-agentplan",
-	supportsChunking: true,
-	maxSourceDurationSeconds: 3 * 60,
-	targetSegmentSeconds: 3 * 60,
-	minSegmentSeconds: 30,
+	supportsChunking: false,
+	maxSourceBytes: 100 * MB,
+	maxSourceDurationSeconds: 2 * 60 * 60,
 	retryableHttpStatuses: [],
-	retryDelaysMs: DEFAULT_RETRY_DELAYS_MS,
+	retryDelaysMs: [1000],
 	maxSplitDepth: 0
 };
 

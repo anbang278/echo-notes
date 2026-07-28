@@ -6,6 +6,7 @@ import {
 	Platform,
 	PluginSettingTab,
 	Setting,
+	setIcon,
 	type SettingDefinitionItem
 } from "obsidian";
 import type EchoNotesPlugin from "../main";
@@ -54,9 +55,51 @@ import {
 	type TranscriptionConfig
 } from "./settings";
 
+type SettingsStage = "transcription" | "analysis";
+
+type TranscriptionSettingsSection = "service" | "recording" | "output" | "automation";
+type AnalysisSettingsSection = "model" | "processing" | "templates";
+
+type SettingsSectionDefinition<T extends string> = {
+	id: T;
+	label: string;
+};
+
+type SettingsWorkflowStep =
+	| { id: SettingsStage; label: string; enabled: true }
+	| { id: "agent"; label: string; enabled: false; status: string };
+
+const SETTINGS_WORKFLOW_STEPS: readonly SettingsWorkflowStep[] = [
+	{ id: "transcription", label: "录音转写", enabled: true },
+	{ id: "analysis", label: "AI 分析", enabled: true },
+	{ id: "agent", label: "调用外部 Agent", enabled: false, status: "研发中" }
+];
+
+const ENABLED_SETTINGS_STAGES: readonly SettingsStage[] = ["transcription", "analysis"];
+
+const ECHO_NOTES_README_URL =
+	"https://github.com/anbang278/echo-notes/blob/main/README.zh-CN.md";
+
+const TRANSCRIPTION_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<TranscriptionSettingsSection>[] = [
+	{ id: "service", label: "转写服务" },
+	{ id: "recording", label: "录音控制" },
+	{ id: "output", label: "输出规则" },
+	{ id: "automation", label: "自动化与日志" }
+];
+
+const ANALYSIS_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<AnalysisSettingsSection>[] = [
+	{ id: "model", label: "模型配置" },
+	{ id: "processing", label: "处理策略" },
+	{ id: "templates", label: "模板管理" }
+];
+
 export class EchoNotesSettingTab extends PluginSettingTab {
 	private plugin: EchoNotesPlugin;
 	private settingsContainerEl: HTMLElement | null = null;
+	private activeSettingsStage: SettingsStage = "transcription";
+	private activeTranscriptionSettingsSection: TranscriptionSettingsSection = "service";
+	private activeAnalysisSettingsSection: AnalysisSettingsSection = "model";
+	private settingsRenderSequence = 0;
 
 	constructor(app: App, plugin: EchoNotesPlugin) {
 		super(app, plugin);
@@ -82,13 +125,285 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderSettings(containerEl: HTMLElement): void {
 		this.settingsContainerEl = containerEl;
 		containerEl.empty();
+		const renderId = ++this.settingsRenderSequence;
+		this.renderSettingsIntroduction(containerEl, renderId);
+		const workflowEl = this.renderSettingsWorkflow(containerEl, renderId);
 
-		this.renderTranscriptionSettings(containerEl);
+		const transcriptionPanelEl = containerEl.createDiv({ cls: "echo-notes-settings-panel" });
+		transcriptionPanelEl.id = `echo-notes-settings-panel-${renderId}-transcription`;
+		transcriptionPanelEl.setAttribute("role", "tabpanel");
+		transcriptionPanelEl.setAttribute(
+			"aria-labelledby",
+			`echo-notes-settings-step-${renderId}-transcription`
+		);
+		this.renderTranscriptionSettings(transcriptionPanelEl, renderId);
 
-		this.renderAnalysisSettings(containerEl);
+		const analysisPanelEl = containerEl.createDiv({ cls: "echo-notes-settings-panel" });
+		analysisPanelEl.id = `echo-notes-settings-panel-${renderId}-analysis`;
+		analysisPanelEl.setAttribute("role", "tabpanel");
+		analysisPanelEl.setAttribute(
+			"aria-labelledby",
+			`echo-notes-settings-step-${renderId}-analysis`
+		);
+		this.renderAnalysisSettings(analysisPanelEl, renderId);
 
-		new Setting(containerEl).setName("输出与插入").setHeading();
+		this.activateSettingsStage(
+			workflowEl,
+			{
+				transcription: transcriptionPanelEl,
+				analysis: analysisPanelEl
+			},
+			this.activeSettingsStage,
+			false
+		);
+	}
 
+	private renderSettingsIntroduction(containerEl: HTMLElement, renderId: number): void {
+		const headingId = `echo-notes-settings-intro-title-${renderId}`;
+		const introEl = containerEl.createEl("section", {
+			cls: "echo-notes-settings-intro",
+			attr: { "aria-labelledby": headingId }
+		});
+		const headingEl = introEl.createEl("h2", {
+			cls: "echo-notes-settings-intro-title"
+		});
+		headingEl.id = headingId;
+		const titleMarkEl = headingEl.createSpan({ cls: "echo-notes-settings-intro-title-mark" });
+		titleMarkEl.setAttribute("aria-hidden", "true");
+		setIcon(titleMarkEl, "audio-waveform");
+		headingEl.createSpan({ text: "记录行动，构建面向未来的 AI Memory" });
+		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
+		conceptEl.createSpan({
+			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
+		});
+		const readmeLinkEl = conceptEl.createEl("a", {
+			cls: "echo-notes-settings-intro-link",
+			text: "查看完整设计理念",
+			attr: {
+				href: ECHO_NOTES_README_URL,
+				target: "_blank",
+				rel: "noopener noreferrer"
+			}
+		});
+		const iconEl = readmeLinkEl.createSpan({ cls: "echo-notes-settings-intro-link-icon" });
+		iconEl.setAttribute("aria-hidden", "true");
+		setIcon(iconEl, "external-link");
+		containerEl.createEl("p", {
+			cls: "echo-notes-settings-intro-guide",
+			text: "操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。"
+		});
+	}
+
+	private renderSettingsWorkflow(containerEl: HTMLElement, renderId: number): HTMLElement {
+		const workflowEl = containerEl.createDiv({ cls: "echo-notes-settings-workflow" });
+		workflowEl.setAttribute("role", "tablist");
+		workflowEl.setAttribute("aria-label", "Echo Notes 工作流设置");
+
+		SETTINGS_WORKFLOW_STEPS.forEach((step, index) => {
+			const buttonEl = workflowEl.createEl("button", {
+				cls: "echo-notes-settings-step",
+				attr: { type: "button", role: "tab" }
+			});
+			buttonEl.id = `echo-notes-settings-step-${renderId}-${step.id}`;
+			buttonEl.dataset.settingsStage = step.id;
+			buttonEl.createSpan({
+				cls: "echo-notes-settings-step-number",
+				text: String(index + 1)
+			});
+			const labelEl = buttonEl.createSpan({ cls: "echo-notes-settings-step-label" });
+			labelEl.createSpan({ text: step.label });
+
+			if (!step.enabled) {
+				buttonEl.disabled = true;
+				buttonEl.tabIndex = -1;
+				buttonEl.setAttribute("aria-disabled", "true");
+				buttonEl.setAttribute("aria-selected", "false");
+				labelEl.createSpan({
+					cls: "echo-notes-settings-step-status",
+					text: step.status
+				});
+				return;
+			}
+
+			buttonEl.setAttribute(
+				"aria-controls",
+				`echo-notes-settings-panel-${renderId}-${step.id}`
+			);
+			buttonEl.addEventListener("click", () => {
+				this.activateSettingsStageFromWorkflow(workflowEl, step.id);
+			});
+			buttonEl.addEventListener("keydown", (event) => {
+				this.handleSettingsStageKeydown(event, workflowEl, step.id);
+			});
+		});
+
+		return workflowEl;
+	}
+
+	private activateSettingsStageFromWorkflow(workflowEl: HTMLElement, stage: SettingsStage): void {
+		const containerEl = workflowEl.parentElement;
+		const transcriptionPanelEl = containerEl?.querySelector<HTMLElement>(
+			'.echo-notes-settings-panel[role="tabpanel"][id$="-transcription"]'
+		);
+		const analysisPanelEl = containerEl?.querySelector<HTMLElement>(
+			'.echo-notes-settings-panel[role="tabpanel"][id$="-analysis"]'
+		);
+		if (!transcriptionPanelEl || !analysisPanelEl) {
+			return;
+		}
+
+		this.activateSettingsStage(
+			workflowEl,
+			{
+				transcription: transcriptionPanelEl,
+				analysis: analysisPanelEl
+			},
+			stage
+		);
+	}
+
+	private activateSettingsStage(
+		workflowEl: HTMLElement,
+		panels: Record<SettingsStage, HTMLElement>,
+		stage: SettingsStage,
+		moveFocus = true
+	): void {
+		this.activeSettingsStage = stage;
+		for (const candidate of ENABLED_SETTINGS_STAGES) {
+			const isActive = candidate === stage;
+			const buttonEl = workflowEl.querySelector<HTMLButtonElement>(
+				`[data-settings-stage="${candidate}"]`
+			);
+			buttonEl?.toggleClass("is-active", isActive);
+			buttonEl?.setAttribute("aria-selected", String(isActive));
+			if (buttonEl) {
+				buttonEl.tabIndex = isActive ? 0 : -1;
+			}
+			panels[candidate].hidden = !isActive;
+		}
+
+		if (moveFocus) {
+			workflowEl
+				.querySelector<HTMLButtonElement>(`[data-settings-stage="${stage}"]`)
+				?.focus();
+		}
+	}
+
+	private handleSettingsStageKeydown(
+		event: KeyboardEvent,
+		workflowEl: HTMLElement,
+		stage: SettingsStage
+	): void {
+		let targetIndex: number;
+		const currentIndex = ENABLED_SETTINGS_STAGES.indexOf(stage);
+		switch (event.key) {
+			case "ArrowLeft":
+				targetIndex = (currentIndex - 1 + ENABLED_SETTINGS_STAGES.length) % ENABLED_SETTINGS_STAGES.length;
+				break;
+			case "ArrowRight":
+				targetIndex = (currentIndex + 1) % ENABLED_SETTINGS_STAGES.length;
+				break;
+			case "Home":
+				targetIndex = 0;
+				break;
+			case "End":
+				targetIndex = ENABLED_SETTINGS_STAGES.length - 1;
+				break;
+			default:
+				return;
+		}
+
+		event.preventDefault();
+		this.activateSettingsStageFromWorkflow(workflowEl, ENABLED_SETTINGS_STAGES[targetIndex]);
+	}
+
+	private renderSettingsSectionTabs<T extends string>(
+		containerEl: HTMLElement,
+		renderId: number,
+		namespace: SettingsStage,
+		ariaLabel: string,
+		sections: readonly SettingsSectionDefinition<T>[],
+		activeSection: T,
+		renderSection: (section: T, panelEl: HTMLElement) => void,
+		onActiveSectionChange: (section: T) => void
+	): void {
+		const tabsEl = containerEl.createDiv({ cls: "echo-notes-settings-section-tabs" });
+		tabsEl.setAttribute("role", "tablist");
+		tabsEl.setAttribute("aria-label", ariaLabel);
+		tabsEl.setAttribute("aria-orientation", "horizontal");
+		tabsEl.style.setProperty("--echo-notes-settings-section-columns", String(sections.length));
+
+		const buttonEls = new Map<T, HTMLButtonElement>();
+		const panelEls = new Map<T, HTMLElement>();
+		const activate = (section: T, moveFocus = true): void => {
+			onActiveSectionChange(section);
+			for (const candidate of sections) {
+				const isActive = candidate.id === section;
+				const buttonEl = buttonEls.get(candidate.id);
+				const panelEl = panelEls.get(candidate.id);
+				buttonEl?.toggleClass("is-active", isActive);
+				buttonEl?.setAttribute("aria-selected", String(isActive));
+				if (buttonEl) {
+					buttonEl.tabIndex = isActive ? 0 : -1;
+				}
+				if (panelEl) {
+					panelEl.hidden = !isActive;
+				}
+			}
+			if (moveFocus) {
+				buttonEls.get(section)?.focus();
+			}
+		};
+
+		for (const [index, section] of sections.entries()) {
+			const tabId = `echo-notes-settings-section-${renderId}-${namespace}-${section.id}`;
+			const panelId = `echo-notes-settings-section-panel-${renderId}-${namespace}-${section.id}`;
+			const buttonEl = tabsEl.createEl("button", {
+				cls: "echo-notes-settings-section-tab",
+				text: section.label,
+				attr: {
+					type: "button",
+					role: "tab",
+					id: tabId,
+					"aria-controls": panelId
+				}
+			});
+			buttonEls.set(section.id, buttonEl);
+			buttonEl.addEventListener("click", () => activate(section.id));
+			buttonEl.addEventListener("keydown", (event) => {
+				let targetIndex: number;
+				switch (event.key) {
+					case "ArrowLeft":
+						targetIndex = (index - 1 + sections.length) % sections.length;
+						break;
+					case "ArrowRight":
+						targetIndex = (index + 1) % sections.length;
+						break;
+					case "Home":
+						targetIndex = 0;
+						break;
+					case "End":
+						targetIndex = sections.length - 1;
+						break;
+					default:
+						return;
+				}
+				event.preventDefault();
+				activate(sections[targetIndex].id);
+			});
+
+			const panelEl = containerEl.createDiv({ cls: "echo-notes-settings-section-panel" });
+			panelEl.id = panelId;
+			panelEl.setAttribute("role", "tabpanel");
+			panelEl.setAttribute("aria-labelledby", tabId);
+			panelEls.set(section.id, panelEl);
+			renderSection(section.id, panelEl);
+		}
+
+		activate(activeSection, false);
+	}
+
+	private renderTranscriptionOutputSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("输出目录策略")
 			.setDesc("选择 transcript 生成位置。括号内为配置文件中的英文枚举值。")
@@ -144,9 +459,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+	}
 
-		new Setting(containerEl).setName("自动化").setHeading();
-
+	private renderTranscriptionAutomationSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("手动转写前确认上传")
 			.setDesc("开启后，手动转写会先显示 Provider、Base URL、模型和文件大小；自动化转写会跳过需要确认的上传，避免后台发送音频。")
@@ -205,12 +520,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.verboseLog = value;
 						await this.plugin.saveSettings();
 					})
-		);
+			);
 	}
 
-	private renderTranscriptionSettings(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("音频转写").setHeading();
-
+	private renderTranscriptionSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("转写模式")
 			.setDesc("实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 Vault 中已有的音频文件。")
@@ -226,6 +539,36 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					})
 			);
 
+		this.renderSettingsSectionTabs(
+			containerEl,
+			renderId,
+			"transcription",
+			"录音转写配置分类",
+			TRANSCRIPTION_SETTINGS_SECTIONS,
+			this.activeTranscriptionSettingsSection,
+			(section, panelEl) => {
+				switch (section) {
+					case "service":
+						this.renderTranscriptionServiceSettings(panelEl);
+						break;
+					case "recording":
+						this.renderTranscriptionRecordingSettings(panelEl);
+						break;
+					case "output":
+						this.renderTranscriptionOutputSettings(panelEl);
+						break;
+					case "automation":
+						this.renderTranscriptionAutomationSettings(panelEl);
+						break;
+				}
+			},
+			(section) => {
+				this.activeTranscriptionSettingsSection = section;
+			}
+		);
+	}
+
+	private renderTranscriptionServiceSettings(containerEl: HTMLElement): void {
 		const config = this.getSelectedTranscriptionConfig();
 		const isRealtime = this.plugin.settings.transcriptionMode === "realtime";
 		const isMosi = !isRealtime && config.provider === "mosi";
@@ -240,7 +583,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				isRealtime
 					? "实时转写目前固定使用火山引擎 AgentPlan。"
-					: "选择用于 Vault 中已有音频文件转写的服务商；AgentPlan 离线模式固定使用单流高精度端点。"
+					: "选择用于 Vault 中已有音频文件转写的服务商；AgentPlan 离线模式固定使用录音文件极速版 HTTP 端点。"
 			)
 			.addDropdown((dropdown) => {
 				if (isRealtime) {
@@ -373,7 +716,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					isRealtime
 						? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。"
 						: isAgentPlan
-							? "AgentPlan 离线单流转写固定使用 doubao-seed-asr-2.0。"
+							? "AgentPlan 离线极速转写固定使用 doubao-seed-asr-2.0。"
 						: isMosi
 							? this.plugin.settings.mosiSpeakerDiarizationEnabled
 								? "已开启说话人分离，固定使用 moss-transcribe-diarize。"
@@ -458,7 +801,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						? "MOSI 服务端说话人编号会按首次出现顺序显示；长音频的编号仅在当前分段内有效。"
 						: isRealtime
 							? "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
-							: "AgentPlan 离线分段会分别进行说话人聚类；编号仅在当前分段内有效，时间范围保持原录音绝对时间。"
+							: "AgentPlan 离线极速版完成后一次性返回本次请求统一的说话人聚类结果和绝对时间轴。"
 				)
 				.addDropdown((dropdown) =>
 					dropdown
@@ -472,7 +815,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				);
 		}
 
-		if (isRealtime) {
+		this.renderProviderDiagnostics(containerEl);
+	}
+
+	private renderTranscriptionRecordingSettings(containerEl: HTMLElement): void {
+		if (this.plugin.settings.transcriptionMode === "realtime") {
 			const devices = this.plugin.getCachedAudioInputDevices();
 			new Setting(containerEl)
 				.setName("麦克风")
@@ -502,8 +849,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		} else {
 			this.renderOfficialRecorderSettings(containerEl);
 		}
-
-		this.renderProviderDiagnostics(containerEl);
 	}
 
 	private renderOfficialRecorderSettings(containerEl: HTMLElement): void {
@@ -598,9 +943,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private renderAnalysisSettings(containerEl: HTMLElement): void {
-		new Setting(containerEl).setName("AI 纪要分析").setHeading();
-
+	private renderAnalysisSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("启用 AI 纪要分析")
 			.setDesc("开启后显示分析模型配置和分析模板设置，并允许对转写稿生成 AI 纪要。")
@@ -618,6 +961,33 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 
+		this.renderSettingsSectionTabs(
+			containerEl,
+			renderId,
+			"analysis",
+			"AI 分析配置分类",
+			ANALYSIS_SETTINGS_SECTIONS,
+			this.activeAnalysisSettingsSection,
+			(section, panelEl) => {
+				switch (section) {
+					case "model":
+						this.renderAnalysisModelSettings(panelEl);
+						break;
+					case "processing":
+						this.renderAnalysisProcessingSettings(panelEl);
+						break;
+					case "templates":
+						this.renderAnalysisTemplateSettings(panelEl);
+						break;
+				}
+			},
+			(section) => {
+				this.activeAnalysisSettingsSection = section;
+			}
+		);
+	}
+
+	private renderAnalysisModelSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("分析 Provider")
 			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
@@ -736,7 +1106,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					new ProviderDiagnosticsModal(this.app, result.providerLabel, result.canAttemptAnalysis, result.items).open();
 				})
 			);
+	}
 
+	private renderAnalysisProcessingSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("长文本分块分析")
 			.setDesc("超过分块字符数时，先逐块提取，再汇总为一份去重后的最终纪要；会产生多次模型调用。")
@@ -778,7 +1150,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+	}
 
+	private renderAnalysisTemplateSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("默认分析模板")
 			.setDesc("录音链接上下三行未命中任何识别关键字时，使用这个模板生成 AI 纪要。若默认模板被禁用，会自动改用第一个已启用模板。")
@@ -795,8 +1169,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.refreshSettings();
 					});
 			});
-
-		new Setting(containerEl).setName("分析模板").setHeading();
 
 		const templateListEl = containerEl.createDiv({ cls: "echo-notes-template-list" });
 		for (const template of this.plugin.settings.analysisTemplates) {
@@ -1024,7 +1396,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			case "volcengine-agentplan":
 				return this.plugin.settings.transcriptionMode === "realtime"
 					? "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。"
-					: "AgentPlan ASR 单流高精度 WebSocket 端点；超过约 3 分钟的已有录音会在本地静音附近切段并顺序发送，仅支持 Obsidian 桌面端。";
+					: "AgentPlan 录音文件极速版 HTTP 端点；整段音频一次性高速上传，完成后写入最终稿。需单独开通 volc.bigasr.auc_turbo，单次上限 2 小时、100 MB。";
 			case "aliyun-bailian":
 				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
 			case "ollama":

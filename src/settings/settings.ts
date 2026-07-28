@@ -63,8 +63,8 @@ export type EchoNotesHotkeySetting = Hotkey | null;
 
 export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
 export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
-export const AGENTPLAN_NOSTREAM_BASE_URL =
-	"wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_nostream";
+export const AGENTPLAN_FLASH_BASE_URL =
+	"https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash";
 export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
 export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
 export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
@@ -219,7 +219,7 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 };
 
 export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionProviderId, string> = {
-	"volcengine-agentplan": "火山引擎 AgentPlan（单流高精度）",
+	"volcengine-agentplan": "火山引擎 AgentPlan（录音文件极速版）",
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	mosi: "MOSI（可选说话人分离）",
@@ -1006,7 +1006,7 @@ export function getOfflineTranscriptionProviderDefaults(
 ): Omit<TranscriptionConfig, "provider"> {
 	if (provider === "volcengine-agentplan") {
 		return {
-			baseUrl: AGENTPLAN_NOSTREAM_BASE_URL,
+			baseUrl: AGENTPLAN_FLASH_BASE_URL,
 			model: "doubao-seed-asr-2.0",
 			language: "zh"
 		};

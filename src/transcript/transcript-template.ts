@@ -367,7 +367,15 @@ function renderProgressNotice(input: ProgressTranscriptTemplateInput, fallback: 
 			? `Realtime recording: ${elapsed}, ${state.connectionStatus ?? "connecting"}${utteranceCount > 0 ? `, ${utteranceCount} stable utterances written` : ""}.`
 			: `正在实时录音：${elapsed}，${state.connectionStatus ?? "正在连接 AgentPlan"}${utteranceCount > 0 ? `，已写入 ${utteranceCount} 个确定分句` : ""}。`;
 	}
-	if (!state || state.totalSeconds <= 0) {
+	if (!state) {
+		if (input.provider === "volcengine-agentplan") {
+			return input.copyLanguage === "en"
+				? "The full audio file is being uploaded to AgentPlan Flash ASR. The final transcript will be written when the request completes."
+				: "整段音频正在上传至 AgentPlan 极速版；请求完成后将一次性写入最终转写稿。";
+		}
+		return fallback;
+	}
+	if (state.totalSeconds <= 0) {
 		return fallback;
 	}
 

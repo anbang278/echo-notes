@@ -16,6 +16,7 @@ export const AGENTPLAN_PACKET_DURATION_MS = 200;
 export const AGENTPLAN_HANDSHAKE_TIMEOUT_MS = 15000;
 export const AGENTPLAN_FINAL_RESPONSE_TIMEOUT_MS = 30000;
 export const AGENTPLAN_PROGRESS_INTERVAL_MS = 2000;
+export const AGENTPLAN_MAX_BUFFERED_AMOUNT_BYTES = 2 * 1024 * 1024;
 
 export interface AgentPlanSocket {
 	onOpen(listener: () => void): void;
@@ -209,6 +210,13 @@ export async function transcribeAgentPlanWav(options: AgentPlanClientOptions): P
 				for (let packetIndex = 0; packetIndex < packets.length; packetIndex += 1) {
 					if (settled) {
 						return;
+					}
+					if ((socket.getBufferedAmount?.() ?? 0) > AGENTPLAN_MAX_BUFFERED_AMOUNT_BYTES) {
+						throw new AgentPlanClientError(
+							"AgentPlan ASR WebSocket 发送缓冲超过 2 MB，连接可能已阻塞。",
+							undefined,
+							traceId
+						);
 					}
 					const isLastPackage = packetIndex === packets.length - 1;
 					const frame = await encodeAgentPlanAudioRequest(packets[packetIndex], packetIndex + 2, isLastPackage);

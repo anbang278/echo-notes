@@ -1,38 +1,46 @@
 import type { App } from "obsidian";
-import { runAudioChunkPipeline } from "../audio/audio-chunk-pipeline";
+import { probeAudioDurationSeconds } from "../audio/audio-duration";
 import {
-	createWavAudioSegments,
-	formatSegmentTimeRange,
-	type WavAudioSegment
-} from "../audio/audio-segmenter";
-import { isSupportedAudioFile } from "../audio/audio-detector";
+	getAudioMimeType,
+	isSupportedAudioFile
+} from "../audio/audio-detector";
+import { createWavAudioBuffer } from "../audio/audio-segmenter";
 import type { TranscriptionConfig } from "../settings/settings";
+import { resolveProviderTranscriptionPolicy } from "./transcription-policy";
 import {
-	normalizeAgentPlanError,
-	transcribeAgentPlanWav,
-	type AgentPlanSocketFactory
-} from "./volcengine-agentplan-client";
-import { loadAgentPlanSocketFactory } from "./volcengine-agentplan-socket";
-import { resolveProviderTranscriptionPolicy, type ProviderTranscriptionPolicy } from "./transcription-policy";
-import {
+	createNetworkTranscriptionError,
 	TranscriptionError,
 	type TranscriptionInput,
 	type TranscriptionProvider,
-	type TranscriptionResult,
-	type TranscriptionUtterance
+	type TranscriptionResult
 } from "./transcription-provider";
 import {
-	normalizeAgentPlanUtterances,
-	type AgentPlanResponsePayload
+	AGENTPLAN_FLASH_MAX_AUDIO_BYTES,
+	AGENTPLAN_FLASH_MAX_DURATION_SECONDS,
+	transcribeAgentPlanFlash,
+	type AgentPlanFlashRequest,
+	type AgentPlanFlashClientResult
+} from "./volcengine-agentplan-flash-client";
+import {
+	getAgentPlanWavDurationSeconds,
+	normalizeAgentPlanUtterances
 } from "./volcengine-agentplan-protocol";
 
 export interface AgentPlanOfflineProviderDependencies {
-	isMobile: () => boolean;
-	createSegments?: typeof createWavAudioSegments;
-	createSocket?: AgentPlanSocketFactory;
-	transcribeWav?: typeof transcribeAgentPlanWav;
+	createWavBuffer?: typeof createWavAudioBuffer;
+	probeDuration?: typeof probeAudioDurationSeconds;
+	transcribeFlash?: typeof transcribeAgentPlanFlash;
+	request?: AgentPlanFlashRequest;
 	sleep?: (delayMs: number) => Promise<void>;
 }
+
+const AGENTPLAN_FLASH_DIRECT_UPLOAD_EXTENSIONS = new Set([
+	"wav",
+	"mp3",
+	"mpeg",
+	"mpga",
+	"ogg"
+]);
 
 export class VolcengineAgentPlanAsrProvider implements TranscriptionProvider {
 	id = "volcengine-agentplan";
@@ -41,25 +49,27 @@ export class VolcengineAgentPlanAsrProvider implements TranscriptionProvider {
 	private app: App;
 	private settings: TranscriptionConfig;
 	private apiKey: string;
-	private createSegments: typeof createWavAudioSegments;
-	private createSocket?: AgentPlanSocketFactory;
-	private transcribeWav: typeof transcribeAgentPlanWav;
+	private createWavBuffer: typeof createWavAudioBuffer;
+	private probeDuration: typeof probeAudioDurationSeconds;
+	private transcribeFlash: typeof transcribeAgentPlanFlash;
+	private request: AgentPlanFlashRequest;
 	private sleep: (delayMs: number) => Promise<void>;
-	private isMobile: () => boolean;
 
 	constructor(
 		app: App,
 		settings: TranscriptionConfig,
 		apiKey: string,
-		dependencies: AgentPlanOfflineProviderDependencies
+		dependencies: AgentPlanOfflineProviderDependencies = {}
 	) {
 		this.app = app;
 		this.settings = settings;
 		this.apiKey = apiKey;
-		this.createSegments = dependencies.createSegments ?? createWavAudioSegments;
-		this.createSocket = dependencies.createSocket;
-		this.transcribeWav = dependencies.transcribeWav ?? transcribeAgentPlanWav;
-		this.isMobile = dependencies.isMobile;
+		this.createWavBuffer = dependencies.createWavBuffer ?? createWavAudioBuffer;
+		this.probeDuration = dependencies.probeDuration ?? probeAudioDurationSeconds;
+		this.transcribeFlash = dependencies.transcribeFlash ?? transcribeAgentPlanFlash;
+		this.request = dependencies.request ?? (async () => {
+			throw new Error("AgentPlan 极速版 HTTP 请求实现未配置。");
+		});
 		this.sleep =
 			dependencies.sleep ??
 			((delayMs: number) => new Promise<void>((resolve) => window.setTimeout(resolve, delayMs)));
@@ -68,187 +78,184 @@ export class VolcengineAgentPlanAsrProvider implements TranscriptionProvider {
 	async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
 		const apiKey = this.apiKey.trim();
 		if (!apiKey) {
-			throw new TranscriptionError("missing_api_key", "请先在 Echo Notes 设置中配置火山引擎 AgentPlan 专属 API Key。");
-		}
-		if (this.isMobile()) {
 			throw new TranscriptionError(
-				"unsupported_audio",
-				"火山引擎 AgentPlan 转写仅支持 Obsidian 桌面端；移动端无法为 WebSocket 握手写入鉴权请求头。"
+				"missing_api_key",
+				"请先在 Echo Notes 设置中配置火山引擎 AgentPlan 专属 API Key。"
 			);
 		}
 		if (!isSupportedAudioFile(input.audioFile)) {
-			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
+			throw new TranscriptionError(
+				"unsupported_format",
+				`不支持的音频格式：${input.audioFile.extension}`
+			);
+		}
+		const usesOriginalAudio = AGENTPLAN_FLASH_DIRECT_UPLOAD_EXTENSIONS.has(
+			input.audioFile.extension.toLowerCase()
+		);
+		if (
+			usesOriginalAudio &&
+			input.audioFile.stat.size > AGENTPLAN_FLASH_MAX_AUDIO_BYTES
+		) {
+			throw new TranscriptionError(
+				"file_too_large",
+				`AgentPlan 极速版单次音频不能超过 100 MB；当前文件为 ${formatMegabytes(input.audioFile.stat.size)} MB。`
+			);
 		}
 
 		const sourceAudioBuffer = await this.app.vault.readBinary(input.audioFile);
+		const sourceMimeType = getAudioMimeType(input.audioFile);
+		let durationSeconds = await this.probeDuration(sourceAudioBuffer, sourceMimeType);
+		this.assertDurationWithinLimit(durationSeconds);
+
+		let uploadAudioBuffer: ArrayBuffer;
+		if (usesOriginalAudio) {
+			uploadAudioBuffer = sourceAudioBuffer;
+		} else {
+			try {
+				uploadAudioBuffer = await this.createWavBuffer(sourceAudioBuffer);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				throw new TranscriptionError(
+					"audio_decode_error",
+					`音频解码失败，无法转换为 AgentPlan 极速版支持的 16 kHz mono WAV：${message}`
+				);
+			}
+			if (uploadAudioBuffer.byteLength <= 44) {
+				throw new TranscriptionError(
+					"audio_decode_error",
+					"音频解码后没有可转写的有效内容。"
+				);
+			}
+			durationSeconds ??= getAgentPlanWavDurationSeconds(
+				new Uint8Array(uploadAudioBuffer)
+			);
+			this.assertDurationWithinLimit(durationSeconds);
+		}
+
+		if (uploadAudioBuffer.byteLength === 0) {
+			throw new TranscriptionError("audio_decode_error", "待转写音频为空。");
+		}
+		if (uploadAudioBuffer.byteLength > AGENTPLAN_FLASH_MAX_AUDIO_BYTES) {
+			throw new TranscriptionError(
+				"file_too_large",
+				`AgentPlan 极速版单次音频不能超过 100 MB；当前待上传音频为 ${formatMegabytes(uploadAudioBuffer.byteLength)} MB。`
+			);
+		}
+
 		const policy = resolveProviderTranscriptionPolicy({
 			provider: "volcengine-agentplan",
 			model: this.settings.model
 		});
-		let chunks: WavAudioSegment[];
-		try {
-			chunks = await this.createSegments(sourceAudioBuffer, {
-				targetSegmentSeconds: policy.targetSegmentSeconds,
-				minSegmentSeconds: policy.minSegmentSeconds
+		const totalAttempts = policy.retryDelaysMs.length + 1;
+		const traceIds: string[] = [];
+
+		for (let attempt = 1; attempt <= totalAttempts; attempt += 1) {
+			await input.onProgress?.({
+				type: "whole-audio-request-started",
+				attempt,
+				totalAttempts,
+				audioBytes: uploadAudioBuffer.byteLength,
+				durationSeconds
 			});
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			throw new TranscriptionError(
-				"audio_decode_error",
-				`音频解码失败，无法转换并切分为 AgentPlan 所需的 16 kHz mono WAV：${message}`
-			);
-		}
-		if (chunks.length === 0) {
-			throw new TranscriptionError("audio_decode_error", "音频解码后没有可转写的有效内容。");
-		}
-		const createSocket = this.createSocket ?? await loadAgentPlanSocketFactory();
-
-		if (chunks.length === 1) {
-			const chunk = chunks[0];
 			try {
-				const result = await this.transcribeChunkWithRetry(
-					chunk,
-					input,
-					policy,
-					createSocket,
-					true
-				);
-				return {
-					text: result.text,
-					provider: this.id,
-					model: this.settings.model,
-					traceId: result.traceId,
-					utterances: result.utterances,
-					raw: result.raw
-				};
-			} finally {
-				chunk.audioBuffer = new ArrayBuffer(0);
-			}
-		}
-
-		const pipelineResult = await runAudioChunkPipeline<WavAudioSegment, AgentPlanResponsePayload>({
-			onProgress: input.onProgress,
-			createChunks: async () => chunks,
-			transcribeChunk: async (chunk) => {
-				try {
-					return await this.transcribeChunkWithRetry(
-						chunk,
-						input,
-						policy,
-						createSocket,
-						false
-					);
-				} catch (error) {
-					if (error instanceof TranscriptionError) {
-						throw new TranscriptionError(
-							error.code,
-							`分段 ${chunk.index}/${chunk.total}（${formatSegmentTimeRange(chunk)}）转写失败：${error.message}`,
-							error.traceId,
-							error.httpStatus
-						);
-					}
-					throw error;
-				}
-			}
-		});
-
-		return {
-			text: pipelineResult.text,
-			provider: this.id,
-			model: this.settings.model,
-			traceId: pipelineResult.traceId,
-			segments: pipelineResult.segments,
-			raw: {
-				segments: pipelineResult.rawSegments
-			}
-		};
-	}
-
-	private async transcribeChunkWithRetry(
-		chunk: WavAudioSegment,
-		input: TranscriptionInput,
-		policy: ProviderTranscriptionPolicy,
-		createSocket: AgentPlanSocketFactory,
-		reportStreamingProgress: boolean
-	): Promise<{
-		text: string;
-		traceId?: string;
-		utterances?: TranscriptionUtterance[];
-		raw: AgentPlanResponsePayload;
-	}> {
-		for (let attempt = 0; ; attempt += 1) {
-			try {
-				const result = await this.transcribeWav({
+				const result = await this.transcribeFlash({
 					url: this.settings.baseUrl.trim(),
-					apiKey: this.apiKey.trim(),
+					apiKey,
 					language: input.language ?? this.settings.language,
-					requestMode: "nostream",
-					wavBytes: new Uint8Array(chunk.audioBuffer),
-					createSocket,
-					onProgress: reportStreamingProgress
-						? async (progress) => {
-								await input.onProgress?.({
-									type: "streaming-result",
-									text: progress.text,
-									utterances: progress.utterances,
-									processedSeconds: progress.processedSeconds,
-									totalSeconds: progress.totalSeconds,
-									traceId: progress.traceId
-								});
-							}
-						: undefined
+					audioBytes: new Uint8Array(uploadAudioBuffer),
+					request: this.request
 				});
-				return {
-					text: result.text,
-					traceId: result.traceId,
-					utterances: offsetAgentPlanUtterances(
-						normalizeAgentPlanUtterances(result.raw.result?.utterances),
-						chunk.startSeconds
-					),
-					raw: result.raw
-				};
+				appendTraceId(traceIds, result.traceId);
+				return this.createResult(result, traceIds);
 			} catch (error) {
-				const normalizedError = normalizeAgentPlanError(error);
-				const delayMs = policy.retryDelaysMs[attempt];
-				if (delayMs === undefined || !isRetryableAgentPlanOfflineError(normalizedError)) {
+				const normalizedError = normalizeAgentPlanFlashError(error);
+				appendTraceId(traceIds, normalizedError.traceId);
+				const delayMs = policy.retryDelaysMs[attempt - 1];
+				if (
+					delayMs === undefined ||
+					!isRetryableAgentPlanOfflineError(normalizedError)
+				) {
+					normalizedError.traceId = joinTraceIds(traceIds);
 					throw normalizedError;
 				}
 
 				await input.onProgress?.({
 					type: "segment-retrying",
-					segment: { ...chunk },
 					attempt: attempt + 1,
-					maxAttempts: policy.retryDelaysMs.length,
+					maxAttempts: totalAttempts,
 					delayMs,
+					httpStatus: normalizedError.httpStatus,
 					segments: []
 				});
 				await this.sleep(delayMs);
 			}
 		}
+
+		throw new TranscriptionError(
+			"api_error",
+			"火山引擎 AgentPlan 极速版未返回结果。",
+			joinTraceIds(traceIds)
+		);
+	}
+
+	private assertDurationWithinLimit(durationSeconds: number | undefined): void {
+		if (
+			durationSeconds !== undefined &&
+			Number.isFinite(durationSeconds) &&
+			durationSeconds > AGENTPLAN_FLASH_MAX_DURATION_SECONDS
+		) {
+			throw new TranscriptionError(
+				"file_too_large",
+				`AgentPlan 极速版单次音频不能超过 2 小时；当前音频约 ${formatDuration(durationSeconds)}。`
+			);
+		}
+	}
+
+	private createResult(
+		result: AgentPlanFlashClientResult,
+		traceIds: string[]
+	): TranscriptionResult {
+		return {
+			text: result.text,
+			provider: this.id,
+			model: this.settings.model,
+			traceId: joinTraceIds(traceIds),
+			utterances: normalizeAgentPlanUtterances(result.raw.result?.utterances),
+			raw: result.raw
+		};
 	}
 }
 
-export function isRetryableAgentPlanOfflineError(error: TranscriptionError): boolean {
-	return (
-		error.code === "network_error" ||
-		error.code === "rate_limited"
-	);
+export function isRetryableAgentPlanOfflineError(
+	error: TranscriptionError
+): boolean {
+	return error.code === "network_error" || error.code === "rate_limited";
 }
 
-export function offsetAgentPlanUtterances(
-	utterances: TranscriptionUtterance[] | undefined,
-	offsetSeconds: number
-): TranscriptionUtterance[] | undefined {
-	if (!utterances) {
-		return undefined;
+function normalizeAgentPlanFlashError(error: unknown): TranscriptionError {
+	return error instanceof TranscriptionError
+		? error
+		: createNetworkTranscriptionError("火山引擎 AgentPlan 极速版", error);
+}
+
+function appendTraceId(traceIds: string[], traceId: string | undefined): void {
+	for (const value of traceId?.split(",") ?? []) {
+		const normalized = value.trim();
+		if (normalized && !traceIds.includes(normalized)) {
+			traceIds.push(normalized);
+		}
 	}
-	return utterances.map((utterance) => ({
-		...utterance,
-		...(utterance.startSeconds !== undefined
-			? { startSeconds: utterance.startSeconds + offsetSeconds }
-			: {}),
-		...(utterance.endSeconds !== undefined
-			? { endSeconds: utterance.endSeconds + offsetSeconds }
-			: {})
-	}));
+}
+
+function joinTraceIds(traceIds: string[]): string | undefined {
+	return traceIds.length > 0 ? traceIds.join(", ") : undefined;
+}
+
+function formatMegabytes(bytes: number): string {
+	return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function formatDuration(seconds: number): string {
+	const roundedMinutes = Math.ceil(seconds / 60);
+	return `${Math.floor(roundedMinutes / 60)} 小时 ${roundedMinutes % 60} 分钟`;
 }

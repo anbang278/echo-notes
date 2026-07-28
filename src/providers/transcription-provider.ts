@@ -69,6 +69,13 @@ export type TranscriptionProgress =
 			segments: TranscriptionSegment[];
 	  }
 	| {
+			type: "whole-audio-request-started";
+			attempt: number;
+			totalAttempts: number;
+			audioBytes: number;
+			durationSeconds?: number;
+	  }
+	| {
 			type: "streaming-result";
 			text: StreamingTranscriptionState["text"];
 			utterances?: StreamingTranscriptionState["utterances"];

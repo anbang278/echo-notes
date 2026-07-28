@@ -3,13 +3,22 @@ import {
 	type TranscriptionMode,
 	type TranscriptionProviderId
 } from "../settings/settings";
+import {
+	AGENTPLAN_FLASH_MAX_AUDIO_BYTES,
+	AGENTPLAN_FLASH_MAX_DURATION_SECONDS
+} from "./volcengine-agentplan-flash-client";
 
-export type ProviderUploadMode = "multipart" | "base64-data-url" | "websocket-stream";
+export type ProviderUploadMode =
+	| "multipart"
+	| "base64-data-url"
+	| "base64-json"
+	| "websocket-stream";
 
 export type ProviderEndpointShape =
 	| "openai-audio"
 	| "chat-audio"
 	| "agentplan-asr-websocket"
+	| "agentplan-asr-flash-http"
 	| "mosi-transcription"
 	| "custom";
 
@@ -24,6 +33,7 @@ export interface ProviderCapability {
 	supportsStreaming: boolean;
 	uploadMode: ProviderUploadMode;
 	endpointShape: ProviderEndpointShape;
+	agentPlanConnectionMode?: "realtime" | "offline-flash";
 	recommendedModels: string[];
 	transcriptionPolicy?: {
 		targetSegmentSeconds: number;
@@ -68,6 +78,7 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		supportsStreaming: true,
 		uploadMode: "websocket-stream",
 		endpointShape: "agentplan-asr-websocket",
+		agentPlanConnectionMode: "realtime",
 		recommendedModels: ["doubao-seed-asr-2.0"],
 		notes: [
 			"仅支持 Obsidian 桌面端；移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头。",
@@ -143,26 +154,23 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 };
 
 const AGENTPLAN_OFFLINE_TRANSCRIPTION_CAPABILITY: ProviderCapability = {
-	maxAudioBytes: null,
-	supportsChunking: true,
+	maxAudioBytes: AGENTPLAN_FLASH_MAX_AUDIO_BYTES,
+	maxAudioDurationSeconds: AGENTPLAN_FLASH_MAX_DURATION_SECONDS,
+	supportsChunking: false,
 	supportsLanguage: true,
 	supportsTimestamp: true,
 	supportsSpeakerDiarization: true,
 	supportsStreaming: false,
-	uploadMode: "websocket-stream",
-	endpointShape: "agentplan-asr-websocket",
+	uploadMode: "base64-json",
+	endpointShape: "agentplan-asr-flash-http",
+	agentPlanConnectionMode: "offline-flash",
 	recommendedModels: ["doubao-seed-asr-2.0"],
-	transcriptionPolicy: {
-		targetSegmentSeconds: 3 * 60,
-		minSegmentSeconds: 30,
-		retryableHttpStatuses: [],
-		maxSplitDepth: 0
-	},
 	notes: [
-		"仅支持 Obsidian 桌面端；移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头。",
-		"已有录音固定使用 AgentPlan 单流高精度端点；音频会在本地转换为 16 kHz、16-bit、mono WAV。",
-		"超过约 3 分钟时会在静音附近切段，并按原始时间顺序逐段发送；每完成一段立即写入转写稿。",
-		"每个分段独立执行说话人聚类，编号仅在当前分段内有效；时间范围会偏移到原录音绝对时间轴。"
+		"已有录音使用录音文件极速版 HTTP 接口，一次上传整段音频，不再按实时节奏等待发送。",
+		"WAV、MP3、OGG Opus 优先直接上传；M4A、MP4、WebM 会在本地转换为 16 kHz、16-bit、mono WAV。",
+		"接口不返回中间识别正文，完成后一次性写入请求级统一说话人结果和绝对时间轴。",
+		"单次最多 2 小时且音频数据不超过 100 MB；Base64 JSON 编码还会额外占用本地内存。",
+		"需要为当前 Key 单独开通极速版资源 volc.bigasr.auc_turbo；网络错误或服务繁忙最多完整重试一次。"
 	]
 };
 
@@ -189,8 +197,10 @@ export function getProviderCapabilitySummary(capability: ProviderCapability): st
 			? `单次编码输入上限：${formatProviderCapabilityBytes(capability.maxBase64DataUrlBytes)}`
 			: "单次音频上限：由 Provider 决定";
 	const longAudioSummary =
-		capability.endpointShape === "agentplan-asr-websocket" && !capability.supportsChunking
-			? "实时音频：单连接持续发送"
+		capability.agentPlanConnectionMode === "offline-flash"
+			? "长音频处理：单次极速上传"
+			: capability.agentPlanConnectionMode === "realtime"
+				? "实时音频：单连接持续发送"
 			: capability.supportsChunking
 				? "长音频分段：支持"
 				: "长音频分段：暂不支持";

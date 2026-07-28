@@ -1,4 +1,4 @@
-import { Platform, type App } from "obsidian";
+import { requestUrl, type App } from "obsidian";
 import {
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
@@ -20,7 +20,7 @@ export function createTranscriptionProvider(
 	switch (settings.provider) {
 		case "volcengine-agentplan":
 			return new VolcengineAgentPlanAsrProvider(app, settings, apiKey, {
-				isMobile: () => Platform.isMobile
+				request: requestUrl
 			});
 		case "aliyun-bailian":
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);

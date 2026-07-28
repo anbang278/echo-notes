@@ -1,6 +1,6 @@
 import type { TFile } from "obsidian";
 
-export const SUPPORTED_AUDIO_EXTENSIONS = new Set(["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"]);
+export const SUPPORTED_AUDIO_EXTENSIONS = new Set(["mp3", "mp4", "mpeg", "mpga", "m4a", "ogg", "wav", "webm"]);
 
 const AUDIO_MIME_TYPES: Record<string, string> = {
 	mp3: "audio/mpeg",
@@ -8,6 +8,7 @@ const AUDIO_MIME_TYPES: Record<string, string> = {
 	mpeg: "audio/mpeg",
 	mpga: "audio/mpeg",
 	m4a: "audio/mp4",
+	ogg: "audio/ogg",
 	wav: "audio/wav",
 	webm: "audio/webm"
 };
