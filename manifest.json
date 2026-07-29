@@ -1,9 +1,9 @@
 {
 	"id": "echo-notes",
 	"name": "Echo Notes",
-	"version": "0.3.3",
+	"version": "0.3.4",
 	"minAppVersion": "1.11.4",
-	"description": "将音频转写为文本，并通过可配置的 AI 生成纪要与分析。",
+	"description": "将音频转写为文本，并通过可配置的 AI 生成纪要与分析.",
 	"author": "anbang278",
 	"authorUrl": "https://github.com/anbang278",
 	"isDesktopOnly": false
