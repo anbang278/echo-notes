@@ -59,6 +59,7 @@ import { loadAgentPlanSocketFactory } from "./providers/volcengine-agentplan-soc
 import {
 	cloneHotkey,
 	getSelectedTranscriptionConfig,
+	groupAnalysisTemplatesByCategory,
 	isRemovedAnalysisProviderId,
 	normalizeEchoNotesSettings,
 	type AnalysisTemplateConfig,
@@ -2148,19 +2149,34 @@ class AnalysisTemplatePickerModal extends Modal {
 		contentEl.addClass("echo-notes-analysis-template-picker-modal");
 		this.titleEl.setText("选择 AI 纪要模板");
 
-		const listEl = contentEl.createDiv({ cls: "echo-notes-analysis-template-picker-list" });
-		for (const template of this.templates) {
-			const itemEl = listEl.createEl("button", { cls: "echo-notes-analysis-template-picker-item" });
-			itemEl.type = "button";
-			itemEl.createDiv({ cls: "echo-notes-analysis-template-picker-title", text: template.name || template.id });
-			itemEl.createDiv({
-				cls: "echo-notes-analysis-template-picker-desc",
-				text: template.description || template.recognitionKeywords.join("、") || template.id
+		const groupsEl = contentEl.createDiv({ cls: "echo-notes-analysis-template-picker-groups" });
+		for (const group of groupAnalysisTemplatesByCategory(this.templates)) {
+			if (group.templates.length === 0) {
+				continue;
+			}
+
+			const groupEl = groupsEl.createEl("section", {
+				cls: "echo-notes-analysis-template-picker-group",
+				attr: { "data-template-category": group.category.id }
 			});
-			itemEl.addEventListener("click", () => {
-				this.onSelect(template);
-				this.close();
+			groupEl.createEl("h3", {
+				cls: "echo-notes-analysis-template-picker-group-title",
+				text: group.category.label
 			});
+			const listEl = groupEl.createDiv({ cls: "echo-notes-analysis-template-picker-list" });
+			for (const template of group.templates) {
+				const itemEl = listEl.createEl("button", { cls: "echo-notes-analysis-template-picker-item" });
+				itemEl.type = "button";
+				itemEl.createDiv({ cls: "echo-notes-analysis-template-picker-title", text: template.name || template.id });
+				itemEl.createDiv({
+					cls: "echo-notes-analysis-template-picker-desc",
+					text: template.description || template.recognitionKeywords.join("、") || template.id
+				});
+				itemEl.addEventListener("click", () => {
+					this.onSelect(template);
+					this.close();
+				});
+			}
 		}
 	}
 

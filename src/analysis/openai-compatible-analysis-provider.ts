@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 import { buildAnalysisMessages } from "./analysis-templates";
 import { AnalysisError, type AnalysisInput, type AnalysisProvider, type AnalysisResult } from "./analysis-provider";
+import { createChunkAnalysisInput, createSynthesisAnalysisInput } from "./analysis-stage-prompts";
 import { ANALYSIS_PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
 import { sanitizeSensitiveText } from "../security/redaction";
 
@@ -31,30 +32,11 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 	}
 
 	async analyzeChunk(input: AnalysisInput, chunkIndex: number, totalChunks: number): Promise<AnalysisResult> {
-		return this.requestAnalysis({
-			...input,
-			transcriptText: [
-				`这是长转写稿的第 ${chunkIndex}/${totalChunks} 个分块。`,
-				"请提取本分块中的事实、关键结论、行动项、风险、开放问题和重要原文；不要输出总览，不要补充其他分块的信息。",
-				"",
-				input.transcriptText
-			].join("\n")
-		});
+		return this.requestAnalysis(createChunkAnalysisInput(input, chunkIndex, totalChunks));
 	}
 
 	async synthesizeChunks(input: AnalysisInput, chunkResults: AnalysisResult[]): Promise<AnalysisResult> {
-		const chunkText = chunkResults
-			.map((result, index) => `## 分块 ${index + 1}\n\n${result.text.slice(0, 12000)}`)
-			.join("\n\n");
-		const result = await this.requestAnalysis({
-			...input,
-			transcriptText: [
-				"以下内容是同一份长转写稿各分块的结构化提取结果。",
-				"请按原模板要求生成一份完整、去重、跨分块一致的最终纪要；合并重复行动项，保留冲突与待确认信息，不要提及分块处理过程。",
-				"",
-				chunkText
-			].join("\n")
-		});
+		const result = await this.requestAnalysis(createSynthesisAnalysisInput(input, chunkResults));
 		return {
 			...result,
 			traceId: uniqueTraceIds([...chunkResults.map((chunk) => chunk.traceId), result.traceId])

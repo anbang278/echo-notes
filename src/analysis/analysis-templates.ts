@@ -336,19 +336,24 @@ export function buildAnalysisMessages(input: AnalysisPromptInput): { system: str
 		system: [
 			input.template.systemPrompt.trim(),
 			`请始终使用${languageName}输出。`,
-			"输出 Markdown，不要使用代码块包裹。"
+			"输出 Markdown；不要把整篇结果包裹在代码块中。"
 		]
 			.filter(Boolean)
 			.join("\n\n"),
 		user: [
-			`转写稿标题：${input.transcriptTitle}`,
 			`分析方案：${input.template.name}`,
 			"",
-			"自定义提示词：",
+			"<analysis-template>",
 			input.template.customPrompt.trim(),
+			"</analysis-template>",
 			"",
-			"转写稿正文：",
-			input.transcriptText.trim()
+			`<transcript title="${escapePromptAttribute(input.transcriptTitle)}">`,
+			input.transcriptText.trim(),
+			"</transcript>"
 		].join("\n")
 	};
+}
+
+function escapePromptAttribute(value: string): string {
+	return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

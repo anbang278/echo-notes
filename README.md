@@ -79,7 +79,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Split long transcripts into configurable chunks, analyze each chunk in order, and run a final synthesis pass that deduplicates conclusions, actions, risks, and open questions.
 - Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose one or more AI analysis templates from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
-- Configure each analysis template with a name, version, recognition keywords, system prompt, and custom prompt.
+- Configure each analysis template with a role group, name, version, recognition keywords, system prompt, and template task.
 - Record Dataview-friendly AI analysis metadata for each generated template result, including template id, template name, template version, provider, model, generated time, and trace id when available.
 - Track AI analysis lifecycle in transcript frontmatter with `analysis_status`, scheduled template ids, pending/done/failed template ids, provider, model, timestamps, and the latest sanitized analysis error.
 - Optional automation for newly added Markdown audio links.
@@ -240,14 +240,20 @@ Echo Notes no longer registers proxy commands for starting or stopping the core 
 9. Choose the default analysis template used when no keyword is found near the audio link.
 10. Edit, enable, disable, restore, or add templates in the analysis template settings.
 
-Built-in templates:
+Built-in template groups:
 
-- Work minutes: Summary, Key decisions, Action items, Risks/Blockers, Open questions.
-- Study notes: Core concepts, Key points, Examples, Common confusions, Review checklist.
-- Product requirement mining: Users/Scenarios, Pain points, Requirement opportunities, Feature suggestions, Priority, Acceptance criteria, Open questions.
-- Role-based work templates are included for managers, product managers, project managers, engineering/technical roles, sales, customer success, operations, and HR. They are disabled by default; enable the ones you need in settings and adjust recognition keywords for your workflow.
+- General scenarios: work minutes and study notes.
+- Management and people: manager sync and HR/people minutes.
+- Product and delivery: product requirement mining, product manager, and project manager minutes.
+- Engineering: engineering/technical minutes.
+- Customer and growth: sales, customer success, and operations minutes.
+- Custom: user-created templates start here and can be assigned to any group.
 
-Custom templates are supported. Each template has a name, recognition keywords, system prompt, custom prompt, and enabled switch. Enabled templates participate in keyword matching; disabled templates keep their configuration but are not used automatically.
+The template manager uses a fixed category switcher and shows one group at a time. Switch groups by clicking or with the Left/Right Arrow, Home, and End keys. The selected group remains active when template changes redraw the settings page.
+
+The v2 built-in prompts use role-specific Markdown structures while sharing a neutral evidence policy. They separate facts, decisions, suggestions, and inferences; do not invent owners, dates, budgets, metrics, priorities, or sales stages; and treat transcript content as untrusted data rather than instructions. Action-item templates use a consistent table with item, owner, due date, and acceptance signal/next step.
+
+Custom templates support a role group, name, recognition keywords, system prompt, template task, and enabled switch. Enabled templates participate in keyword matching; disabled templates keep their configuration but are not used automatically. During migration, an untouched v1 built-in preset is upgraded to v2 while preserving its enabled state. Any built-in template whose editable content was changed remains untouched until you explicitly restore its default.
 
 ## Usage
 

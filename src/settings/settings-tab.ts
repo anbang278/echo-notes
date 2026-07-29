@@ -7,6 +7,7 @@ import {
 	PluginSettingTab,
 	Setting,
 	setIcon,
+	ToggleComponent,
 	type SettingDefinitionItem
 } from "obsidian";
 import type EchoNotesPlugin from "../main";
@@ -26,6 +27,7 @@ import {
 	ANALYSIS_PROVIDER_LABELS,
 	AGENTPLAN_ANALYSIS_BASE_URL,
 	AGENTPLAN_ANALYSIS_MODELS,
+	ANALYSIS_TEMPLATE_CATEGORIES,
 	COPY_LANGUAGE_LABELS,
 	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
 	DEFAULT_ANALYSIS_SYSTEM_PROMPT,
@@ -36,6 +38,8 @@ import {
 	TRANSCRIPTION_LANGUAGE_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
+	getAnalysisTemplateCategoryDefinition,
+	groupAnalysisTemplatesByCategory,
 	getOfflineTranscriptionProviderDefaults,
 	getMosiTranscriptionModel,
 	isAnalysisProviderId,
@@ -46,6 +50,7 @@ import {
 	restoreDefaultAnalysisTemplate,
 	type AnalysisProviderId,
 	type AnalysisTemplateConfig,
+	type AnalysisTemplateCategoryId,
 	type AgentPlanSpeakerLabelStyle,
 	type CopyLanguage,
 	type EchoNotesHotkeySetting,
@@ -99,6 +104,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private activeSettingsStage: SettingsStage = "transcription";
 	private activeTranscriptionSettingsSection: TranscriptionSettingsSection = "service";
 	private activeAnalysisSettingsSection: AnalysisSettingsSection = "model";
+	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
 	private settingsRenderSequence = 0;
 
 	constructor(app: App, plugin: EchoNotesPlugin) {
@@ -124,6 +130,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderSettings(containerEl: HTMLElement): void {
 		this.settingsContainerEl = containerEl;
+		containerEl.closest<HTMLElement>(".modal-content")?.addClass("echo-notes-settings-modal-content");
 		containerEl.empty();
 		const renderId = ++this.settingsRenderSequence;
 		this.renderSettingsIntroduction(containerEl, renderId);
@@ -977,7 +984,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.renderAnalysisProcessingSettings(panelEl);
 						break;
 					case "templates":
-						this.renderAnalysisTemplateSettings(panelEl);
+						this.renderAnalysisTemplateSettings(panelEl, renderId);
 						break;
 				}
 			},
@@ -1152,14 +1159,25 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 	}
 
-	private renderAnalysisTemplateSettings(containerEl: HTMLElement): void {
+	private renderAnalysisTemplateSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("默认分析模板")
 			.setDesc("录音链接上下三行未命中任何识别关键字时，使用这个模板生成 AI 纪要。若默认模板被禁用，会自动改用第一个已启用模板。")
 			.addDropdown((dropdown) => {
-				for (const template of this.plugin.settings.analysisTemplates) {
-					const suffix = template.enabled ? "" : "（未启用）";
-					dropdown.addOption(template.id, `${template.name}${suffix}`);
+				dropdown.selectEl.replaceChildren();
+				for (const group of groupAnalysisTemplatesByCategory(this.plugin.settings.analysisTemplates)) {
+					if (group.templates.length === 0) {
+						continue;
+					}
+					const optionGroup = document.createElement("optgroup");
+					optionGroup.label = group.category.label;
+					for (const template of group.templates) {
+						const suffix = template.enabled ? "" : "（未启用）";
+						optionGroup.append(
+							new Option(`${template.name}${suffix}`, template.id)
+						);
+					}
+					dropdown.selectEl.append(optionGroup);
 				}
 				dropdown
 					.setValue(this.plugin.settings.defaultAnalysisTemplateId)
@@ -1170,14 +1188,117 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					});
 			});
 
-		const templateListEl = containerEl.createDiv({ cls: "echo-notes-template-list" });
-		for (const template of this.plugin.settings.analysisTemplates) {
-			this.renderAnalysisTemplateCard(templateListEl, template);
+		const groups = groupAnalysisTemplatesByCategory(this.plugin.settings.analysisTemplates);
+		const categoryTabsEl = containerEl.createDiv({ cls: "echo-notes-template-category-tabs" });
+		categoryTabsEl.setAttribute("role", "tablist");
+		categoryTabsEl.setAttribute("aria-label", "分析模板角色分类");
+		categoryTabsEl.setAttribute("aria-orientation", "horizontal");
+
+		const categoryButtonEls = new Map<AnalysisTemplateCategoryId, HTMLButtonElement>();
+		const groupEls = new Map<AnalysisTemplateCategoryId, HTMLElement>();
+		const activateCategory = (categoryId: AnalysisTemplateCategoryId, moveFocus = true): void => {
+			this.activeAnalysisTemplateCategory = categoryId;
+			for (const group of groups) {
+				const isActive = group.category.id === categoryId;
+				const buttonEl = categoryButtonEls.get(group.category.id);
+				const groupEl = groupEls.get(group.category.id);
+				buttonEl?.toggleClass("is-active", isActive);
+				buttonEl?.setAttribute("aria-selected", String(isActive));
+				if (buttonEl) {
+					buttonEl.tabIndex = isActive ? 0 : -1;
+				}
+				if (groupEl) {
+					groupEl.hidden = !isActive;
+				}
+			}
+			if (moveFocus) {
+				categoryButtonEls.get(categoryId)?.focus();
+			}
+		};
+
+		for (const [index, group] of groups.entries()) {
+			const enabledCount = group.templates.filter((template) => template.enabled).length;
+			const tabId = `echo-notes-template-category-tab-${renderId}-${group.category.id}`;
+			const panelId = `echo-notes-template-group-${renderId}-${group.category.id}`;
+			const buttonEl = categoryTabsEl.createEl("button", {
+				cls: "echo-notes-template-category-tab",
+				attr: {
+					type: "button",
+					role: "tab",
+					id: tabId,
+					"aria-controls": panelId,
+					"aria-label": `${group.category.label}，已启用 ${enabledCount}/${group.templates.length}`,
+					"data-template-category-tab": group.category.id
+				}
+			});
+			buttonEl.createSpan({ cls: "echo-notes-template-category-tab-label", text: group.category.label });
+			buttonEl.createSpan({
+				cls: "echo-notes-template-category-tab-count",
+				text: `${enabledCount}/${group.templates.length}`,
+				attr: { "aria-hidden": "true" }
+			});
+			categoryButtonEls.set(group.category.id, buttonEl);
+			buttonEl.addEventListener("click", () => activateCategory(group.category.id));
+			buttonEl.addEventListener("keydown", (event) => {
+				let targetIndex: number;
+				switch (event.key) {
+					case "ArrowLeft":
+						targetIndex = (index - 1 + groups.length) % groups.length;
+						break;
+					case "ArrowRight":
+						targetIndex = (index + 1) % groups.length;
+						break;
+					case "Home":
+						targetIndex = 0;
+						break;
+					case "End":
+						targetIndex = groups.length - 1;
+						break;
+					default:
+						return;
+				}
+				event.preventDefault();
+				activateCategory(groups[targetIndex].category.id);
+			});
 		}
+
+		const templateGroupsEl = containerEl.createDiv({ cls: "echo-notes-template-groups" });
+		for (const group of groups) {
+			const groupEl = templateGroupsEl.createEl("section", {
+				cls: "echo-notes-template-group",
+				attr: {
+					role: "tabpanel",
+					id: `echo-notes-template-group-${renderId}-${group.category.id}`,
+					"aria-labelledby": `echo-notes-template-category-tab-${renderId}-${group.category.id}`,
+					"data-template-category": group.category.id
+				}
+			});
+			groupEls.set(group.category.id, groupEl);
+			const groupHeaderEl = groupEl.createDiv({ cls: "echo-notes-template-group-header" });
+			groupHeaderEl.createEl("h3", {
+				cls: "echo-notes-template-group-title",
+				text: group.category.label
+			});
+			groupHeaderEl.createSpan({
+				cls: "echo-notes-template-group-count",
+				text: `${group.templates.filter((template) => template.enabled).length}/${group.templates.length} 已启用`
+			});
+
+			if (group.templates.length === 0) {
+				groupEl.createDiv({ cls: "echo-notes-template-group-empty", text: "暂无模板" });
+				continue;
+			}
+
+			const templateListEl = groupEl.createDiv({ cls: "echo-notes-template-list" });
+			for (const template of group.templates) {
+				this.renderAnalysisTemplateCard(templateListEl, template);
+			}
+		}
+		activateCategory(this.activeAnalysisTemplateCategory, false);
 
 		new Setting(containerEl)
 			.setName("新增自定义模板")
-			.setDesc("创建后可配置模板名称、识别关键字、系统提示词和自定义提示词。启用后会参与录音链接上下文匹配。")
+			.setDesc("创建后可配置角色分类、模板名称、识别关键字、系统提示词和模板任务。启用后会参与录音链接上下文匹配。")
 			.addButton((button) =>
 				button
 					.setButtonText("新增模板")
@@ -1187,7 +1308,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						const savedTemplate = this.plugin.settings.analysisTemplates.find((candidate) => candidate.id === template.id) ?? template;
 						this.refreshSettings();
-						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => this.refreshSettings()).open();
+						new AnalysisTemplateEditModal(this.app, this.plugin, savedTemplate, () => {
+							this.activeAnalysisTemplateCategory = savedTemplate.category;
+							this.refreshSettings();
+						}).open();
 					})
 			);
 	}
@@ -1271,18 +1395,37 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			badgesEl.createSpan({ cls: "echo-notes-template-badge is-disabled", text: "未启用" });
 		}
 
+		contentEl.createDiv({
+			cls: "echo-notes-template-description",
+			text: template.description || "未设置用途说明。"
+		});
+
 		const keywordEl = contentEl.createDiv({ cls: "echo-notes-template-keywords" });
 		keywordEl.createSpan({ cls: "echo-notes-template-keywords-label", text: "识别关键字：" });
 		keywordEl.createSpan({ cls: "echo-notes-template-keywords-value", text: keywords });
 
 		const actionEl = cardEl.createDiv({ cls: "echo-notes-template-card-actions" });
+		const toggleEl = actionEl.createDiv({ cls: "echo-notes-template-enable" });
+		toggleEl.createSpan({ text: "启用" });
+		const enabledToggle = new ToggleComponent(toggleEl)
+			.setValue(template.enabled)
+			.setTooltip(`${template.enabled ? "停用" : "启用"}${template.name || template.id}`)
+			.onChange(async (value) => {
+				template.enabled = value;
+				await this.plugin.saveSettings();
+				this.refreshSettings();
+			});
+		enabledToggle.toggleEl.setAttribute("aria-label", `${template.enabled ? "停用" : "启用"}${template.name || template.id}`);
 		const editButton = actionEl.createEl("button", {
 			cls: "mod-cta",
 			text: "编辑"
 		});
 		editButton.type = "button";
 		editButton.addEventListener("click", () => {
-			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => this.refreshSettings()).open();
+			new AnalysisTemplateEditModal(this.app, this.plugin, template, () => {
+				this.activeAnalysisTemplateCategory = template.category;
+				this.refreshSettings();
+			}).open();
 		});
 
 		const secondaryButton = actionEl.createEl("button", {
@@ -1573,6 +1716,26 @@ class AnalysisTemplateEditModal extends Modal {
 					})
 			);
 
+		if (this.draft.builtin) {
+			new Setting(contentEl)
+				.setName("角色分类")
+				.setDesc(getAnalysisTemplateCategoryDefinition(this.draft.category).label);
+		} else {
+			new Setting(contentEl)
+				.setName("角色分类")
+				.setDesc("用于模板管理、默认模板和手动选择时的分组。")
+				.addDropdown((dropdown) => {
+					for (const category of ANALYSIS_TEMPLATE_CATEGORIES) {
+						dropdown.addOption(category.id, category.label);
+					}
+					dropdown
+						.setValue(this.draft.category)
+						.onChange((value) => {
+							this.draft.category = value as AnalysisTemplateCategoryId;
+						});
+				});
+		}
+
 		new Setting(contentEl)
 			.setName("启用模板")
 			.setDesc("开启后，此模板会参与录音链接上下三行的关键字识别；关闭后仍保留配置但不会自动使用。")
@@ -1612,7 +1775,7 @@ class AnalysisTemplateEditModal extends Modal {
 			});
 
 		new Setting(contentEl)
-			.setName("自定义提示词")
+			.setName("模板任务")
 			.setDesc("定义该模板的分析重点、Markdown 结构和特殊输出要求。")
 			.addTextArea((text) => {
 				text.inputEl.rows = 10;
@@ -1649,6 +1812,9 @@ class AnalysisTemplateEditModal extends Modal {
 	private async save(): Promise<void> {
 		this.template.name = this.draft.name.trim() || this.template.id;
 		this.template.version = this.draft.version?.trim() || DEFAULT_ANALYSIS_TEMPLATE_VERSION;
+		if (!this.template.builtin) {
+			this.template.category = this.draft.category;
+		}
 		this.template.enabled = this.draft.enabled;
 		this.template.systemPrompt = this.draft.systemPrompt.trim() || DEFAULT_ANALYSIS_SYSTEM_PROMPT;
 		this.template.customPrompt = this.draft.customPrompt.trim();

@@ -455,6 +455,46 @@ async function setSettingToggle(page, name, enabled) {
 	}
 }
 
+async function getTemplateGroupState(page) {
+	return getActivePanel(page).locator(".echo-notes-template-group").evaluateAll((groups) =>
+		groups.map((group) => ({
+			category: group.getAttribute("data-template-category"),
+			label: group.querySelector(".echo-notes-template-group-title")?.textContent?.trim(),
+			count: group.querySelector(".echo-notes-template-group-count")?.textContent?.trim(),
+			templates: [...group.querySelectorAll(".echo-notes-template-card-title")].map((title) => title.textContent?.trim())
+		}))
+	);
+}
+
+async function getTemplateCategoryTabState(page) {
+	return getActivePanel(page).locator(".echo-notes-template-category-tab").evaluateAll((tabs) =>
+		tabs.map((tab) => ({
+			category: tab.getAttribute("data-template-category-tab"),
+			label: tab.querySelector(".echo-notes-template-category-tab-label")?.textContent?.trim(),
+			count: tab.querySelector(".echo-notes-template-category-tab-count")?.textContent?.trim(),
+			selected: tab.getAttribute("aria-selected") === "true"
+		}))
+	);
+}
+
+async function setTemplateCardToggle(page, templateName, enabled) {
+	const card = getActivePanel(page).locator(".echo-notes-template-card").filter({ hasText: templateName });
+	assert((await card.count()) === 1, `${templateName} 应匹配一个模板卡片`);
+	const toggleEl = card.locator(".checkbox-container");
+	const checkboxEl = card.locator('input[type="checkbox"]');
+	assert((await toggleEl.count()) === 1 && (await checkboxEl.count()) === 1, `${templateName} 应包含一个直接启用开关`);
+	if ((await toggleEl.evaluate((element) => element.classList.contains("is-enabled"))) !== enabled) {
+		const previousRenderId = await getSettingsRenderId(page);
+		await checkboxEl.evaluate((element) => element.click());
+		await waitForSettingsRerender(page, previousRenderId);
+	}
+	const updatedCard = getActivePanel(page).locator(".echo-notes-template-card").filter({ hasText: templateName });
+	assert(
+		(await updatedCard.locator(".checkbox-container").evaluate((element) => element.classList.contains("is-enabled"))) === enabled,
+		`${templateName} 的直接启用状态不正确`
+	);
+}
+
 async function verifyTabRelationships(page) {
 	const result = await page.evaluate(() => {
 		const allIds = [...document.querySelectorAll("[id]")].map((element) => element.id);
@@ -615,8 +655,116 @@ async function verifyTabs(page) {
 	await templatesTab.click();
 	await activePanel.getByText("默认分析模板", { exact: true }).waitFor({ state: "visible" });
 	assert(await templatesTab.getAttribute("aria-selected") === "true", "模板管理分类应可访问");
+	assert(
+		JSON.stringify(await getTemplateCategoryTabState(page)) ===
+			JSON.stringify([
+				{ category: "general", label: "通用场景", count: "2/2", selected: true },
+				{ category: "management-people", label: "管理与组织", count: "0/2", selected: false },
+				{ category: "product-delivery", label: "产品与交付", count: "1/3", selected: false },
+				{ category: "engineering", label: "技术研发", count: "0/1", selected: false },
+				{ category: "customer-growth", label: "客户与增长", count: "0/3", selected: false },
+				{ category: "custom", label: "自定义", count: "0/0", selected: false }
+			]),
+		"模板分类切换器的顺序、计数或默认选中状态不正确"
+	);
+	assert(
+		(await getActivePanel(page).locator(".echo-notes-template-group:not([hidden])").getAttribute("data-template-category")) === "general",
+		"首次进入模板管理应只显示通用场景"
+	);
+	const generalCategoryTab = getActivePanel(page).locator('[data-template-category-tab="general"]');
+	await generalCategoryTab.focus();
+	await generalCategoryTab.press("End");
+	assert(
+		(await getActivePanel(page).locator(".echo-notes-template-group:not([hidden])").getAttribute("data-template-category")) === "custom",
+		"End 键应切换到最后一个模板分类"
+	);
+	await getActivePanel(page).locator('[data-template-category-tab="custom"]').press("Home");
+	assert(
+		(await getActivePanel(page).locator(".echo-notes-template-group:not([hidden])").getAttribute("data-template-category")) === "general",
+		"Home 键应切换到第一个模板分类"
+	);
+	assert(
+		JSON.stringify(await getTemplateGroupState(page)) ===
+			JSON.stringify([
+				{ category: "general", label: "通用场景", count: "2/2 已启用", templates: ["工作纪要", "学习纪要"] },
+				{ category: "management-people", label: "管理与组织", count: "0/2 已启用", templates: ["管理者纪要", "HR/人力纪要"] },
+				{ category: "product-delivery", label: "产品与交付", count: "1/3 已启用", templates: ["产品需求挖掘纪要", "产品经理纪要", "项目经理纪要"] },
+				{ category: "engineering", label: "技术研发", count: "0/1 已启用", templates: ["研发/技术纪要"] },
+				{ category: "customer-growth", label: "客户与增长", count: "0/3 已启用", templates: ["销售纪要", "客户成功纪要", "运营纪要"] },
+				{ category: "custom", label: "自定义", count: "0/0 已启用", templates: [] }
+			]),
+		"模板管理的角色分类、计数或模板顺序不正确"
+	);
+	const defaultTemplateSetting = await getActiveSetting(page, "默认分析模板");
+	assert(
+		JSON.stringify(await defaultTemplateSetting.locator("optgroup").evaluateAll((groups) => groups.map((group) => group.label))) ===
+			JSON.stringify(["通用场景", "管理与组织", "产品与交付", "技术研发", "客户与增长"]),
+		"默认分析模板下拉的 optgroup 不完整"
+	);
+
+	await getActivePanel(page).locator('[data-template-category-tab="management-people"]').click();
+	await setTemplateCardToggle(page, "管理者纪要", true);
+	assert(
+		(await getTemplateGroupState(page)).find((group) => group.category === "management-people")?.count === "1/2 已启用",
+		"直接启用模板后分组计数未更新"
+	);
+	assert(
+		(await getTemplateCategoryTabState(page)).find((tab) => tab.category === "management-people")?.selected === true,
+		"模板启用触发设置页重绘后应保留当前分类"
+	);
+
+	const beforeCreateRenderId = await getSettingsRenderId(page);
+	await getActivePanel(page).getByRole("button", { name: "新增模板", exact: true }).click();
+	await waitForSettingsRerender(page, beforeCreateRenderId);
+	const templateModal = page.locator(".echo-notes-template-modal");
+	await templateModal.waitFor({ state: "visible" });
+	const categorySetting = templateModal.locator(".setting-item").filter({ hasText: "角色分类" });
+	assert((await categorySetting.count()) === 1, "自定义模板编辑器应包含角色分类");
+	assert(
+		JSON.stringify(await categorySetting.locator("option").allTextContents()) ===
+			JSON.stringify(["通用场景", "管理与组织", "产品与交付", "技术研发", "客户与增长", "自定义"]),
+		"自定义模板角色分类选项不完整"
+	);
+	await categorySetting.locator("select").selectOption("engineering");
+	const beforeSaveRenderId = await getSettingsRenderId(page);
+	await templateModal.getByRole("button", { name: "保存", exact: true }).click();
+	await templateModal.waitFor({ state: "detached" });
+	await waitForSettingsRerender(page, beforeSaveRenderId);
+	const engineeringGroup = (await getTemplateGroupState(page)).find((group) => group.category === "engineering");
+	assert(
+		JSON.stringify(engineeringGroup) ===
+			JSON.stringify({ category: "engineering", label: "技术研发", count: "1/2 已启用", templates: ["研发/技术纪要", "自定义模板"] }),
+		"自定义模板保存后未进入技术研发分类"
+	);
+	assert(
+		(await getActivePanel(page).locator(".echo-notes-template-group:not([hidden])").getAttribute("data-template-category")) === "engineering",
+		"自定义模板改分类并保存后应自动显示目标分类"
+	);
 	await verifyTabRelationships(page);
 	assert((await page.locator(".echo-notes-settings-intro").count()) === 1, "Tab 切换后引导区不应重复");
+
+	await page.evaluate(async (commandId) => {
+		const filePath = "Echo Notes UI Picker.transcript.md";
+		const existing = window.app.vault.getAbstractFileByPath(filePath);
+		const file = existing ?? await window.app.vault.create(filePath, "# 转写稿\n\n用于隔离 UI 验证。\n");
+		await window.app.workspace.getLeaf(false).openFile(file);
+		await window.app.commands.executeCommandById(commandId);
+	}, `${PLUGIN_ID}:analyze-current-transcript-with-template`);
+	const pickerModal = page.locator(".echo-notes-analysis-template-picker-modal");
+	await pickerModal.waitFor({ state: "visible" });
+	assert(
+		JSON.stringify(await pickerModal.locator(".echo-notes-analysis-template-picker-group").evaluateAll((groups) =>
+			groups.map((group) => group.getAttribute("data-template-category"))
+		)) === JSON.stringify(["general", "management-people", "product-delivery", "engineering"]),
+		"手动模板选择弹窗未按已启用角色分类分组"
+	);
+	assert(
+		JSON.stringify(await pickerModal.locator(".echo-notes-analysis-template-picker-title").allTextContents()) ===
+			JSON.stringify(["工作纪要", "学习纪要", "管理者纪要", "产品需求挖掘纪要", "自定义模板"]),
+		"手动模板选择弹窗的模板顺序不正确"
+	);
+	await page.locator(".modal-close-button").last().click();
+	await pickerModal.waitFor({ state: "detached" });
 }
 
 async function reopenSettings(page) {
@@ -739,6 +887,108 @@ async function captureViewports(page) {
 	return results;
 }
 
+async function verifyTemplateResponsiveLayouts(page) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			await page.locator('[data-settings-stage="analysis"]').click();
+			await getActivePanel(page).getByRole("tab", { name: "模板管理", exact: true }).click();
+			await getActivePanel(page).locator('[data-template-category-tab="product-delivery"]').click();
+			await page.evaluate(() => {
+				const modalContent = document.querySelector(".modal-content");
+				const verticalTabContent = document.querySelector(".vertical-tab-content");
+				if (modalContent) {
+					modalContent.scrollTop = 0;
+				}
+				if (verticalTabContent) {
+					verticalTabContent.scrollTop = 0;
+				}
+			});
+			await getActivePanel(page).locator(".echo-notes-template-category-tabs").evaluate((element) => {
+				element.scrollIntoView({ block: "start" });
+			});
+			const screenshotScrollState = await page.evaluate(() => ({
+				modalContent: document.querySelector(".modal-content")?.scrollTop ?? 0,
+				verticalTabContent: document.querySelector(".vertical-tab-content")?.scrollTop ?? 0
+			}));
+			const metrics = await page.evaluate((requireTouchTargets) => {
+				const panel = document.querySelector(".echo-notes-settings-panel:not([hidden])");
+				const categoryTabs = panel?.querySelector(".echo-notes-template-category-tabs");
+				const categoryTabButtons = [...(categoryTabs?.querySelectorAll(".echo-notes-template-category-tab") ?? [])];
+				const groups = [...(panel?.querySelectorAll(".echo-notes-template-group") ?? [])];
+				const visibleGroups = groups.filter((group) => !group.hasAttribute("hidden"));
+				const cards = [...(visibleGroups[0]?.querySelectorAll(".echo-notes-template-card") ?? [])];
+				const targets = [...(visibleGroups[0]?.querySelectorAll(".echo-notes-template-card-actions button, .echo-notes-template-enable") ?? [])];
+				const categoryTabsRect = categoryTabs?.getBoundingClientRect();
+				return {
+					panelOverflow: panel ? panel.scrollWidth - panel.clientWidth : Number.POSITIVE_INFINITY,
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					categoryTabCount: categoryTabButtons.length,
+					categoryTabsFit: Boolean(categoryTabsRect) && categoryTabButtons.every((tab) => {
+						const rect = tab.getBoundingClientRect();
+						return rect.left >= categoryTabsRect.left - 1 && rect.right <= categoryTabsRect.right + 1;
+					}),
+					groupCount: groups.length,
+					visibleGroupCount: visibleGroups.length,
+					cardCount: cards.length,
+					cardsFit: cards.every((card) => card.scrollWidth <= card.clientWidth + 1),
+					targetsFit: targets.every((target) => {
+						const targetRect = target.getBoundingClientRect();
+						const cardRect = target.closest(".echo-notes-template-card")?.getBoundingClientRect();
+						return Boolean(cardRect && targetRect.left >= cardRect.left - 1 && targetRect.right <= cardRect.right + 1);
+					}),
+					touchTargetsMeetMinimum: !requireTouchTargets || targets.every((target) => target.getBoundingClientRect().height >= 44)
+				};
+			}, viewport.mobileShell);
+			const context = `templates/${viewport.name}/${theme}`;
+			assert(metrics.panelOverflow <= 1, `${context} 模板面板出现横向溢出`);
+			assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+			assert(metrics.categoryTabCount === 6, `${context} 模板分类切换入口数量不正确`);
+			assert(metrics.categoryTabsFit, `${context} 模板分类切换入口超出容器`);
+			assert(metrics.groupCount === 6, `${context} 模板分类数量不正确`);
+			assert(metrics.visibleGroupCount === 1, `${context} 应只显示当前模板分类`);
+			assert(metrics.cardCount === 3, `${context} 产品与交付模板卡片数量不正确`);
+			assert(metrics.cardsFit, `${context} 模板卡片内容溢出`);
+			assert(metrics.targetsFit, `${context} 模板操作控件超出卡片边界`);
+			assert(metrics.touchTargetsMeetMinimum, `${context} 移动端操作控件小于 44px`);
+			await getActivePanel(page).locator(".echo-notes-template-group:not([hidden]) .echo-notes-template-card").last().scrollIntoViewIfNeeded();
+			const stickyMetrics = await page.evaluate(() => {
+				const categoryTabs = document.querySelector(".echo-notes-template-category-tabs");
+				const activeGroup = document.querySelector(".echo-notes-template-group:not([hidden])");
+				const tabsRect = categoryTabs?.getBoundingClientRect();
+				const groupRect = activeGroup?.getBoundingClientRect();
+				return {
+					tabsVisible: Boolean(tabsRect && tabsRect.bottom > 0 && tabsRect.top < window.innerHeight),
+					groupVisible: Boolean(groupRect && groupRect.bottom > 0 && groupRect.top < window.innerHeight),
+					tabsRect: tabsRect ? { top: tabsRect.top, bottom: tabsRect.bottom } : null,
+					groupRect: groupRect ? { top: groupRect.top, bottom: groupRect.bottom } : null
+				};
+			});
+			assert(stickyMetrics.tabsVisible, `${context} 滚动模板卡片后分类切换器不可见：${JSON.stringify(stickyMetrics)}`);
+			assert(stickyMetrics.groupVisible, `${context} 当前模板分类未滚入可视区域`);
+			await page.evaluate((scrollState) => {
+				const modalContent = document.querySelector(".modal-content");
+				const verticalTabContent = document.querySelector(".vertical-tab-content");
+				if (modalContent) {
+					modalContent.scrollTop = scrollState.modalContent;
+				}
+				if (verticalTabContent) {
+					verticalTabContent.scrollTop = scrollState.verticalTabContent;
+				}
+			}, screenshotScrollState);
+			await page.mouse.move(1, 1);
+			const fileName = `settings-templates-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
+			const screenshotStat = await stat(screenshotPath);
+			assert(screenshotStat.size > 10_000, `${fileName} 截图可能为空白`);
+			results.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+	return results;
+}
+
 async function stopChild(child) {
 	if (!child || child.exitCode !== null) {
 		return;
@@ -801,6 +1051,7 @@ try {
 	await reopenSettings(page);
 	await page.locator('[data-settings-stage="transcription"]').click();
 	const screenshots = await captureViewports(page);
+	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
 	assert(pageErrors.length === 0, `设置页出现运行时错误：${pageErrors.join(" | ")}`);
 
 	const summary = {
@@ -814,9 +1065,11 @@ try {
 			keyboardNavigation: true,
 			ariaRelationships: true,
 			renderStatePersistence: true,
+			templateGrouping: true,
 			runtimeErrors: pageErrors.length
 		},
-		screenshots
+		screenshots,
+		templateLayouts
 	};
 	await writeFile(
 		path.join(OUTPUT_DIR, "summary.json"),
@@ -825,7 +1078,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；截图：${screenshots.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);
