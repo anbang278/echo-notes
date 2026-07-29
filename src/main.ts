@@ -335,7 +335,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const internalPlugins = this.getInternalPlugins();
 		const internalPlugin = this.getInternalPlugin(AUDIO_RECORDER_PLUGIN_ID);
 		if (!internalPlugins || !internalPlugin) {
-			new Notice("当前 Obsidian 版本未暴露核心插件录音机内部 API，请到 Core plugins 手动开启 Audio recorder。");
+			new Notice("当前 Obsidian 版本未暴露核心插件录音机内部 API，请到 core plugins 手动开启 Audio recorder。");
 			return false;
 		}
 
@@ -351,7 +351,7 @@ export default class EchoNotesPlugin extends Plugin {
 			} else if (!enabled && typeof internalPlugins.disablePlugin === "function") {
 				await internalPlugins.disablePlugin(AUDIO_RECORDER_PLUGIN_ID);
 			} else {
-				new Notice("无法切换 Obsidian 核心插件录音机，请到 Core plugins 手动调整 Audio recorder。");
+				new Notice("无法切换 Obsidian 核心插件录音机，请到 core plugins 手动调整 Audio recorder。");
 				return false;
 			}
 		} catch (error) {
@@ -1027,7 +1027,7 @@ export default class EchoNotesPlugin extends Plugin {
 				traceId: undefined,
 				completedAt: Date.now()
 			});
-			new Notice("transcript 已存在，已跳过转写。");
+			new Notice("Transcript 已存在，已跳过转写。");
 			await notifyTranscriptFileReady(reusableTranscript);
 			return { transcriptFile: reusableTranscript, analysisEligible: true };
 		}
@@ -1362,7 +1362,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
 		if (this.linkService.hasTranscriptLinkNear(editor.getValue(), audioMatch, transcriptLink)) {
 			if (showNotice) {
-				new Notice("transcript 链接已存在，已跳过插入。");
+				new Notice("Transcript 链接已存在，已跳过插入。");
 			}
 			return false;
 		}
@@ -1768,7 +1768,7 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
-			new Notice("实时录音仅支持本地文件系统 Vault。");
+			new Notice("实时录音仅支持本地文件系统 vault。");
 			return;
 		}
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -2368,7 +2368,7 @@ class TranscriptionUploadConfirmModal extends Modal {
 		this.titleEl.setText("确认上传音频");
 
 		contentEl.createEl("p", {
-			text: "Echo Notes 将把以下音频发送给你配置的转写 Provider。确认后才会开始上传。"
+			text: "Echo Notes 将把以下音频发送给你配置的转写 provider。确认后才会开始上传。"
 		});
 
 		const preview = buildTranscriptionUploadPreview(

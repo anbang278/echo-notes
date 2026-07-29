@@ -206,7 +206,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		headingEl.id = headingId;
 		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
 		conceptEl.createSpan({
-			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
+			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
 		});
 		const readmeLinkEl = conceptEl.createEl("a", {
 			cls: "echo-notes-settings-intro-link",
@@ -474,7 +474,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc("选择插入到原笔记的 transcript 链接样式。")
 			.addDropdown((dropdown) =>
 				dropdown
-					.addOption("linkOnly", "普通内部链接（linkOnly）")
+					.addOption("linkOnly", "普通内部链接（LinkOnly）")
 					.addOption("callout", "提示块样式（callout）")
 					.setValue(this.plugin.settings.insertStyle)
 					.onChange(async (value) => {
@@ -500,7 +500,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderTranscriptionAutomationSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("手动转写前确认上传")
-			.setDesc("开启后，手动转写会先显示 Provider、Base URL、模型和文件大小；自动化转写会跳过需要确认的上传，避免后台发送音频。")
+			.setDesc("开启后，手动转写会先显示 provider、base URL、模型和文件大小；自动化转写会跳过需要确认的上传，避免后台发送音频。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.confirmBeforeTranscription)
@@ -524,7 +524,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别 Markdown 音频链接")
-			.setDesc("监听笔记变更，发现新增音频链接后将音频后台上传到当前转写 Provider，并自动生成转写稿和补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
+			.setDesc("监听笔记变更，发现新增音频链接后将音频后台上传到当前转写 provider，并自动生成转写稿和补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioLink)
@@ -536,7 +536,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别新音频文件")
-			.setDesc("监听 Vault 新增音频文件，并在后台上传到当前转写 Provider 以自动生成 transcript；该模式没有来源笔记隐私标记，也不会回写来源笔记。")
+			.setDesc("监听 vault 新增音频文件，并在后台上传到当前转写 provider 以自动生成 transcript；该模式没有来源笔记隐私标记，也不会回写来源笔记。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioCreated)
@@ -562,7 +562,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderTranscriptionSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("转写模式")
-			.setDesc("实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 Vault 中已有的音频文件。")
+			.setDesc("实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 vault 中已有的音频文件。")
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOption("realtime", "实时转写")
@@ -619,7 +619,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				isRealtime
 					? "实时转写目前固定使用火山引擎 AgentPlan。"
-					: "选择用于 Vault 中已有音频文件转写的服务商。"
+					: "选择用于 vault 中已有音频文件转写的服务商。"
 			)
 			.addDropdown((dropdown) => {
 				if (isRealtime) {
@@ -650,8 +650,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const apiKey = this.plugin.getApiKey(config.provider);
 		const apiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlan ? "AgentPlan 专属 API Key" : "API Key")
-			.setDesc("密钥按 Provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+			.setName(isAgentPlan ? "AgentPlan 专属 API key" : "API key")
+			.setDesc("密钥按 provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
 		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
 		apiKeySetting.addText((text) => {
 			text.inputEl.type = "password";
@@ -665,7 +665,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.setSecretSaveStatus(apiKeyStatusEl, nextApiKey ? "saved" : "cleared");
 					} catch (error) {
 						this.setSecretSaveStatus(apiKeyStatusEl, "failed");
-						new Notice(`API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+						new Notice(`API key 保存失败：${getSanitizedErrorMessage(error)}`);
 					}
 				});
 		});
@@ -731,10 +731,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName("自定义转写模型")
-				.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的 Provider API Key。")
+				.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的 provider API key。")
 				.addText((text) =>
 					text
-						.setPlaceholder("例如未来新增的 organization/model-id")
+						.setPlaceholder("例如未来新增的 organization/model-ID")
 						.setValue(isOfficialModel ? "" : config.model)
 						.onChange(async (value) => {
 							const nextModel = value.trim();
@@ -801,7 +801,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (!isRealtime && !isAgentPlan) {
 			new Setting(containerEl)
 				.setName("自定义语言代码")
-				.setDesc("填写当前离线 Provider 支持的语言代码；清空不会改变当前语言。")
+				.setDesc("填写当前离线 provider 支持的语言代码；清空不会改变当前语言。")
 				.addText((text) => {
 					const customLanguage = Object.prototype.hasOwnProperty.call(
 						TRANSCRIPTION_LANGUAGE_LABELS,
@@ -1021,7 +1021,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderAnalysisModelSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
-			.setName("分析 Provider")
+			.setName("分析 provider")
 			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
@@ -1044,11 +1044,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 
 		const analysisApiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API Key" : "分析 API Key")
+			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API key" : "分析 API key")
 			.setDesc(
 				isAgentPlanAnalysis
-					? "必须使用 AgentPlan 控制台创建的专属 API Key；与实时转写密钥按用途隔离保存在 Obsidian SecretStorage。"
-					: "用于调用当前分析 Provider 的 API Key，会按 Provider 隔离保存到 Obsidian SecretStorage。"
+					? "必须使用 AgentPlan 控制台创建的专属 API key；与实时转写密钥按用途隔离保存在 Obsidian SecretStorage。"
+					: "用于调用当前分析 provider 的 API key，会按 provider 隔离保存到 Obsidian SecretStorage。"
 			);
 		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
 			analysisApiKeySetting,
@@ -1066,17 +1066,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 							this.setSecretSaveStatus(analysisApiKeyStatusEl, apiKey ? "saved" : "cleared");
 						} catch (error) {
 							this.setSecretSaveStatus(analysisApiKeyStatusEl, "failed");
-							new Notice(`分析 API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+							new Notice(`分析 API key 保存失败：${getSanitizedErrorMessage(error)}`);
 						}
 					});
 			});
 
 		new Setting(containerEl)
-			.setName("分析 Base URL")
+			.setName("分析 base URL")
 			.setDesc(
 				isAgentPlanAnalysis
 					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
-					: "OpenAI-compatible Chat Completions 基础地址。请确认所选 Provider 支持 {Base URL}/chat/completions。"
+					: "OpenAI-compatible chat completions 基础地址。请确认所选 provider 支持 {base URL}/chat/completions。"
 			)
 			.addText((text) => {
 				text
@@ -1131,7 +1131,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("分析配置自检")
-			.setDesc("本地检查分析 API Key、Base URL、HTTPS 和模型；不会发送转写稿，也不会调用 Provider。")
+			.setDesc("本地检查分析 API key、base URL、HTTPS 和模型；不会发送转写稿，也不会调用 provider。")
 			.addButton((button) =>
 				button.setButtonText("检查分析配置").onClick(() => {
 					const result = diagnoseAnalysisProviderSettings(this.plugin.settings, this.plugin.getAnalysisApiKey());
@@ -1173,7 +1173,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("AI 分析前脱敏 transcript")
-			.setDesc("开启后，仅在发送给分析模型前遮盖邮箱、电话、身份证号、金额、地址以及带标签的人名/公司名字段；Vault 中的原始 transcript 不会被改写。")
+			.setDesc("开启后，仅在发送给分析模型前遮盖邮箱、电话、身份证号、金额、地址以及带标签的人名/公司名字段；vault 中的原始 transcript 不会被改写。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.redactTranscriptBeforeAnalysis)
@@ -1217,7 +1217,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				this.plugin.settings.memoryInitialized
 					? "目录已由初始化清单锁定；如需迁移，请移动整个目录并同步修改插件数据。"
-					: "初始化时将在 Vault 内创建会议、候选、实体、User 和系统目录。"
+					: "初始化时将在 vault 内创建会议、候选、实体、user 和系统目录。"
 			)
 			.addText((text) => {
 				text
@@ -1265,8 +1265,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderMemoryModelSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
-			.setName("记忆 Provider")
-			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的 Provider、API Key、Base URL 或模型。")
+			.setName("记忆 provider")
+			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的 provider、API key、base URL 或模型。")
 			.addDropdown((dropdown) => Object.entries(ANALYSIS_PROVIDER_LABELS)
 				.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 				.setValue(this.plugin.settings.memoryProvider)
@@ -1281,8 +1281,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				}));
 
 		const apiKeySetting = new Setting(containerEl)
-			.setName("记忆 API Key")
-			.setDesc("按 Provider 隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
+			.setName("记忆 API key")
+			.setDesc("按 provider 隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
 		const statusEl = this.createSecretSaveStatus(apiKeySetting, this.plugin.getMemoryApiKey());
 		apiKeySetting.addText((text) => {
 			text.inputEl.type = "password";
@@ -1296,15 +1296,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.setSecretSaveStatus(statusEl, apiKey ? "saved" : "cleared");
 					} catch (error) {
 						this.setSecretSaveStatus(statusEl, "failed");
-						new Notice(`记忆 API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+						new Notice(`记忆 API key 保存失败：${getSanitizedErrorMessage(error)}`);
 					}
 				});
 		});
 
 		const isAgentPlan = this.plugin.settings.memoryProvider === "volcengine-agentplan";
 		new Setting(containerEl)
-			.setName("记忆 Base URL")
-			.setDesc("OpenAI-compatible Chat Completions 基础地址。")
+			.setName("记忆 base URL")
+			.setDesc("OpenAI-compatible chat completions 基础地址。")
 			.addText((text) => {
 				text
 					.setPlaceholder(this.getMemoryProviderDefaults().analysisBaseUrl)
@@ -1344,7 +1344,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("记忆配置自检")
-			.setDesc("本地检查独立 API Key、Base URL、HTTPS 和模型；不会发送会议内容。")
+			.setDesc("本地检查独立 API key、base URL、HTTPS 和模型；不会发送会议内容。")
 			.addButton((button) => button.setButtonText("检查记忆配置").onClick(() => {
 				const result = diagnoseMemoryProviderSettings({
 					provider: this.plugin.settings.memoryProvider,
@@ -1359,7 +1359,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderMemoryProcessingSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("沉淀模式")
-			.setDesc("候选包始终作为事实源；自动编译模式会额外更新 User、人物、组织和项目画像的托管区块。")
+			.setDesc("候选包始终作为事实源；自动编译模式会额外更新 user、人物、组织和项目画像的托管区块。")
 			.addDropdown((dropdown) => dropdown
 				.addOption("candidates-only", "会议页 + 候选包（默认）")
 				.addOption("compile-profiles", "会议页 + 候选包 + 自动编译画像")
@@ -1433,7 +1433,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					if (group.templates.length === 0) {
 						continue;
 					}
-					const optionGroup = document.createElement("optgroup");
+					const optionGroup = dropdown.selectEl.createEl("optgroup");
 					optionGroup.label = group.category.label;
 					for (const template of group.templates) {
 						const suffix = template.enabled ? "" : "（未启用）";
@@ -1441,7 +1441,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 							new Option(`${template.name}${suffix}`, template.id)
 						);
 					}
-					dropdown.selectEl.append(optionGroup);
 				}
 				dropdown
 					.setValue(this.plugin.settings.defaultAnalysisTemplateId)
@@ -1539,10 +1538,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			});
 			groupEls.set(group.category.id, groupEl);
 			const groupHeaderEl = groupEl.createDiv({ cls: "echo-notes-template-group-header" });
-			groupHeaderEl.createEl("h3", {
-				cls: "echo-notes-template-group-title",
-				text: group.category.label
-			});
+			const groupHeading = new Setting(groupHeaderEl)
+				.setName(group.category.label)
+				.setClass("echo-notes-template-group-heading")
+				.setHeading();
+			groupHeading.nameEl.addClass("echo-notes-template-group-title");
 			groupHeaderEl.createSpan({
 				cls: "echo-notes-template-group-count",
 				text: `${group.templates.filter((template) => template.enabled).length}/${group.templates.length} 已启用`
@@ -1588,7 +1588,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		);
 		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
 		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
-		headerEl.createDiv({ cls: "echo-notes-provider-capability-title", text: "当前 Provider 能力" });
+		headerEl.createDiv({ cls: "echo-notes-provider-capability-title", text: "当前 provider 能力" });
 		headerEl.createDiv({
 			cls: "echo-notes-provider-capability-meta",
 			text: `上传方式：${getUploadModeLabel(capability.uploadMode)}；接口形态：${getEndpointShapeLabel(capability.endpointShape)}`
@@ -1615,7 +1615,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderProviderDiagnostics(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("转写配置自检")
-			.setDesc("本地检查 API Key、Base URL、模型和 Provider 能力限制；不会上传音频，也不会真实调用服务商接口。")
+			.setDesc("本地检查 API key、base URL、模型和 provider 能力限制；不会上传音频，也不会真实调用服务商接口。")
 			.addButton((button) =>
 				button
 					.setButtonText("检查转写配置")
@@ -1752,7 +1752,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				statusEl.setText("保存失败");
 				break;
 			default:
-				statusEl.setText("未保存 API Key");
+				statusEl.setText("未保存 API key");
 		}
 	}
 
@@ -1836,17 +1836,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.plugin.settings.transcriptionMode
 		);
 		if (!capability.supportsLanguage) {
-			return "默认 ASR 转写语言。当前 Provider 不支持语言参数，此设置不会传给 Provider，仍由模型自动识别。";
+			return "默认 ASR 转写语言。当前 provider 不支持语言参数，此设置不会传给 provider，仍由模型自动识别。";
 		}
 
-		return "默认 ASR 转写语言。支持语言参数的 Provider 会随请求发送该值；auto 表示由 Provider 自动识别。";
+		return "默认 ASR 转写语言。支持语言参数的 provider 会随请求发送该值；auto 表示由 provider 自动识别。";
 	}
 
 	private renderAgentPlanAnalysisSignup(containerEl: HTMLElement): void {
 		const desc = createFragment();
 		desc.appendText(`Echo Notes 将通过 ${AGENTPLAN_ANALYSIS_BASE_URL}/chat/completions 调用纪要分析。请使用`);
 		desc.createEl("a", {
-			text: "AgentPlan 专属 API Key",
+			text: "AgentPlan 专属 API key",
 			attr: {
 				href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
 				target: "_blank",
@@ -1864,31 +1864,31 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const provider = this.getSelectedTranscriptionConfig().provider;
 		if (provider === "volcengine-agentplan") {
 			const desc = createFragment();
-			desc.appendText("请在火山方舟 AgentPlan 控制台创建专属 API Key：");
+			desc.appendText("请在火山方舟 AgentPlan 控制台创建专属 API key：");
 			desc.createEl("a", {
-				text: "获取 AgentPlan 专属 API Key",
+				text: "获取 AgentPlan 专属 API key",
 				attr: {
 					href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
 					target: "_blank",
 					rel: "noopener noreferrer"
 				}
 			});
-			new Setting(containerEl).setName("AgentPlan 专属 API Key").setDesc(desc);
+			new Setting(containerEl).setName("AgentPlan 专属 API key").setDesc(desc);
 			return;
 		}
 
 		if (provider === "mosi") {
 			const desc = createFragment();
-			desc.appendText("请在 MOSI API Platform 创建并管理 API Key：");
+			desc.appendText("请在 MOSI API Platform 创建并管理 API key：");
 			desc.createEl("a", {
-				text: "打开 API Key 管理平台",
+				text: "打开 API key 管理平台",
 				attr: {
 					href: "https://platform.mosi.cn/app/api-keys",
 					target: "_blank",
 					rel: "noopener noreferrer"
 				}
 			});
-			new Setting(containerEl).setName("MOSI API Key").setDesc(desc);
+			new Setting(containerEl).setName("MOSI API key").setDesc(desc);
 			return;
 		}
 

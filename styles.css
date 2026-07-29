@@ -615,6 +615,17 @@ body.echo-notes-verify-mobile-shell .echo-notes-template-category-tabs {
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.echo-notes-template-group-heading {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 0;
+	border: 0;
+}
+
+.echo-notes-template-group-heading .setting-item-info {
+	min-width: 0;
+}
+
 .echo-notes-template-group-title,
 .echo-notes-analysis-template-picker-group-title {
 	margin: 0;

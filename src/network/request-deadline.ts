@@ -44,16 +44,20 @@ export function waitForRequestBeforeDeadline<T>(
 		try {
 			request = createRequest();
 		} catch (error) {
-			finish(() => reject(error));
+			finish(() => reject(toRequestError(error)));
 			return;
 		}
 		request.then(
 			(value) => finish(() => resolve(value)),
-			(error: unknown) => finish(() => reject(error))
+			(error: unknown) => finish(() => reject(toRequestError(error)))
 		);
 	});
 }
 
 function getAbortReason(signal: AbortSignal | undefined): Error {
 	return signal?.reason instanceof Error ? signal.reason : new Error("任务已取消。");
+}
+
+function toRequestError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }

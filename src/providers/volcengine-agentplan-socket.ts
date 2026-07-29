@@ -53,7 +53,13 @@ function rawDataToBytes(data: RawData): Uint8Array {
 		return new Uint8Array(data);
 	}
 	if (Array.isArray(data)) {
-		return Uint8Array.from(Buffer.concat(data));
+		const bytes = new Uint8Array(data.reduce((total, chunk) => total + chunk.byteLength, 0));
+		let offset = 0;
+		for (const chunk of data) {
+			bytes.set(chunk, offset);
+			offset += chunk.byteLength;
+		}
+		return bytes;
 	}
 	return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
 }

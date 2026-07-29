@@ -134,9 +134,11 @@ export class MemoryService {
 			sourceText
 		}));
 		const existingRun = manifest.runs[fingerprint];
-		if (existingRun && this.isFile(existingRun.candidatePath)) {
+		const existingCandidateFile = existingRun
+			? this.app.vault.getAbstractFileByPath(existingRun.candidatePath)
+			: null;
+		if (existingRun && existingCandidateFile instanceof TFile) {
 			throwIfMemoryTaskAborted(options.signal);
-			const existingCandidateFile = this.app.vault.getAbstractFileByPath(existingRun.candidatePath) as TFile;
 			const existingCandidate = parseMemoryCandidate(await this.app.vault.cachedRead(existingCandidateFile));
 			if (!this.isFile(existingRun.meetingPath)) {
 				options.onProgress?.("候选包已存在，正在修复会议页");
@@ -655,7 +657,7 @@ function buildMemorySourceText(
 }
 
 function isUserProfileCategory(value: string): value is MemoryUserCategory {
-	return Object.prototype.hasOwnProperty.call(MEMORY_USER_PROFILE_TITLES, value);
+	return Boolean(Object.prototype.hasOwnProperty.call(MEMORY_USER_PROFILE_TITLES, value));
 }
 
 function getEntityTitleFromKey(key: string): string {

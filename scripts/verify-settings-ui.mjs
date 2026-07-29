@@ -38,7 +38,7 @@ const OUTPUT_DIR = path.resolve(
 const README_URL = "https://github.com/anbang278/echo-notes/blob/main/README.zh-CN.md";
 const EXPECTED_TITLE = "记录行动，构建面向未来的 AI Memory";
 const EXPECTED_INTRO =
-	"Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。";
+	"Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。";
 const EXPECTED_README_LINK_TEXT = "查看完整设计理念";
 const EXPECTED_GUIDE =
 	"操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。";
@@ -91,8 +91,8 @@ const VIEWPORTS = [
 const THEMES = ["light", "dark"];
 const SCREENSHOT_STAGES = [
 	{ id: "transcription", section: "转写服务", providerSetting: "Provider" },
-	{ id: "analysis", section: "模型配置", providerSetting: "分析 Provider" },
-	{ id: "memory", section: "模型配置", providerSetting: "记忆 Provider" }
+	{ id: "analysis", section: "模型配置", providerSetting: "分析 provider" },
+	{ id: "memory", section: "模型配置", providerSetting: "记忆 provider" }
 ];
 
 function assert(condition, message) {
@@ -462,6 +462,7 @@ async function getTemplateGroupState(page) {
 			category: group.getAttribute("data-template-category"),
 			label: group.querySelector(".echo-notes-template-group-title")?.textContent?.trim(),
 			count: group.querySelector(".echo-notes-template-group-count")?.textContent?.trim(),
+			heading: group.querySelector(".echo-notes-template-group-heading")?.classList.contains("setting-item-heading") ?? false,
 			templates: [...group.querySelectorAll(".echo-notes-template-card-title")].map((title) => title.textContent?.trim())
 		}))
 	);
@@ -617,7 +618,7 @@ async function verifyTabs(page) {
 	const memoryProcessingTab = memorySectionTabs.filter({ hasText: "编译策略" });
 	await memoryModelTab.click();
 	assert(
-		JSON.stringify(await getSettingOptionValues(page, "记忆 Provider")) ===
+		JSON.stringify(await getSettingOptionValues(page, "记忆 provider")) ===
 			JSON.stringify([
 				"siliconflow",
 				"aliyun-bailian",
@@ -629,7 +630,7 @@ async function verifyTabs(page) {
 			]),
 		"记忆 Provider 的成员或顺序不正确"
 	);
-	await selectSettingOption(page, "记忆 Provider", "siliconflow");
+	await selectSettingOption(page, "记忆 provider", "siliconflow");
 	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
 	await memoryProcessingTab.click();
 	await setSettingToggle(page, "长文本分块提取", false);
@@ -649,7 +650,7 @@ async function verifyTabs(page) {
 	const processingTab = analysisSectionTabs.filter({ hasText: "处理策略" });
 	const templatesTab = analysisSectionTabs.filter({ hasText: "模板管理" });
 	assert(
-		JSON.stringify(await getSettingOptionValues(page, "分析 Provider")) ===
+		JSON.stringify(await getSettingOptionValues(page, "分析 provider")) ===
 			JSON.stringify([
 				"siliconflow",
 				"aliyun-bailian",
@@ -662,14 +663,14 @@ async function verifyTabs(page) {
 		"AI 分析 Provider 的成员或顺序不正确"
 	);
 
-	await selectSettingOption(page, "分析 Provider", "siliconflow");
+	await selectSettingOption(page, "分析 provider", "siliconflow");
 	assert(
 		(await getSettingTextValue(page, "分析模型")) === "Qwen/Qwen3.5-4B",
 		"硅基流动默认分析模型不正确"
 	);
 
-	await selectSettingOption(page, "分析 Provider", "ollama");
-	await activePanel.getByText("分析 Base URL", { exact: true }).waitFor({ state: "visible" });
+	await selectSettingOption(page, "分析 provider", "ollama");
+	await activePanel.getByText("分析 base URL", { exact: true }).waitFor({ state: "visible" });
 	assert(await modelTab.getAttribute("aria-selected") === "true", "分析 Provider 重绘后应保留模型配置分类");
 
 	await processingTab.click();
@@ -684,7 +685,7 @@ async function verifyTabs(page) {
 	await activePanel.getByText("分析分块字符数", { exact: true }).waitFor({ state: "visible" });
 
 	await modelTab.click();
-	await selectSettingOption(page, "分析 Provider", "aliyun-bailian");
+	await selectSettingOption(page, "分析 provider", "aliyun-bailian");
 	assert(await modelTab.getAttribute("aria-selected") === "true", "恢复分析 Provider 后应保留模型配置分类");
 	await templatesTab.click();
 	await activePanel.getByText("默认分析模板", { exact: true }).waitFor({ state: "visible" });
@@ -720,12 +721,12 @@ async function verifyTabs(page) {
 	assert(
 		JSON.stringify(await getTemplateGroupState(page)) ===
 			JSON.stringify([
-				{ category: "general", label: "通用场景", count: "2/2 已启用", templates: ["工作纪要", "学习纪要"] },
-				{ category: "management-people", label: "管理与组织", count: "0/2 已启用", templates: ["管理者纪要", "HR/人力纪要"] },
-				{ category: "product-delivery", label: "产品与交付", count: "1/3 已启用", templates: ["产品需求挖掘纪要", "产品经理纪要", "项目经理纪要"] },
-				{ category: "engineering", label: "技术研发", count: "0/1 已启用", templates: ["研发/技术纪要"] },
-				{ category: "customer-growth", label: "客户与增长", count: "0/3 已启用", templates: ["销售纪要", "客户成功纪要", "运营纪要"] },
-				{ category: "custom", label: "自定义", count: "0/0 已启用", templates: [] }
+				{ category: "general", label: "通用场景", count: "2/2 已启用", heading: true, templates: ["工作纪要", "学习纪要"] },
+				{ category: "management-people", label: "管理与组织", count: "0/2 已启用", heading: true, templates: ["管理者纪要", "HR/人力纪要"] },
+				{ category: "product-delivery", label: "产品与交付", count: "1/3 已启用", heading: true, templates: ["产品需求挖掘纪要", "产品经理纪要", "项目经理纪要"] },
+				{ category: "engineering", label: "技术研发", count: "0/1 已启用", heading: true, templates: ["研发/技术纪要"] },
+				{ category: "customer-growth", label: "客户与增长", count: "0/3 已启用", heading: true, templates: ["销售纪要", "客户成功纪要", "运营纪要"] },
+				{ category: "custom", label: "自定义", count: "0/0 已启用", heading: true, templates: [] }
 			]),
 		"模板管理的角色分类、计数或模板顺序不正确"
 	);
@@ -767,7 +768,7 @@ async function verifyTabs(page) {
 	const engineeringGroup = (await getTemplateGroupState(page)).find((group) => group.category === "engineering");
 	assert(
 		JSON.stringify(engineeringGroup) ===
-			JSON.stringify({ category: "engineering", label: "技术研发", count: "1/2 已启用", templates: ["研发/技术纪要", "自定义模板"] }),
+			JSON.stringify({ category: "engineering", label: "技术研发", count: "1/2 已启用", heading: true, templates: ["研发/技术纪要", "自定义模板"] }),
 		"自定义模板保存后未进入技术研发分类"
 	);
 	assert(
@@ -980,10 +981,25 @@ async function verifyTemplateResponsiveLayouts(page) {
 			await getActivePanel(page).locator(".echo-notes-template-category-tabs").evaluate((element) => {
 				element.scrollIntoView({ block: "start" });
 			});
-			const screenshotScrollState = await page.evaluate(() => ({
-				modalContent: document.querySelector(".modal-content")?.scrollTop ?? 0,
-				verticalTabContent: document.querySelector(".vertical-tab-content")?.scrollTop ?? 0
-			}));
+			await page.evaluate(() => {
+				const categoryTabs = document.querySelector(".echo-notes-template-category-tabs");
+				const groupHeader = document.querySelector(".echo-notes-template-group:not([hidden]) .echo-notes-template-group-header");
+				const categoryTabsRect = categoryTabs?.getBoundingClientRect();
+				const groupHeaderRect = groupHeader?.getBoundingClientRect();
+				const overlap = categoryTabsRect && groupHeaderRect
+					? categoryTabsRect.bottom - groupHeaderRect.top + 1
+					: 0;
+				if (overlap <= 0) {
+					return;
+				}
+				let scrollContainer = categoryTabs?.parentElement ?? null;
+				while (scrollContainer && scrollContainer.scrollTop <= 0) {
+					scrollContainer = scrollContainer.parentElement;
+				}
+				if (scrollContainer) {
+					scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop - overlap);
+				}
+			});
 			const metrics = await page.evaluate((requireTouchTargets) => {
 				const panel = document.querySelector(".echo-notes-settings-panel:not([hidden])");
 				const categoryTabs = panel?.querySelector(".echo-notes-template-category-tabs");
@@ -993,6 +1009,9 @@ async function verifyTemplateResponsiveLayouts(page) {
 				const cards = [...(visibleGroups[0]?.querySelectorAll(".echo-notes-template-card") ?? [])];
 				const targets = [...(visibleGroups[0]?.querySelectorAll(".echo-notes-template-card-actions button, .echo-notes-template-enable") ?? [])];
 				const categoryTabsRect = categoryTabs?.getBoundingClientRect();
+				const groupHeaderRect = visibleGroups[0]?.querySelector(".echo-notes-template-group-header")?.getBoundingClientRect();
+				const groupHeadingRect = visibleGroups[0]?.querySelector(".echo-notes-template-group-heading")?.getBoundingClientRect();
+				const groupCountRect = visibleGroups[0]?.querySelector(".echo-notes-template-group-count")?.getBoundingClientRect();
 				return {
 					panelOverflow: panel ? panel.scrollWidth - panel.clientWidth : Number.POSITIVE_INFINITY,
 					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -1003,6 +1022,10 @@ async function verifyTemplateResponsiveLayouts(page) {
 					}),
 					groupCount: groups.length,
 					visibleGroupCount: visibleGroups.length,
+					categoryTabsBottom: categoryTabsRect?.bottom ?? null,
+					groupHeaderTop: groupHeaderRect?.top ?? null,
+					groupHeadingVisible: Boolean(groupHeadingRect?.width && groupHeadingRect.height),
+					groupCountVisible: Boolean(groupCountRect?.width && groupCountRect.height),
 					cardCount: cards.length,
 					cardsFit: cards.every((card) => card.scrollWidth <= card.clientWidth + 1),
 					targetsFit: targets.every((target) => {
@@ -1020,10 +1043,22 @@ async function verifyTemplateResponsiveLayouts(page) {
 			assert(metrics.categoryTabsFit, `${context} 模板分类切换入口超出容器`);
 			assert(metrics.groupCount === 6, `${context} 模板分类数量不正确`);
 			assert(metrics.visibleGroupCount === 1, `${context} 应只显示当前模板分类`);
+			assert(
+				metrics.categoryTabsBottom !== null && metrics.groupHeaderTop !== null && metrics.groupHeaderTop >= metrics.categoryTabsBottom - 1,
+				`${context} 模板标题被分类切换器遮挡：${JSON.stringify({ categoryTabsBottom: metrics.categoryTabsBottom, groupHeaderTop: metrics.groupHeaderTop })}`
+			);
+			assert(metrics.groupHeadingVisible, `${context} 模板标题不可见`);
+			assert(metrics.groupCountVisible, `${context} 模板启用数量不可见`);
 			assert(metrics.cardCount === 3, `${context} 产品与交付模板卡片数量不正确`);
 			assert(metrics.cardsFit, `${context} 模板卡片内容溢出`);
 			assert(metrics.targetsFit, `${context} 模板操作控件超出卡片边界`);
 			assert(metrics.touchTargetsMeetMinimum, `${context} 移动端操作控件小于 44px`);
+			await page.mouse.move(1, 1);
+			const fileName = `settings-templates-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
+			const screenshotStat = await stat(screenshotPath);
+			assert(screenshotStat.size > 10_000, `${fileName} 截图可能为空白`);
 			await getActivePanel(page).locator(".echo-notes-template-group:not([hidden]) .echo-notes-template-card").last().scrollIntoViewIfNeeded();
 			const stickyMetrics = await page.evaluate(() => {
 				const categoryTabs = document.querySelector(".echo-notes-template-category-tabs");
@@ -1039,22 +1074,6 @@ async function verifyTemplateResponsiveLayouts(page) {
 			});
 			assert(stickyMetrics.tabsVisible, `${context} 滚动模板卡片后分类切换器不可见：${JSON.stringify(stickyMetrics)}`);
 			assert(stickyMetrics.groupVisible, `${context} 当前模板分类未滚入可视区域`);
-			await page.evaluate((scrollState) => {
-				const modalContent = document.querySelector(".modal-content");
-				const verticalTabContent = document.querySelector(".vertical-tab-content");
-				if (modalContent) {
-					modalContent.scrollTop = scrollState.modalContent;
-				}
-				if (verticalTabContent) {
-					verticalTabContent.scrollTop = scrollState.verticalTabContent;
-				}
-			}, screenshotScrollState);
-			await page.mouse.move(1, 1);
-			const fileName = `settings-templates-${viewport.name}-${theme}.png`;
-			const screenshotPath = path.join(OUTPUT_DIR, fileName);
-			await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
-			const screenshotStat = await stat(screenshotPath);
-			assert(screenshotStat.size > 10_000, `${fileName} 截图可能为空白`);
 			results.push({ viewport: viewport.name, theme, fileName, metrics });
 		}
 	}
@@ -1118,6 +1137,29 @@ try {
 	page.on("pageerror", (error) => pageErrors.push(error.message));
 
 	await reloadPluginAndOpenSettings(page);
+	const runtimeState = await page.evaluate(async (pluginId) => {
+		const AudioContextConstructor = window.AudioContext;
+		const audioWorkletNodeAvailable = typeof window.AudioWorkletNode !== "undefined";
+		let audioWorkletAvailable = false;
+		if (AudioContextConstructor) {
+			const audioContext = new AudioContextConstructor();
+			try {
+				audioWorkletAvailable = Boolean(audioContext.audioWorklet);
+			} finally {
+				await audioContext.close();
+			}
+		}
+		return {
+			pluginVersion: window.app.plugins.manifests[pluginId]?.version ?? null,
+			pluginEnabled: window.app.plugins.enabledPlugins.has(pluginId),
+			audioWorkletAvailable,
+			audioWorkletNodeAvailable
+		};
+	}, PLUGIN_ID);
+	assert(runtimeState.pluginEnabled, `测试 vault 中 ${PLUGIN_ID} 未加载`);
+	assert(runtimeState.pluginVersion === manifest.version, `宿主插件版本不匹配：${runtimeState.pluginVersion ?? "未找到"}`);
+	assert(runtimeState.audioWorkletAvailable, "Obsidian 宿主的 AudioContext.audioWorklet 不可用");
+	assert(runtimeState.audioWorkletNodeAvailable, "Obsidian 宿主的 AudioWorkletNode 不可用");
 	await verifyIntroduction(page);
 	await verifyTabs(page);
 	await reopenSettings(page);
@@ -1129,11 +1171,13 @@ try {
 
 	const summary = {
 		pluginVersion: manifest.version,
+		runtimePluginVersion: runtimeState.pluginVersion,
 		obsidianVersion: obsidianAsar.version,
 		sourceTestVault: TEST_VAULT,
 		generatedAt: new Date().toISOString(),
 		durationMs: Date.now() - verificationStartedAt,
 		semanticChecks: {
+			audioWorkletSupport: true,
 			introduction: true,
 			keyboardNavigation: true,
 			ariaRelationships: true,

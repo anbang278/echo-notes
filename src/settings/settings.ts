@@ -1078,15 +1078,15 @@ export function getLocalizedCopy(language: string | undefined): LocalizedCopy {
 }
 
 export function isProviderId(value: string): value is TranscriptionProviderId {
-	return Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, value);
+	return Boolean(Object.prototype.hasOwnProperty.call(PROVIDER_LABELS, value));
 }
 
 export function isOfflineTranscriptionProviderId(value: string): value is OfflineTranscriptionProviderId {
-	return Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS, value);
+	return Boolean(Object.prototype.hasOwnProperty.call(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS, value));
 }
 
 export function isAnalysisProviderId(value: string): value is AnalysisProviderId {
-	return Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, value);
+	return Boolean(Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, value));
 }
 
 export function isRemovedAnalysisProviderId(value: string): value is RemovedAnalysisProviderId {

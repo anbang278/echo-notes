@@ -2,7 +2,6 @@ import { App, FileSystemAdapter, Platform, TFile } from "obsidian";
 import { FileService, getParentPath } from "../obsidian/file-service";
 import { SequentialBlobWriteQueue } from "./realtime-blob-write-queue";
 import {
-	downmixAudioChannels,
 	Pcm16Packetizer,
 	REALTIME_PCM_SAMPLE_RATE,
 	StreamingMonoResampler
@@ -75,7 +74,10 @@ export class VaultRecordingSink {
 		this.app = app;
 		this.file = file;
 		this.writeQueue = new SequentialBlobWriteQueue(async (bytes) => {
-			if (!Platform.isDesktop || !Platform.isDesktopApp) {
+			if (!Platform.isDesktop) {
+				throw new Error("实时录音文件写入仅支持 Obsidian 桌面端。");
+			}
+			if (!Platform.isDesktopApp) {
 				throw new Error("实时录音文件写入仅支持 Obsidian 桌面端。");
 			}
 			const fs = await import("node:fs/promises");
@@ -181,18 +183,14 @@ export class RealtimePcmCapture {
 		this.silentGain = this.audioContext.createGain();
 		this.silentGain.gain.value = 0;
 
-		if (this.audioContext.audioWorklet && typeof AudioWorkletNode !== "undefined") {
-			try {
-				await this.startAudioWorklet();
-			} catch {
-				if (this.workletUrl) {
-					URL.revokeObjectURL(this.workletUrl);
-					this.workletUrl = null;
-				}
-				this.startScriptProcessor();
-			}
-		} else {
-			this.startScriptProcessor();
+		if (!this.audioContext.audioWorklet || typeof AudioWorkletNode === "undefined") {
+			throw new Error("当前 Obsidian 环境不支持 AudioWorklet，无法开始实时转写。");
+		}
+		try {
+			await this.startAudioWorklet();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			throw new Error(`AudioWorklet 初始化失败：${message}`, { cause: error });
 		}
 	}
 
@@ -240,25 +238,6 @@ export class RealtimePcmCapture {
 		const node = new AudioWorkletNode(this.audioContext, "echo-notes-pcm-capture");
 		node.port.onmessage = (event: MessageEvent<Float32Array>) => {
 			this.handleMonoSamples(event.data);
-		};
-		this.sourceNode.connect(node);
-		node.connect(this.silentGain);
-		this.silentGain.connect(this.audioContext.destination);
-		this.captureNode = node;
-	}
-
-	private startScriptProcessor(): void {
-		if (!this.audioContext || !this.sourceNode || !this.silentGain) {
-			return;
-		}
-		const node = this.audioContext.createScriptProcessor(4096, 2, 1);
-		node.onaudioprocess = (event) => {
-			const input = event.inputBuffer;
-			const channels: Float32Array[] = [];
-			for (let channel = 0; channel < input.numberOfChannels; channel += 1) {
-				channels.push(input.getChannelData(channel));
-			}
-			this.handleMonoSamples(downmixAudioChannels(channels));
 		};
 		this.sourceNode.connect(node);
 		node.connect(this.silentGain);

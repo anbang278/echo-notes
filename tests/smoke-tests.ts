@@ -235,6 +235,16 @@ assert.equal(ANALYSIS_TASK_TIMEOUT_MS, 15 * 60 * 1000);
 assert.equal(createAnalysisDeadline(1_000), 1_000 + ANALYSIS_TASK_TIMEOUT_MS);
 assert.equal(await waitForAnalysisResponse(() => Promise.resolve("分析完成"), Date.now() + 100), "分析完成");
 await assert.rejects(
+	waitForAnalysisResponse(() => {
+		throw "同步字符串错误";
+	}, Date.now() + 100),
+	(error: unknown) => error instanceof Error && error.message === "同步字符串错误"
+);
+await assert.rejects(
+	waitForAnalysisResponse(() => Promise.reject("异步字符串错误"), Date.now() + 100),
+	(error: unknown) => error instanceof Error && error.message === "异步字符串错误"
+);
+await assert.rejects(
 	waitForAnalysisResponse(() => new Promise<never>(() => undefined), Date.now() + 5),
 	(error: unknown) => error instanceof AnalysisError && error.code === "timeout" && /15 分钟/.test(error.message)
 );

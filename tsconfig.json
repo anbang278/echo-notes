@@ -12,6 +12,7 @@
 		"isolatedModules": true,
 		"strictNullChecks": true,
 		"strictFunctionTypes": true,
+		"useUnknownInCatchVariables": true,
 		"lib": [
 			"DOM",
 			"ES2022"

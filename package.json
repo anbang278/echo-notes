@@ -1,11 +1,13 @@
 {
 	"name": "echo-notes",
-	"version": "0.4.0",
+	"version": "0.4.1",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
-		"lint": "eslint .",
+		"lint": "npm run lint:base && npm run lint:obsidian",
+		"lint:base": "eslint .",
+		"lint:obsidian": "eslint --max-warnings=0 --config eslint.obsidian.config.mjs \"src/**/*.ts\"",
 		"typecheck": "tsc -noEmit -skipLibCheck",
 		"build": "npm run typecheck && node esbuild.config.mjs production",
 		"verify:settings-ui": "npm run build && node scripts/verify-settings-ui.mjs",
@@ -29,6 +31,7 @@
 		"@types/ws": "8.18.1",
 		"esbuild": "^0.25.5",
 		"eslint": "^10.7.0",
+		"eslint-plugin-obsidianmd": "0.4.1",
 		"obsidian": "^1.13.1",
 		"playwright-core": "^1.57.0",
 		"typescript": "^5.8.3",
