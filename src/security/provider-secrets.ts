@@ -6,6 +6,7 @@ import type {
 
 const TRANSCRIPTION_SECRET_PREFIX = "echo-notes-transcription-api-key";
 const ANALYSIS_SECRET_PREFIX = "echo-notes-analysis-api-key";
+const MEMORY_SECRET_PREFIX = "echo-notes-memory-api-key";
 
 export interface SecretStorageLike {
 	getSecret(id: string): string | null;
@@ -18,6 +19,10 @@ export function getTranscriptionApiKeySecretId(provider: TranscriptionProviderId
 
 export function getAnalysisApiKeySecretId(provider: AnalysisProviderId): string {
 	return `${ANALYSIS_SECRET_PREFIX}-${provider}`;
+}
+
+export function getMemoryApiKeySecretId(provider: AnalysisProviderId): string {
+	return `${MEMORY_SECRET_PREFIX}-${provider}`;
 }
 
 export function getRemovedAnalysisApiKeySecretId(provider: RemovedAnalysisProviderId): string {

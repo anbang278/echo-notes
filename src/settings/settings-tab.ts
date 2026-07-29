@@ -21,6 +21,7 @@ import {
 	type ProviderDiagnosticSeverity
 } from "../providers/provider-diagnostics";
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
+import { diagnoseMemoryProviderSettings } from "../memory/memory-provider";
 import { getSanitizedErrorMessage } from "../security/redaction";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
@@ -55,15 +56,17 @@ import {
 	type CopyLanguage,
 	type EchoNotesHotkeySetting,
 	type InsertStyle,
+	type MemoryMode,
 	type OfflineTranscriptionProviderId,
 	type OutputStrategy,
 	type TranscriptionConfig
 } from "./settings";
 
-type SettingsStage = "transcription" | "analysis";
+type SettingsStage = "transcription" | "analysis" | "memory";
 
 type TranscriptionSettingsSection = "service" | "recording" | "output" | "automation";
 type AnalysisSettingsSection = "model" | "processing" | "templates";
+type MemorySettingsSection = "workspace" | "model" | "processing";
 
 type SettingsSectionDefinition<T extends string> = {
 	id: T;
@@ -77,10 +80,11 @@ type SettingsWorkflowStep =
 const SETTINGS_WORKFLOW_STEPS: readonly SettingsWorkflowStep[] = [
 	{ id: "transcription", label: "录音转写", enabled: true },
 	{ id: "analysis", label: "AI 分析", enabled: true },
+	{ id: "memory", label: "记忆提取", enabled: true },
 	{ id: "agent", label: "调用外部 Agent", enabled: false, status: "研发中" }
 ];
 
-const ENABLED_SETTINGS_STAGES: readonly SettingsStage[] = ["transcription", "analysis"];
+const ENABLED_SETTINGS_STAGES: readonly SettingsStage[] = ["transcription", "analysis", "memory"];
 
 const ECHO_NOTES_README_URL =
 	"https://github.com/anbang278/echo-notes/blob/main/README.zh-CN.md";
@@ -98,12 +102,19 @@ const ANALYSIS_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<AnalysisSet
 	{ id: "templates", label: "模板管理" }
 ];
 
+const MEMORY_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<MemorySettingsSection>[] = [
+	{ id: "workspace", label: "记忆工作区" },
+	{ id: "model", label: "模型配置" },
+	{ id: "processing", label: "编译策略" }
+];
+
 export class EchoNotesSettingTab extends PluginSettingTab {
 	private plugin: EchoNotesPlugin;
 	private settingsContainerEl: HTMLElement | null = null;
 	private activeSettingsStage: SettingsStage = "transcription";
 	private activeTranscriptionSettingsSection: TranscriptionSettingsSection = "service";
 	private activeAnalysisSettingsSection: AnalysisSettingsSection = "model";
+	private activeMemorySettingsSection: MemorySettingsSection = "workspace";
 	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
 	private settingsRenderSequence = 0;
 
@@ -154,11 +165,21 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		);
 		this.renderAnalysisSettings(analysisPanelEl, renderId);
 
+		const memoryPanelEl = containerEl.createDiv({ cls: "echo-notes-settings-panel" });
+		memoryPanelEl.id = `echo-notes-settings-panel-${renderId}-memory`;
+		memoryPanelEl.setAttribute("role", "tabpanel");
+		memoryPanelEl.setAttribute(
+			"aria-labelledby",
+			`echo-notes-settings-step-${renderId}-memory`
+		);
+		this.renderMemorySettings(memoryPanelEl, renderId);
+
 		this.activateSettingsStage(
 			workflowEl,
 			{
 				transcription: transcriptionPanelEl,
-				analysis: analysisPanelEl
+				analysis: analysisPanelEl,
+				memory: memoryPanelEl
 			},
 			this.activeSettingsStage,
 			false
@@ -259,7 +280,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const analysisPanelEl = containerEl?.querySelector<HTMLElement>(
 			'.echo-notes-settings-panel[role="tabpanel"][id$="-analysis"]'
 		);
-		if (!transcriptionPanelEl || !analysisPanelEl) {
+		const memoryPanelEl = containerEl?.querySelector<HTMLElement>(
+			'.echo-notes-settings-panel[role="tabpanel"][id$="-memory"]'
+		);
+		if (!transcriptionPanelEl || !analysisPanelEl || !memoryPanelEl) {
 			return;
 		}
 
@@ -267,7 +291,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			workflowEl,
 			{
 				transcription: transcriptionPanelEl,
-				analysis: analysisPanelEl
+				analysis: analysisPanelEl,
+				memory: memoryPanelEl
 			},
 			stage
 		);
@@ -1159,6 +1184,245 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 	}
 
+	private renderMemorySettings(containerEl: HTMLElement, renderId: number): void {
+		this.renderSettingsSectionTabs(
+			containerEl,
+			renderId,
+			"memory",
+			"Echo Memory 配置分类",
+			MEMORY_SETTINGS_SECTIONS,
+			this.activeMemorySettingsSection,
+			(section, panelEl) => {
+				switch (section) {
+					case "workspace":
+						this.renderMemoryWorkspaceSettings(panelEl);
+						break;
+					case "model":
+						this.renderMemoryModelSettings(panelEl);
+						break;
+					case "processing":
+						this.renderMemoryProcessingSettings(panelEl);
+						break;
+				}
+			},
+			(section) => {
+				this.activeMemorySettingsSection = section;
+			}
+		);
+	}
+
+	private renderMemoryWorkspaceSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName("Echo Memory 根目录")
+			.setDesc(
+				this.plugin.settings.memoryInitialized
+					? "目录已由初始化清单锁定；如需迁移，请移动整个目录并同步修改插件数据。"
+					: "初始化时将在 Vault 内创建会议、候选、实体、User 和系统目录。"
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("Echo Memory")
+					.setValue(this.plugin.settings.memoryRootFolder)
+					.setDisabled(this.plugin.settings.memoryInitialized);
+				if (!this.plugin.settings.memoryInitialized) {
+					text.onChange(async (value) => {
+						this.plugin.settings.memoryRootFolder = value.trim();
+						await this.plugin.saveSettings();
+					});
+				}
+				return text;
+			});
+
+		new Setting(containerEl)
+			.setName("初始化状态")
+			.setDesc(
+				this.plugin.settings.memoryInitialized
+					? `已初始化；目录语言固定为 ${this.plugin.settings.memoryPathLanguage === "en" ? "English" : "中文"}。`
+					: "首次初始化只收集称呼、当前角色和近期目标。"
+			)
+			.addButton((button) => button
+				.setButtonText(this.plugin.settings.memoryInitialized ? "打开首页" : "开始初始化")
+				.setCta()
+				.onClick(() => {
+					if (this.plugin.settings.memoryInitialized) {
+						void this.plugin.openMemoryHome();
+					} else {
+						this.plugin.openMemoryInitialization(() => this.refreshSettings());
+					}
+				}));
+
+		new Setting(containerEl)
+			.setName("启用自动记忆提取")
+			.setDesc("开启后，一批 AI 纪要至少有一个成功时，自动以转写正文和本批成功纪要提取一次记忆。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.memoryEnabled)
+				.setDisabled(!this.plugin.settings.memoryInitialized)
+				.onChange(async (value) => {
+					this.plugin.settings.memoryEnabled = value;
+					await this.plugin.saveSettings();
+				}));
+	}
+
+	private renderMemoryModelSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName("记忆 Provider")
+			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的 Provider、API Key、Base URL 或模型。")
+			.addDropdown((dropdown) => Object.entries(ANALYSIS_PROVIDER_LABELS)
+				.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
+				.setValue(this.plugin.settings.memoryProvider)
+				.onChange(async (value) => {
+					if (!isAnalysisProviderId(value)) {
+						return;
+					}
+					this.plugin.settings.memoryProvider = value;
+					this.applyMemoryProviderDefaults(value);
+					await this.plugin.saveSettings();
+					this.refreshSettings();
+				}));
+
+		const apiKeySetting = new Setting(containerEl)
+			.setName("记忆 API Key")
+			.setDesc("按 Provider 隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
+		const statusEl = this.createSecretSaveStatus(apiKeySetting, this.plugin.getMemoryApiKey());
+		apiKeySetting.addText((text) => {
+			text.inputEl.type = "password";
+			return text
+				.setPlaceholder("sk-...")
+				.setValue(this.plugin.getMemoryApiKey())
+				.onChange(async (value) => {
+					try {
+						const apiKey = value.trim();
+						await this.plugin.saveMemoryApiKey(apiKey);
+						this.setSecretSaveStatus(statusEl, apiKey ? "saved" : "cleared");
+					} catch (error) {
+						this.setSecretSaveStatus(statusEl, "failed");
+						new Notice(`记忆 API Key 保存失败：${getSanitizedErrorMessage(error)}`);
+					}
+				});
+		});
+
+		const isAgentPlan = this.plugin.settings.memoryProvider === "volcengine-agentplan";
+		new Setting(containerEl)
+			.setName("记忆 Base URL")
+			.setDesc("OpenAI-compatible Chat Completions 基础地址。")
+			.addText((text) => {
+				text
+					.setPlaceholder(this.getMemoryProviderDefaults().analysisBaseUrl)
+					.setValue(this.plugin.settings.memoryBaseUrl)
+					.setDisabled(isAgentPlan);
+				if (!isAgentPlan) {
+					text.onChange(async (value) => {
+						this.plugin.settings.memoryBaseUrl = value.trim();
+						await this.plugin.saveSettings();
+					});
+				}
+				return text;
+			});
+
+		const modelSetting = new Setting(containerEl)
+			.setName("记忆模型")
+			.setDesc("模型必须可靠输出 JSON，并能为每条断言保留原文证据。");
+		if (isAgentPlan) {
+			modelSetting.addDropdown((dropdown) => {
+				for (const option of AGENTPLAN_ANALYSIS_MODELS) {
+					dropdown.addOption(option.id, option.label);
+				}
+				return dropdown.setValue(this.plugin.settings.memoryModel).onChange(async (value) => {
+					this.plugin.settings.memoryModel = value;
+					await this.plugin.saveSettings();
+				});
+			});
+		} else {
+			modelSetting.addText((text) => text
+				.setPlaceholder(this.getMemoryProviderDefaults().analysisModel)
+				.setValue(this.plugin.settings.memoryModel)
+				.onChange(async (value) => {
+					this.plugin.settings.memoryModel = value.trim();
+					await this.plugin.saveSettings();
+				}));
+		}
+
+		new Setting(containerEl)
+			.setName("记忆配置自检")
+			.setDesc("本地检查独立 API Key、Base URL、HTTPS 和模型；不会发送会议内容。")
+			.addButton((button) => button.setButtonText("检查记忆配置").onClick(() => {
+				const result = diagnoseMemoryProviderSettings({
+					provider: this.plugin.settings.memoryProvider,
+					baseUrl: this.plugin.settings.memoryBaseUrl,
+					model: this.plugin.settings.memoryModel,
+					apiKey: this.plugin.getMemoryApiKey()
+				});
+				new Notice(result.canAttempt ? "记忆配置自检通过。" : result.errors.join("；"));
+			}));
+	}
+
+	private renderMemoryProcessingSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName("沉淀模式")
+			.setDesc("候选包始终作为事实源；自动编译模式会额外更新 User、人物、组织和项目画像的托管区块。")
+			.addDropdown((dropdown) => dropdown
+				.addOption("candidates-only", "会议页 + 候选包（默认）")
+				.addOption("compile-profiles", "会议页 + 候选包 + 自动编译画像")
+				.setValue(this.plugin.settings.memoryMode)
+				.onChange(async (value) => {
+					this.plugin.settings.memoryMode = value as MemoryMode;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("长文本分块提取")
+			.setDesc("按自然边界顺序提取，最多 20 块，最后由插件合并并去重结构化断言。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.memoryLongTextEnabled)
+				.onChange(async (value) => {
+					this.plugin.settings.memoryLongTextEnabled = value;
+					await this.plugin.saveSettings();
+					this.refreshSettings();
+				}));
+
+		if (this.plugin.settings.memoryLongTextEnabled) {
+			new Setting(containerEl)
+				.setName("记忆分块字符数")
+				.setDesc("范围 4,000～100,000，默认 24,000。相邻分块保留 400 字重叠。")
+				.addText((text) => text
+					.setPlaceholder("24000")
+					.setValue(String(this.plugin.settings.memoryChunkCharacters))
+					.onChange(async (value) => {
+						const parsed = Number(value);
+						if (!Number.isFinite(parsed)) {
+							return;
+						}
+						this.plugin.settings.memoryChunkCharacters = Math.min(100000, Math.max(4000, Math.round(parsed)));
+						await this.plugin.saveSettings();
+					}));
+		}
+
+		new Setting(containerEl)
+			.setName("画像编译最低置信度")
+			.setDesc("范围 0.75～1，默认 0.75。低于阈值的断言仍保留在候选包，但不会进入画像。")
+			.addText((text) => text
+				.setPlaceholder("0.75")
+				.setValue(String(this.plugin.settings.memoryMinimumConfidence))
+				.onChange(async (value) => {
+					const parsed = Number(value);
+					if (!Number.isFinite(parsed)) {
+						return;
+					}
+					this.plugin.settings.memoryMinimumConfidence = Math.min(1, Math.max(0.75, parsed));
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("从候选包重建画像")
+			.setDesc("只读取配置根目录内的候选包，重写画像托管区块，不修改人工正文。")
+			.addButton((button) => button
+				.setButtonText("立即重建")
+				.setDisabled(!this.plugin.settings.memoryInitialized)
+				.onClick(() => {
+					void this.plugin.rebuildMemoryProfiles();
+				}));
+	}
+
 	private renderAnalysisTemplateSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("默认分析模板")
@@ -1510,6 +1774,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.plugin.settings.analysisModel = defaults.analysisModel;
 	}
 
+	private applyMemoryProviderDefaults(provider: AnalysisProviderId): void {
+		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
+		this.plugin.settings.memoryBaseUrl = defaults.analysisBaseUrl;
+		this.plugin.settings.memoryModel = defaults.analysisModel;
+	}
+
 	private getProviderDefaults(): Omit<TranscriptionConfig, "provider"> {
 		const provider = this.getSelectedTranscriptionConfig().provider;
 		if (
@@ -1530,6 +1800,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private getAnalysisProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
 		const provider = isAnalysisProviderId(this.plugin.settings.analysisProvider)
 			? this.plugin.settings.analysisProvider
+			: "aliyun-bailian";
+		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
+	}
+
+	private getMemoryProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
+		const provider = isAnalysisProviderId(this.plugin.settings.memoryProvider)
+			? this.plugin.settings.memoryProvider
 			: "aliyun-bailian";
 		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
 	}

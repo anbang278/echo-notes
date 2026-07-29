@@ -82,7 +82,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 			cls: `echo-notes-task-status is-${task.status}`,
 			text: getStatusLabel(task.status)
 		});
-		headerEl.createDiv({ cls: "echo-notes-task-kind", text: task.kind === "transcription" ? "转写" : "分析" });
+		headerEl.createDiv({ cls: "echo-notes-task-kind", text: getTaskKindLabel(task.kind) });
 
 		mainEl.createDiv({ cls: "echo-notes-task-title", text: task.title });
 		mainEl.createDiv({ cls: "echo-notes-task-stage", text: task.stage });
@@ -113,7 +113,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 		this.createIconButton(actionsEl, "file-search", "打开任务文件", () => {
 			void this.plugin.openTaskCenterTask(task);
 		});
-		if (task.status === "failed" && task.retry) {
+		if (task.retry && (task.status === "failed" || (task.status === "running" && task.retry.allowWhileRunning))) {
 			this.createIconButton(actionsEl, "rotate-ccw", task.retry.label, async () => {
 				const retried = await this.plugin.retryTaskCenterTask(task.id);
 				if (!retried) {
@@ -148,6 +148,17 @@ export class EchoNotesTaskCenterView extends ItemView {
 			void onClick(event);
 		});
 		return buttonEl;
+	}
+}
+
+function getTaskKindLabel(kind: EchoNotesTask["kind"]): string {
+	switch (kind) {
+		case "transcription":
+			return "转写";
+		case "analysis":
+			return "分析";
+		case "memory":
+			return "记忆";
 	}
 }
 

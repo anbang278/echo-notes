@@ -5,6 +5,7 @@ import {
 	ANALYSIS_LINKS_START,
 	TRANSCRIPT_ANALYSIS_END,
 	TRANSCRIPT_ANALYSIS_START,
+	extractTranscriptAnalyses,
 	extractTranscriptText,
 	insertOrReplaceTranscriptAnalysis,
 	renderTranscriptAnalysisBlock
@@ -95,14 +96,41 @@ import { redactAnalysisInputText } from "../src/security/content-redaction";
 import { sanitizeSensitiveText } from "../src/security/redaction";
 import {
 	getAnalysisApiKeySecretId,
+	getMemoryApiKeySecretId,
 	getRemovedAnalysisApiKeySecretId,
 	getTranscriptionApiKeySecretId,
 	migrateLegacySecret,
 	migrateSecretIfTargetEmpty,
 	type SecretStorageLike
 } from "../src/security/provider-secrets";
+import { buildMemoryPaths } from "../src/memory/memory-paths";
+import {
+	MEMORY_MANAGED_END,
+	MEMORY_MANAGED_START,
+	createStableFingerprint,
+	formatMemoryExtractionFailureLog,
+	formatMemoryExtractionRetryLog,
+	insertOrReplaceManagedBlock,
+	normalizeEntityName,
+	parseMemoryCandidate,
+	parseMemoryExtractionResponse,
+	renderMemoryCandidate,
+	sanitizeMemoryFileName
+} from "../src/memory/memory-output";
+import { MEMORY_SCHEMA_VERSION, type MemoryCandidatePackage } from "../src/memory/memory-types";
+import {
+	MEMORY_TASK_TIMEOUT_MS,
+	createMemoryDeadline,
+	waitForMemoryResponse
+} from "../src/memory/memory-timeout";
 import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
 import { splitAnalysisText, estimateAnalysisTextTokens } from "../src/analysis/analysis-chunking";
+import {
+	ANALYSIS_TASK_TIMEOUT_MS,
+	createAnalysisDeadline,
+	waitForAnalysisResponse
+} from "../src/analysis/analysis-timeout";
+import { AnalysisError } from "../src/analysis/analysis-provider";
 import {
 	createChunkAnalysisInput,
 	createSynthesisAnalysisInput
@@ -203,6 +231,32 @@ const sample = [
 
 const links = parseAudioLinks(sample);
 assert.equal(links.length, 4);
+assert.equal(ANALYSIS_TASK_TIMEOUT_MS, 15 * 60 * 1000);
+assert.equal(createAnalysisDeadline(1_000), 1_000 + ANALYSIS_TASK_TIMEOUT_MS);
+assert.equal(await waitForAnalysisResponse(() => Promise.resolve("分析完成"), Date.now() + 100), "分析完成");
+await assert.rejects(
+	waitForAnalysisResponse(() => new Promise<never>(() => undefined), Date.now() + 5),
+	(error: unknown) => error instanceof AnalysisError && error.code === "timeout" && /15 分钟/.test(error.message)
+);
+let expiredAnalysisRequestCount = 0;
+await assert.rejects(
+	waitForAnalysisResponse(() => {
+		expiredAnalysisRequestCount += 1;
+		return Promise.resolve("不应发出请求");
+	}, Date.now() - 1),
+	(error: unknown) => error instanceof AnalysisError && error.code === "timeout"
+);
+assert.equal(expiredAnalysisRequestCount, 0);
+assert.equal(MEMORY_TASK_TIMEOUT_MS, 15 * 60 * 1000);
+assert.equal(createMemoryDeadline(2_000), 2_000 + MEMORY_TASK_TIMEOUT_MS);
+const memoryRetryController = new AbortController();
+const cancelledMemoryResponse = waitForMemoryResponse(
+	() => new Promise<never>(() => undefined),
+	Date.now() + 100,
+	memoryRetryController.signal
+);
+memoryRetryController.abort(new Error("当前记忆提取已由用户重试。"));
+await assert.rejects(cancelledMemoryResponse, /当前记忆提取已由用户重试/);
 assert.equal(links[0].linkPath, "Recording 20260531001942.m4a");
 assert.equal(links[1].linkPath, "Recording 20260531001942.m4a");
 assert.equal(links[2].linkPath, "Attachments/Recording 20260531001942.m4a");
@@ -286,6 +340,115 @@ assert.equal(
 	createTaskId("transcription", "Folder\\Audio File.m4a"),
 	createTaskId("transcription", "folder/audio file.m4a")
 );
+assert.match(createTaskId("memory", "Folder/Meeting.transcript.md"), /^memory:/);
+
+const memoryExtractionSource = "张三在星海科技担任产品负责人，负责协作工具。我的近期目标是完成 Echo Memory MVP。";
+const parsedMemoryExtraction = parseMemoryExtractionResponse(
+	JSON.stringify({
+		assertions: [
+			{
+				subjectType: "person",
+				subjectName: "张三",
+				category: "responsibility",
+				predicate: "任职",
+				value: "星海科技产品负责人，负责协作工具",
+				confidence: 0.92,
+				evidenceQuote: "张三在星海科技担任产品负责人，负责协作工具"
+			}
+		]
+	}),
+	memoryExtractionSource
+);
+assert.equal(parsedMemoryExtraction.assertions.length, 1);
+assert.equal(parsedMemoryExtraction.assertions[0].subjectType, "person");
+assert.throws(
+	() => parseMemoryExtractionResponse(
+		'{"assertions":[{"subjectType":"person","subjectName":"张三","category":"responsibility","predicate":"任职","value":"不存在","confidence":0.9,"evidenceQuote":"输入中不存在的证据"}]}',
+		memoryExtractionSource
+	),
+	/无法在本次输入中定位/
+);
+
+const memoryCandidate: MemoryCandidatePackage = {
+	schemaVersion: MEMORY_SCHEMA_VERSION,
+	id: "memory-test",
+	fingerprint: createStableFingerprint(memoryExtractionSource),
+	createdAt: "2026-07-29T08:00:00.000Z",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	traceIds: ["trace-test"],
+	source: {
+		transcriptPath: "Meetings/Test.transcript.md",
+		transcriptTitle: "Test.transcript",
+		analysisTemplateIds: ["work-minutes"]
+	},
+	assertions: [{
+		...parsedMemoryExtraction.assertions[0],
+		id: "assertion-test",
+		observedAt: "2026-07-29T08:00:00.000Z",
+		sourcePath: "Meetings/Test.transcript.md",
+		chunkIndex: 1
+	}]
+};
+const renderedMemoryCandidate = renderMemoryCandidate(memoryCandidate);
+assert.deepEqual(parseMemoryCandidate(renderedMemoryCandidate), memoryCandidate);
+assert.match(renderedMemoryCandidate, /echo-memory-data:start/);
+const profileWithManualContent = [
+	"# 张三",
+	"",
+	"## 人工内容",
+	"请保留这段文字。",
+	"",
+	MEMORY_MANAGED_START,
+	"旧汇总",
+	MEMORY_MANAGED_END
+].join("\n");
+const replacedMemoryProfile = insertOrReplaceManagedBlock(
+	profileWithManualContent,
+	MEMORY_MANAGED_START,
+	MEMORY_MANAGED_END,
+	`${MEMORY_MANAGED_START}\n新汇总\n${MEMORY_MANAGED_END}`
+);
+assert.match(replacedMemoryProfile, /请保留这段文字/);
+assert.match(replacedMemoryProfile, /新汇总/);
+assert.doesNotMatch(replacedMemoryProfile, /旧汇总/);
+assert.equal(createStableFingerprint("same"), createStableFingerprint("same"));
+assert.notEqual(createStableFingerprint("same"), createStableFingerprint("different"));
+assert.equal(normalizeEntityName("  星海　科技  "), "星海 科技");
+assert.equal(sanitizeMemoryFileName('项目/A: "MVP"'), "项目 A MVP");
+assert.equal(
+	formatMemoryExtractionFailureLog("Meetings/Test.transcript.md", "请求超时\n请重试"),
+	"记忆提取失败 [[Meetings/Test.transcript.md]]：请求超时 请重试。可在任务中心点击“重试记忆提取”。"
+);
+assert.equal(
+	formatMemoryExtractionRetryLog("Meetings/Test.transcript.md"),
+	"从任务中心重试记忆提取 [[Meetings/Test.transcript.md]]。"
+);
+
+const zhMemoryPaths = buildMemoryPaths("Echo Memory", "zh");
+assert.equal(zhMemoryPaths.home, "Echo Memory/00 首页.md");
+assert.equal(zhMemoryPaths.peopleDir, "Echo Memory/03 实体/人物");
+assert.equal(zhMemoryPaths.userProfiles["privacy-boundary"], "Echo Memory/04 User/08 隐私与授权边界.md");
+const enMemoryPaths = buildMemoryPaths("Memory", "en");
+assert.equal(enMemoryPaths.home, "Memory/00 Home.md");
+assert.equal(enMemoryPaths.manifest, "Memory/99 System/echo-memory.json");
+const transcriptAnalysisItems = [
+	TRANSCRIPT_ANALYSIS_START,
+	"# 纪要分析",
+	"<!-- echo-notes-analysis-item:start work-minutes -->",
+	"## 工作纪要",
+	"工作内容",
+	"<!-- echo-notes-analysis-item:end work-minutes -->",
+	"<!-- echo-notes-analysis-item:start study-notes -->",
+	"## 学习纪要",
+	"学习内容",
+	"<!-- echo-notes-analysis-item:end study-notes -->",
+	TRANSCRIPT_ANALYSIS_END
+].join("\n");
+assert.deepEqual(
+	extractTranscriptAnalyses(transcriptAnalysisItems, ["study-notes"]),
+	[{ templateId: "study-notes", markdown: "## 学习纪要\n学习内容" }]
+);
 assert.equal(formatTaskBytes(undefined), "未知大小");
 assert.equal(formatTaskBytes(1536), "1.5 KB");
 const taskCenter = new TaskCenterStore();
@@ -342,6 +505,41 @@ assert.equal(taskCenter.getTasks()[0].id, runningTaskId);
 unsubscribeTaskCenter();
 taskCenter.updateTask(runningTaskId, { stage: "正在转写" });
 assert.equal(taskCenterNotifications, 3);
+
+let releaseRunningMemoryRetry: (() => void) | undefined;
+let runningMemoryRetryCount = 0;
+const runningMemoryTaskId = createTaskId("memory", "Meeting.transcript.md");
+taskCenter.upsertTask({
+	id: runningMemoryTaskId,
+	kind: "memory",
+	title: "记忆提取：Meeting.transcript.md",
+	status: "running",
+	stage: "正在提取记忆分块 1/1",
+	targetPath: "Meeting.transcript.md",
+	retry: {
+		label: "重试记忆提取",
+		allowWhileRunning: true,
+		run: () => new Promise<void>((resolve) => {
+			runningMemoryRetryCount += 1;
+			releaseRunningMemoryRetry = resolve;
+		})
+	}
+});
+const runningMemoryRetry = taskCenter.retryTask(runningMemoryTaskId);
+await Promise.resolve();
+assert.equal(runningMemoryRetryCount, 1);
+assert.equal(await taskCenter.retryTask(runningMemoryTaskId), false);
+releaseRunningMemoryRetry?.();
+assert.equal(await runningMemoryRetry, true);
+taskCenter.restartTask({
+	...taskCenter.getTasks().find((task) => task.id === runningMemoryTaskId)!,
+	createdAt: 9_000,
+	updatedAt: 9_000,
+	completedAt: undefined,
+	status: "running",
+	stage: "重新开始记忆提取"
+});
+assert.equal(taskCenter.getTasks().find((task) => task.id === runningMemoryTaskId)?.createdAt, 9_000);
 
 const fakeApp = {
 	fileManager: {
@@ -1893,6 +2091,10 @@ assert.equal(
 	getAnalysisApiKeySecretId("volcengine-agentplan"),
 	"echo-notes-analysis-api-key-volcengine-agentplan"
 );
+assert.equal(
+	getMemoryApiKeySecretId("aliyun-bailian"),
+	"echo-notes-memory-api-key-aliyun-bailian"
+);
 assert.notEqual(
 	getAnalysisApiKeySecretId("volcengine-agentplan"),
 	getTranscriptionApiKeySecretId("volcengine-agentplan")
@@ -2423,6 +2625,41 @@ assert.equal(siliconFlowAnalysisSettings.analysisProvider, "siliconflow");
 assert.equal(siliconFlowAnalysisSettings.analysisBaseUrl, "https://api.siliconflow.cn/v1");
 assert.equal(siliconFlowAnalysisSettings.analysisModel, "Qwen/Qwen3.5-4B");
 assert.equal(normalizeEchoNotesSettings({ redactTranscriptBeforeAnalysis: true }).redactTranscriptBeforeAnalysis, true);
+const normalizedMemorySettings = normalizeEchoNotesSettings({
+	memoryEnabled: true,
+	memoryInitialized: true,
+	memoryRootFolder: " Personal Memory ",
+	memoryPathLanguage: "en",
+	memoryMode: "compile-profiles",
+	memoryProvider: "siliconflow",
+	memoryBaseUrl: "https://memory.example.com/v1",
+	memoryModel: "memory-model",
+	memoryLongTextEnabled: false,
+	memoryChunkCharacters: 200000,
+	memoryMinimumConfidence: 1.5,
+	memoryApiKey: "must-not-persist"
+});
+assert.equal(normalizedMemorySettings.memoryEnabled, true);
+assert.equal(normalizedMemorySettings.memoryInitialized, true);
+assert.equal(normalizedMemorySettings.memoryRootFolder, "Personal Memory");
+assert.equal(normalizedMemorySettings.memoryPathLanguage, "en");
+assert.equal(normalizedMemorySettings.memoryMode, "compile-profiles");
+assert.equal(normalizedMemorySettings.memoryProvider, "siliconflow");
+assert.equal(normalizedMemorySettings.memoryBaseUrl, "https://memory.example.com/v1");
+assert.equal(normalizedMemorySettings.memoryModel, "memory-model");
+assert.equal(normalizedMemorySettings.memoryLongTextEnabled, false);
+assert.equal(normalizedMemorySettings.memoryChunkCharacters, 100000);
+assert.equal(normalizedMemorySettings.memoryMinimumConfidence, 1);
+assert.equal(normalizeEchoNotesSettings({ memoryMinimumConfidence: 0.5 }).memoryMinimumConfidence, 0.75);
+assert.equal(Object.prototype.hasOwnProperty.call(normalizedMemorySettings, "memoryApiKey"), false);
+assert.equal(normalizeEchoNotesSettings({ memoryRootFolder: "../outside" }).memoryRootFolder, "Echo Memory");
+const agentPlanMemorySettings = normalizeEchoNotesSettings({
+	memoryProvider: "volcengine-agentplan",
+	memoryBaseUrl: "https://wrong.example.com/v1",
+	memoryModel: "doubao-seed-2.0-pro"
+});
+assert.equal(agentPlanMemorySettings.memoryBaseUrl, AGENTPLAN_ANALYSIS_BASE_URL);
+assert.equal(agentPlanMemorySettings.memoryModel, "doubao-seed-2.0-pro");
 const customOpenAIAnalysisSettings = normalizeEchoNotesSettings({
 	analysisProvider: "openai",
 	analysisBaseUrl: "https://proxy.example.com/v1",

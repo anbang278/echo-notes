@@ -101,7 +101,7 @@
 	position: relative;
 	isolation: isolate;
 	display: grid;
-	grid-template-columns: repeat(3, minmax(0, 1fr));
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 	margin: 4px 0 24px;
 }
 
@@ -109,8 +109,8 @@
 	position: absolute;
 	z-index: -1;
 	top: 17px;
-	left: 16.6667%;
-	right: 16.6667%;
+	left: 12.5%;
+	right: 12.5%;
 	height: 2px;
 	background: var(--background-modifier-border);
 	content: "";

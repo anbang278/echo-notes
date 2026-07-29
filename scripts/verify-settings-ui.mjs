@@ -91,7 +91,8 @@ const VIEWPORTS = [
 const THEMES = ["light", "dark"];
 const SCREENSHOT_STAGES = [
 	{ id: "transcription", section: "转写服务", providerSetting: "Provider" },
-	{ id: "analysis", section: "模型配置", providerSetting: "分析 Provider" }
+	{ id: "analysis", section: "模型配置", providerSetting: "分析 Provider" },
+	{ id: "memory", section: "模型配置", providerSetting: "记忆 Provider" }
 ];
 
 function assert(condition, message) {
@@ -544,6 +545,7 @@ async function verifyTabRelationships(page) {
 async function verifyTabs(page) {
 	const transcriptionTab = page.locator('[data-settings-stage="transcription"]');
 	const analysisTab = page.locator('[data-settings-stage="analysis"]');
+	const memoryTab = page.locator('[data-settings-stage="memory"]');
 	const agentTab = page.locator('[data-settings-stage="agent"]');
 
 	assert(await transcriptionTab.getAttribute("aria-selected") === "true", "首次打开应选中录音转写");
@@ -560,7 +562,9 @@ async function verifyTabs(page) {
 	await analysisTab.press("Home");
 	assert(await transcriptionTab.getAttribute("aria-selected") === "true", "顶层 Home 应切到录音转写");
 	await transcriptionTab.press("End");
-	assert(await analysisTab.getAttribute("aria-selected") === "true", "顶层 End 应切到 AI 分析");
+	assert(await memoryTab.getAttribute("aria-selected") === "true", "顶层 End 应切到记忆提取");
+	await memoryTab.press("ArrowLeft");
+	assert(await analysisTab.getAttribute("aria-selected") === "true", "记忆提取左方向键应切到 AI 分析");
 	await analysisTab.press("ArrowLeft");
 	assert(await transcriptionTab.getAttribute("aria-selected") === "true", "顶层左方向键应切换阶段");
 	await transcriptionTab.press("ArrowRight");
@@ -602,6 +606,36 @@ async function verifyTabs(page) {
 	await selectSettingOption(page, "转写模式", "offline");
 	await activePanel.getByText("Obsidian 核心插件录音机", { exact: true }).waitFor({ state: "visible" });
 	assert(await recordingTab.getAttribute("aria-selected") === "true", "离线模式重绘后应保留录音控制分类");
+
+	await memoryTab.click();
+	const memorySectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
+	assert(
+		(await memorySectionTabs.allTextContents()).join("|") === "记忆工作区|模型配置|编译策略",
+		"记忆提取二级分类不完整"
+	);
+	const memoryModelTab = memorySectionTabs.filter({ hasText: "模型配置" });
+	const memoryProcessingTab = memorySectionTabs.filter({ hasText: "编译策略" });
+	await memoryModelTab.click();
+	assert(
+		JSON.stringify(await getSettingOptionValues(page, "记忆 Provider")) ===
+			JSON.stringify([
+				"siliconflow",
+				"aliyun-bailian",
+				"deepseek",
+				"volcengine-agentplan",
+				"ollama",
+				"lm-studio",
+				"custom-openai-compatible"
+			]),
+		"记忆 Provider 的成员或顺序不正确"
+	);
+	await selectSettingOption(page, "记忆 Provider", "siliconflow");
+	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
+	await memoryProcessingTab.click();
+	await setSettingToggle(page, "长文本分块提取", false);
+	assert((await activePanel.getByText("记忆分块字符数", { exact: true }).count()) === 0, "关闭记忆分块后不应显示分块字符数");
+	await setSettingToggle(page, "长文本分块提取", true);
+	await activePanel.getByText("记忆分块字符数", { exact: true }).waitFor({ state: "visible" });
 
 	await analysisTab.click();
 	await setSettingToggle(page, "启用 AI 纪要分析", true);
@@ -783,6 +817,44 @@ async function reopenSettings(page) {
 		(await getActivePanel(page).getByRole("tab", { name: "模板管理", exact: true }).getAttribute("aria-selected")) === "true",
 		"同一设置页实例重新打开后应保留当前 AI 分类"
 	);
+}
+
+async function verifyMemoryInitialization(page) {
+	await page.evaluate(async (commandId) => {
+		await window.app.commands.executeCommandById(commandId);
+	}, `${PLUGIN_ID}:initialize-echo-memory`);
+	const modal = page.locator(".echo-notes-memory-initialization-modal");
+	await modal.waitFor({ state: "visible" });
+	await modal.locator(".setting-item").filter({ hasText: "称呼" }).locator("input").fill("测试用户");
+	await modal.locator(".setting-item").filter({ hasText: "当前角色" }).locator("input").fill("产品经理");
+	await modal.locator(".setting-item").filter({ hasText: "近期目标" }).locator("textarea").fill("验证 Echo Memory MVP");
+	await modal.getByRole("button", { name: "初始化", exact: true }).click();
+	await modal.waitFor({ state: "detached" });
+
+	const result = await page.evaluate(async () => {
+		const expectedPaths = [
+			"Echo Memory/00 首页.md",
+			"Echo Memory/04 User/SOUL.md",
+			"Echo Memory/04 User/01 使命与目标.md",
+			"Echo Memory/04 User/08 隐私与授权边界.md",
+			"Echo Memory/99 系统/echo-memory.json"
+		];
+		const missingPaths = expectedPaths.filter((path) => !window.app.vault.getAbstractFileByPath(path));
+		const manifestFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory.json");
+		const manifest = manifestFile ? JSON.parse(await window.app.vault.read(manifestFile)) : null;
+		return {
+			missingPaths,
+			manifest,
+			peopleFolderExists: Boolean(window.app.vault.getAbstractFileByPath("Echo Memory/03 实体/人物")),
+			organizationFolderExists: Boolean(window.app.vault.getAbstractFileByPath("Echo Memory/03 实体/组织")),
+			projectFolderExists: Boolean(window.app.vault.getAbstractFileByPath("Echo Memory/03 实体/项目"))
+		};
+	});
+	assert(result.missingPaths.length === 0, `Echo Memory 初始化缺少路径：${result.missingPaths.join(" | ")}`);
+	assert(result.peopleFolderExists && result.organizationFolderExists && result.projectFolderExists, "实体目录初始化不完整");
+	assert(result.manifest?.schemaVersion === 1, "Echo Memory 清单 Schema 版本不正确");
+	assert(result.manifest?.user?.displayName === "测试用户", "Echo Memory 初始化用户未写入清单");
+	assert(result.manifest?.paths?.candidatesDir === "Echo Memory/02 记忆候选", "Echo Memory 清单路径映射不正确");
 }
 
 async function setViewportMode(page, viewport, theme) {
@@ -1052,6 +1124,7 @@ try {
 	await page.locator('[data-settings-stage="transcription"]').click();
 	const screenshots = await captureViewports(page);
 	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
+	await verifyMemoryInitialization(page);
 	assert(pageErrors.length === 0, `设置页出现运行时错误：${pageErrors.join(" | ")}`);
 
 	const summary = {
@@ -1066,6 +1139,7 @@ try {
 			ariaRelationships: true,
 			renderStatePersistence: true,
 			templateGrouping: true,
+			memoryInitialization: true,
 			runtimeErrors: pageErrors.length
 		},
 		screenshots,

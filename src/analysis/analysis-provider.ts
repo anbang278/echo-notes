@@ -26,7 +26,7 @@ export interface ChunkedAnalysisProvider extends AnalysisProvider {
 	synthesizeChunks(input: AnalysisInput, chunkResults: AnalysisResult[]): Promise<AnalysisResult>;
 }
 
-export type AnalysisErrorCode = "missing_api_key" | "api_error" | "invalid_response" | "network_error";
+export type AnalysisErrorCode = "missing_api_key" | "api_error" | "invalid_response" | "network_error" | "timeout";
 
 export class AnalysisError extends Error {
 	code: AnalysisErrorCode;

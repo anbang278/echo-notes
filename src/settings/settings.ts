@@ -61,6 +61,8 @@ export type InsertStyle = "linkOnly" | "callout";
 
 export type CopyLanguage = "zh" | "en";
 
+export type MemoryMode = "candidates-only" | "compile-profiles";
+
 export type AgentPlanSpeakerLabelStyle = "speaker" | "speaker-with-time";
 
 export type EchoNotesHotkeySetting = Hotkey | null;
@@ -165,6 +167,18 @@ export interface EchoNotesSettings {
 	redactTranscriptBeforeAnalysis: boolean;
 	analysisLongTextEnabled: boolean;
 	analysisChunkCharacters: number;
+	memoryEnabled: boolean;
+	memoryInitialized: boolean;
+	memoryRootFolder: string;
+	memoryPathLanguage: CopyLanguage;
+	memoryMode: MemoryMode;
+	memoryProvider: AnalysisProviderId;
+	memoryApiKey?: string;
+	memoryBaseUrl: string;
+	memoryModel: string;
+	memoryLongTextEnabled: boolean;
+	memoryChunkCharacters: number;
+	memoryMinimumConfidence: number;
 	defaultAnalysisTemplateId: AnalysisTemplateId;
 	analysisTemplates: AnalysisTemplateConfig[];
 	skipExistingTranscript: boolean;
@@ -919,6 +933,17 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	redactTranscriptBeforeAnalysis: false,
 	analysisLongTextEnabled: true,
 	analysisChunkCharacters: 24000,
+	memoryEnabled: false,
+	memoryInitialized: false,
+	memoryRootFolder: "Echo Memory",
+	memoryPathLanguage: "zh",
+	memoryMode: "candidates-only",
+	memoryProvider: "aliyun-bailian",
+	memoryBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	memoryModel: "deepseek-v4-pro",
+	memoryLongTextEnabled: true,
+	memoryChunkCharacters: 24000,
+	memoryMinimumConfidence: 0.75,
 	defaultAnalysisTemplateId: "work-minutes",
 	analysisTemplates: createDefaultAnalysisTemplates(),
 	skipExistingTranscript: true,
@@ -1192,6 +1217,42 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		4000,
 		100000
 	);
+	settings.memoryEnabled =
+		typeof raw.memoryEnabled === "boolean" ? raw.memoryEnabled : DEFAULT_SETTINGS.memoryEnabled;
+	settings.memoryInitialized =
+		typeof raw.memoryInitialized === "boolean" ? raw.memoryInitialized : DEFAULT_SETTINGS.memoryInitialized;
+	settings.memoryRootFolder = normalizeMemoryRootFolder(raw.memoryRootFolder);
+	settings.memoryPathLanguage = raw.memoryPathLanguage === "en" ? "en" : "zh";
+	settings.memoryMode = raw.memoryMode === "compile-profiles" ? "compile-profiles" : "candidates-only";
+	const rawMemoryProvider = typeof raw.memoryProvider === "string" ? raw.memoryProvider : "";
+	settings.memoryProvider = isAnalysisProviderId(rawMemoryProvider)
+		? rawMemoryProvider
+		: DEFAULT_SETTINGS.memoryProvider;
+	const memoryDefaults = ANALYSIS_PROVIDER_DEFAULTS[settings.memoryProvider];
+	settings.memoryBaseUrl =
+		settings.memoryProvider === "volcengine-agentplan"
+			? AGENTPLAN_ANALYSIS_BASE_URL
+			: typeof raw.memoryBaseUrl === "string" && raw.memoryBaseUrl.trim()
+				? raw.memoryBaseUrl.trim()
+				: memoryDefaults.analysisBaseUrl;
+	settings.memoryModel =
+		typeof raw.memoryModel === "string" && raw.memoryModel.trim()
+			? raw.memoryModel.trim()
+			: memoryDefaults.analysisModel;
+	settings.memoryLongTextEnabled =
+		typeof raw.memoryLongTextEnabled === "boolean"
+			? raw.memoryLongTextEnabled
+			: DEFAULT_SETTINGS.memoryLongTextEnabled;
+	settings.memoryChunkCharacters = normalizePositiveInteger(
+		raw.memoryChunkCharacters,
+		DEFAULT_SETTINGS.memoryChunkCharacters,
+		4000,
+		100000
+	);
+	settings.memoryMinimumConfidence = normalizeConfidence(
+		raw.memoryMinimumConfidence,
+		DEFAULT_SETTINGS.memoryMinimumConfidence
+	);
 	settings.confirmBeforeTranscription =
 		typeof raw.confirmBeforeTranscription === "boolean" ? raw.confirmBeforeTranscription : DEFAULT_SETTINGS.confirmBeforeTranscription;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
@@ -1218,8 +1279,28 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	delete mutableSettings.autoAnalysisTemplate;
 	delete mutableSettings.promptForAnalysisAfterTranscription;
 	delete mutableSettings.promptForAnalysisTemplateOnTranscription;
+	delete mutableSettings.memoryApiKey;
 
 	return settings;
+}
+
+function normalizeMemoryRootFolder(value: unknown): string {
+	if (typeof value !== "string") {
+		return DEFAULT_SETTINGS.memoryRootFolder;
+	}
+
+	const normalized = value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	if (!normalized || normalized.split("/").some((part) => part === "." || part === "..")) {
+		return DEFAULT_SETTINGS.memoryRootFolder;
+	}
+	return normalized;
+}
+
+function normalizeConfidence(value: unknown, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		return fallback;
+	}
+	return Math.min(1, Math.max(0.75, value));
 }
 
 export function getSelectedTranscriptionConfig(settings: EchoNotesSettings): TranscriptionConfig {

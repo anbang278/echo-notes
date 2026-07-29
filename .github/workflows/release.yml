@@ -5,6 +5,10 @@ on:
     tags:
       - "*.*.*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write
@@ -38,14 +42,43 @@ jobs:
       - name: Verify release version
         run: node scripts/verify-release-version.mjs
 
-      - name: Create GitHub release
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css \
-            --verify-tag \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+          set -euo pipefail
+
+          tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha)"
+          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "Tag $GITHUB_REF_NAME resolves to $tag_commit, expected $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            release_body="$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)"
+            if [[ "$release_body" != *"Release commit: $GITHUB_SHA"* ]]; then
+              echo "Release $GITHUB_REF_NAME already exists without the expected commit marker." >&2
+              exit 1
+            fi
+
+            for asset in main.js manifest.json styles.css; do
+              local_digest="sha256:$(sha256sum "$asset" | cut -d' ' -f1)"
+              remote_digest="$(gh release view "$GITHUB_REF_NAME" --json assets \
+                --jq ".assets[] | select(.name == \"$asset\") | .digest" | head -n 1)"
+              if [[ "$remote_digest" == "$local_digest" ]]; then
+                echo "$asset already matches $local_digest; skipping upload."
+                continue
+              fi
+              gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
+            done
+          else
+            gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css \
+              --verify-tag \
+              --target "$GITHUB_SHA" \
+              --title "$GITHUB_REF_NAME" \
+              --notes "Release commit: $GITHUB_SHA" \
+              --generate-notes
+          fi
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@v2

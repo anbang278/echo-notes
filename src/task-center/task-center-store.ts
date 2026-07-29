@@ -1,9 +1,10 @@
-export type EchoNotesTaskKind = "transcription" | "analysis";
+export type EchoNotesTaskKind = "transcription" | "analysis" | "memory";
 export type EchoNotesTaskStatus = "running" | "success" | "failed" | "skipped";
 
 export interface EchoNotesTaskRetry {
 	label: string;
 	run: () => Promise<void> | void;
+	allowWhileRunning?: boolean;
 }
 
 export interface EchoNotesTask {
@@ -43,6 +44,7 @@ type TaskCenterListener = () => void;
 export class TaskCenterStore {
 	private tasks = new Map<string, EchoNotesTask>();
 	private listeners = new Set<TaskCenterListener>();
+	private retryingTasks = new Set<string>();
 
 	upsertTask(input: EchoNotesTaskInput): EchoNotesTask {
 		const now = Date.now();
@@ -51,6 +53,18 @@ export class TaskCenterStore {
 			...existing,
 			...input,
 			createdAt: existing?.createdAt ?? input.createdAt ?? now,
+			updatedAt: input.updatedAt ?? now
+		};
+		this.tasks.set(task.id, task);
+		this.notify();
+		return task;
+	}
+
+	restartTask(input: EchoNotesTaskInput): EchoNotesTask {
+		const now = Date.now();
+		const task: EchoNotesTask = {
+			...input,
+			createdAt: input.createdAt ?? now,
 			updatedAt: input.updatedAt ?? now
 		};
 		this.tasks.set(task.id, task);
@@ -87,12 +101,21 @@ export class TaskCenterStore {
 
 	async retryTask(id: string): Promise<boolean> {
 		const task = this.tasks.get(id);
-		if (!task?.retry) {
+		if (
+			!task?.retry ||
+			(task.status === "running" && !task.retry.allowWhileRunning) ||
+			this.retryingTasks.has(id)
+		) {
 			return false;
 		}
 
-		await task.retry.run();
-		return true;
+		this.retryingTasks.add(id);
+		try {
+			await task.retry.run();
+			return true;
+		} finally {
+			this.retryingTasks.delete(id);
+		}
 	}
 
 	clearFinishedTasks(): void {

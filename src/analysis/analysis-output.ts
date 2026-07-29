@@ -20,6 +20,11 @@ export interface RenderTranscriptAnalysisBlockInput {
 	copyLanguage: CopyLanguage;
 }
 
+export interface ExtractedTranscriptAnalysis {
+	templateId: AnalysisTemplateId;
+	markdown: string;
+}
+
 export function extractTranscriptText(content: string): string {
 	const contentWithoutManagedBlocks = content
 		.replace(/^---\n[\s\S]*?\n---\n?/, "")
@@ -28,6 +33,30 @@ export function extractTranscriptText(content: string): string {
 		.trim();
 
 	return extractContentAfterTranscriptHeading(contentWithoutManagedBlocks) ?? contentWithoutManagedBlocks;
+}
+
+export function extractTranscriptAnalyses(
+	content: string,
+	templateIds?: readonly AnalysisTemplateId[]
+): ExtractedTranscriptAnalysis[] {
+	const sectionStart = content.indexOf(TRANSCRIPT_ANALYSIS_START);
+	const sectionEnd = content.indexOf(TRANSCRIPT_ANALYSIS_END);
+	if (sectionStart === -1 || sectionEnd <= sectionStart) {
+		return [];
+	}
+
+	const allowedIds = templateIds ? new Set(templateIds) : null;
+	const section = content.slice(sectionStart, sectionEnd + TRANSCRIPT_ANALYSIS_END.length);
+	const itemPattern = /<!-- echo-notes-analysis-item:start\s+([^\s]+)\s*-->([\s\S]*?)<!-- echo-notes-analysis-item:end\s+\1\s*-->/g;
+	const analyses: ExtractedTranscriptAnalysis[] = [];
+	for (const match of section.matchAll(itemPattern)) {
+		const templateId = match[1];
+		if (allowedIds && !allowedIds.has(templateId)) {
+			continue;
+		}
+		analyses.push({ templateId, markdown: match[2].trim() });
+	}
+	return analyses;
 }
 
 export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlockInput): string {

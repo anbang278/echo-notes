@@ -1,6 +1,7 @@
 import { requestUrl } from "obsidian";
 import { buildAnalysisMessages } from "./analysis-templates";
 import { AnalysisError, type AnalysisInput, type AnalysisProvider, type AnalysisResult } from "./analysis-provider";
+import { createAnalysisDeadline, waitForAnalysisResponse } from "./analysis-timeout";
 import { createChunkAnalysisInput, createSynthesisAnalysisInput } from "./analysis-stage-prompts";
 import { ANALYSIS_PROVIDER_LABELS, type EchoNotesSettings } from "../settings/settings";
 import { sanitizeSensitiveText } from "../security/redaction";
@@ -19,12 +20,14 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 
 	private settings: EchoNotesSettings;
 	private apiKey: string;
+	private deadlineAt: number;
 
 	constructor(settings: EchoNotesSettings, apiKey: string) {
 		this.settings = settings;
 		this.apiKey = apiKey;
 		this.id = settings.analysisProvider;
 		this.name = ANALYSIS_PROVIDER_LABELS[settings.analysisProvider] ?? settings.analysisProvider;
+		this.deadlineAt = createAnalysisDeadline();
 	}
 
 	async analyze(input: AnalysisInput): Promise<AnalysisResult> {
@@ -67,16 +70,19 @@ export class OpenAICompatibleAnalysisProvider implements AnalysisProvider {
 		};
 
 		try {
-			const response = await requestUrl({
-				url: `${this.settings.analysisBaseUrl.replace(/\/+$/, "")}/chat/completions`,
-				method: "POST",
-				throw: false,
-				headers: {
-					Authorization: `Bearer ${apiKey}`,
-					"Content-Type": "application/json"
-				},
-				body: JSON.stringify(body)
-			});
+			const response = await waitForAnalysisResponse(
+				() => requestUrl({
+					url: `${this.settings.analysisBaseUrl.replace(/\/+$/, "")}/chat/completions`,
+					method: "POST",
+					throw: false,
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+						"Content-Type": "application/json"
+					},
+					body: JSON.stringify(body)
+				}),
+				this.deadlineAt
+			);
 
 			const traceId = readTraceId(response.headers);
 			if (response.status < 200 || response.status >= 300) {

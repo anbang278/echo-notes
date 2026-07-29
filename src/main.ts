@@ -40,6 +40,8 @@ import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
+import { MemoryInitializationModal } from "./memory/memory-initialization-modal";
+import { MemoryService } from "./memory/memory-service";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
@@ -71,6 +73,7 @@ import { getSanitizedErrorMessage, sanitizeLogValue } from "./security/redaction
 import { redactAnalysisInputText } from "./security/content-redaction";
 import {
 	getAnalysisApiKeySecretId,
+	getMemoryApiKeySecretId,
 	getRemovedAnalysisApiKeySecretId,
 	getTranscriptionApiKeySecretId,
 	migrateLegacySecret,
@@ -105,7 +108,11 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"start-realtime-transcription",
 	"stop-realtime-transcription",
 	"open-active-realtime-transcript",
-	"analyze-current-transcript-with-template"
+	"analyze-current-transcript-with-template",
+	"initialize-echo-memory",
+	"extract-memory-from-current-transcript",
+	"open-echo-memory-home",
+	"rebuild-memory-profiles"
 ];
 
 interface ProcessAudioResult {
@@ -164,6 +171,11 @@ interface ActiveRealtimeRecording {
 	taskId: string;
 }
 
+interface ActiveMemoryTask {
+	controller: AbortController;
+	promise: Promise<void>;
+}
+
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = normalizeEchoNotesSettings(undefined);
 
@@ -171,10 +183,12 @@ export default class EchoNotesPlugin extends Plugin {
 	private transcriptService: TranscriptService;
 	private linkService: LinkService;
 	private analysisService: AnalysisService;
+	private memoryService: MemoryService;
 	private taskCenter = new TaskCenterStore();
 	private editorService = new EditorService();
 	private processingAudio = new Map<string, Promise<ProcessAudioResult | null>>();
 	private processingAnalyses = new Set<string>();
+	private activeMemoryTasks = new Map<string, ActiveMemoryTask>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
 	private processedMarkdownAudioLinks = new Set<string>();
@@ -226,6 +240,10 @@ export default class EchoNotesPlugin extends Plugin {
 			this.activeRealtimeRecording.agentPlanSession.abort("Echo Notes 插件已停用。");
 			void this.stopRealtimeTranscription();
 		}
+		for (const task of this.activeMemoryTasks.values()) {
+			task.controller.abort(new Error("Echo Notes 插件已停用。"));
+		}
+		this.activeMemoryTasks.clear();
 	}
 
 	async loadSettings(): Promise<void> {
@@ -246,6 +264,7 @@ export default class EchoNotesPlugin extends Plugin {
 		this.settings = normalizeEchoNotesSettings(this.settings);
 		delete this.settings.apiKey;
 		delete this.settings.analysisApiKey;
+		delete this.settings.memoryApiKey;
 		await this.saveData(this.settings);
 		this.refreshServices();
 		this.updateRealtimeUi();
@@ -440,11 +459,93 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	getMemoryApiKey(): string {
+		return this.app.secretStorage.getSecret(getMemoryApiKeySecretId(this.settings.memoryProvider)) ?? "";
+	}
+
+	async saveMemoryApiKey(apiKey: string): Promise<void> {
+		try {
+			this.app.secretStorage.setSecret(getMemoryApiKeySecretId(this.settings.memoryProvider), apiKey);
+		} catch (error) {
+			this.log("记忆 API Key 保存失败", error);
+			throw new Error(`无法写入 Obsidian SecretStorage：${getSanitizedErrorMessage(error)}`, { cause: error });
+		}
+	}
+
+	openMemoryInitialization(onInitialized?: () => void): void {
+		if (this.settings.memoryInitialized) {
+			new Notice("Echo Memory 已初始化。");
+			void this.openMemoryHome();
+			return;
+		}
+		new MemoryInitializationModal(this.app, async (profile) => {
+			const homeFile = await this.memoryService.initialize(this.settings, profile);
+			this.settings.memoryInitialized = true;
+			this.settings.memoryEnabled = true;
+			this.settings.memoryPathLanguage = this.settings.copyLanguage;
+			await this.saveSettings();
+			onInitialized?.();
+			await this.app.workspace.getLeaf(false).openFile(homeFile);
+			new Notice("Echo Memory 已初始化并启用。");
+		}).open();
+	}
+
+	async openMemoryHome(): Promise<void> {
+		try {
+			const homeFile = await this.memoryService.getHomeFile(this.settings);
+			await this.app.workspace.getLeaf(false).openFile(homeFile);
+		} catch (error) {
+			new Notice(getErrorMessage(error));
+		}
+	}
+
+	async rebuildMemoryProfiles(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const taskId = createTaskId("memory", this.settings.memoryRootFolder, "rebuild");
+		this.taskCenter.upsertTask({
+			id: taskId,
+			kind: "memory",
+			title: "重建 Echo Memory 画像",
+			status: "running",
+			stage: "正在读取记忆候选包",
+			targetPath: this.settings.memoryRootFolder,
+			provider: "本地编译器",
+			model: "候选包 Schema v1",
+			completedAt: undefined,
+			error: undefined,
+			retry: { label: "重试重建", run: () => this.rebuildMemoryProfiles() }
+		});
+		try {
+			const count = await this.memoryService.compileProfiles(this.settings);
+			const homeFile = await this.memoryService.getHomeFile(this.settings);
+			this.taskCenter.updateTask(taskId, {
+				status: "success",
+				stage: `已重建 ${count} 份画像`,
+				outputPath: homeFile.path,
+				completedAt: Date.now()
+			});
+			new Notice(`Echo Memory 已从候选包重建 ${count} 份画像。`);
+		} catch (error) {
+			const message = getErrorMessage(error);
+			this.taskCenter.updateTask(taskId, {
+				status: "failed",
+				stage: "画像重建失败",
+				error: message,
+				completedAt: Date.now()
+			});
+			new Notice(`Echo Memory 画像重建失败：${message}`);
+		}
+	}
+
 	refreshServices(): void {
 		this.audioFileService = new AudioFileService(this.app);
 		this.transcriptService = new TranscriptService(this.app, this.settings);
 		this.linkService = new LinkService(this.app, this.settings);
 		this.analysisService = new AnalysisService(this.app);
+		this.memoryService = new MemoryService(this.app);
 	}
 
 	private registerCommands(): void {
@@ -515,6 +616,36 @@ export default class EchoNotesPlugin extends Plugin {
 			name: "Analyze current transcript with selected template",
 			callback: () => {
 				void this.handleAnalyzeCurrentTranscriptWithTemplate();
+			}
+		});
+
+		this.addCommand({
+			id: "initialize-echo-memory",
+			name: "Initialize Echo Memory",
+			callback: () => this.openMemoryInitialization()
+		});
+
+		this.addCommand({
+			id: "extract-memory-from-current-transcript",
+			name: "Extract memory from current transcript",
+			callback: () => {
+				void this.handleExtractMemoryFromCurrentTranscript();
+			}
+		});
+
+		this.addCommand({
+			id: "open-echo-memory-home",
+			name: "Open Echo Memory home",
+			callback: () => {
+				void this.openMemoryHome();
+			}
+		});
+
+		this.addCommand({
+			id: "rebuild-memory-profiles",
+			name: "Rebuild memory profiles from candidates",
+			callback: () => {
+				void this.rebuildMemoryProfiles();
 			}
 		});
 
@@ -798,8 +929,21 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		new AnalysisTemplatePickerModal(this.app, templates, (template) => {
-			this.startAnalysisTask(transcriptFile, template);
+			this.startAnalysisTasks(transcriptFile, [template]);
 		}).open();
+	}
+
+	private async handleExtractMemoryFromCurrentTranscript(): Promise<void> {
+		const transcriptFile = this.app.workspace.getActiveFile();
+		if (!transcriptFile || !this.isTranscriptMarkdownFile(transcriptFile)) {
+			new Notice("请先打开一个 Echo Notes 转写稿。");
+			return;
+		}
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		void this.startMemoryTask(transcriptFile, undefined, true);
 	}
 
 	private async processAudioToTranscript(
@@ -1265,14 +1409,30 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private startAnalysisTasks(transcriptFile: TFile, templates: AnalysisTemplateConfig[]): void {
-		for (const template of templates) {
-			this.startAnalysisTask(transcriptFile, template);
+		if (templates.length === 0) {
+			return;
+		}
+		void this.runAnalysisBatch(transcriptFile, templates);
+	}
+
+	private async runAnalysisBatch(transcriptFile: TFile, templates: AnalysisTemplateConfig[]): Promise<void> {
+		const results = await Promise.all(
+			templates.map(async (template) => ({ template, success: await this.startAnalysisTask(transcriptFile, template) }))
+		);
+		const successfulTemplateIds = results
+			.filter((result) => result.success)
+			.map((result) => result.template.id);
+		if (successfulTemplateIds.length > 0) {
+			void this.startMemoryTask(transcriptFile, successfulTemplateIds, false);
 		}
 	}
 
-	private startAnalysisTask(transcriptFile: TFile, template: AnalysisTemplateConfig | null | undefined): void {
+	private async startAnalysisTask(
+		transcriptFile: TFile,
+		template: AnalysisTemplateConfig | null | undefined
+	): Promise<boolean> {
 		if (!template || !this.settings.analysisEnabled) {
-			return;
+			return false;
 		}
 
 		const templateTitle = template.name;
@@ -1280,7 +1440,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const analysisTaskId = createTaskId("analysis", transcriptFile.path, template.id);
 		if (this.processingAnalyses.has(processingKey)) {
 			new Notice(`正在后台生成 ${templateTitle}：${transcriptFile.name}`);
-			return;
+			return false;
 		}
 
 		this.taskCenter.upsertTask({
@@ -1298,12 +1458,12 @@ export default class EchoNotesPlugin extends Plugin {
 			completedAt: undefined,
 			retry: {
 				label: "重试分析",
-				run: () => this.startAnalysisTask(transcriptFile, template)
+				run: () => this.startAnalysisTasks(transcriptFile, [template])
 			}
 		});
 		this.processingAnalyses.add(processingKey);
 		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
-		void this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId);
+		return this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId);
 	}
 
 	private async runAnalysisTask(
@@ -1311,7 +1471,7 @@ export default class EchoNotesPlugin extends Plugin {
 		template: AnalysisTemplateConfig,
 		processingKey: string,
 		analysisTaskId: string
-	): Promise<void> {
+	): Promise<boolean> {
 		if (!this.settings.analysisEnabled) {
 			this.taskCenter.updateTask(analysisTaskId, {
 				status: "skipped",
@@ -1320,7 +1480,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
 			this.processingAnalyses.delete(processingKey);
-			return;
+			return false;
 		}
 
 		const templateTitle = template.name;
@@ -1350,7 +1510,7 @@ export default class EchoNotesPlugin extends Plugin {
 					completedAt: Date.now()
 				});
 				new Notice("转写稿内容为空，已跳过 AI 纪要分析。");
-				return;
+				return false;
 			}
 
 			const diagnostics = diagnoseAnalysisProviderSettings(
@@ -1424,6 +1584,7 @@ export default class EchoNotesPlugin extends Plugin {
 				completedAt: Date.now()
 			});
 			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
+			return true;
 		} catch (error) {
 			const message = getErrorMessage(error);
 			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
@@ -1443,8 +1604,148 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			new Notice(`${templateTitle} 生成失败：${message}`);
 			this.log("AI 纪要分析失败", error);
+			return false;
 		} finally {
 			this.processingAnalyses.delete(processingKey);
+		}
+	}
+
+	private async startMemoryTask(
+		transcriptFile: TFile,
+		analysisTemplateIds: readonly string[] | undefined,
+		manual: boolean,
+		retryRequested = false
+	): Promise<void> {
+		if (!this.settings.memoryInitialized || (!manual && !this.settings.memoryEnabled)) {
+			return;
+		}
+		const processingKey = transcriptFile.path;
+		const taskId = createTaskId("memory", transcriptFile.path);
+		const activeTask = this.activeMemoryTasks.get(processingKey);
+		if (activeTask) {
+			if (!retryRequested) {
+				new Notice(`正在后台提取记忆：${transcriptFile.name}`);
+				return;
+			}
+			activeTask.controller.abort(new Error("当前记忆提取已由用户重试。"));
+			await activeTask.promise;
+		}
+
+		if (retryRequested) {
+			try {
+				await this.memoryService.appendExtractionRetryLog(this.settings, transcriptFile.path);
+			} catch (error) {
+				this.log("写入 Echo Memory 重试日志失败", error);
+			}
+		}
+
+		const controller = new AbortController();
+		const task = {
+			id: taskId,
+			kind: "memory",
+			title: `记忆提取：${transcriptFile.name}`,
+			status: "running",
+			stage: "正在准备转写正文与成功纪要",
+			provider: this.settings.memoryProvider,
+			model: this.settings.memoryModel,
+			targetPath: transcriptFile.path,
+			sourcePath: transcriptFile.path,
+			error: undefined,
+			traceId: undefined,
+			completedAt: undefined,
+			retry: {
+				label: "重试记忆提取",
+				allowWhileRunning: true,
+				run: () => this.retryMemoryTask(transcriptFile.path, analysisTemplateIds)
+			}
+		} as const;
+		this.taskCenter.restartTask(task);
+		new Notice(`${retryRequested ? "重新开始" : "后台提取"}记忆：${transcriptFile.name}`);
+		const activeMemoryTask: ActiveMemoryTask = {
+			controller,
+			promise: Promise.resolve()
+		};
+		this.activeMemoryTasks.set(processingKey, activeMemoryTask);
+		activeMemoryTask.promise = this.runMemoryTask(
+			transcriptFile,
+			analysisTemplateIds,
+			processingKey,
+			taskId,
+			controller
+		);
+	}
+
+	private async retryMemoryTask(
+		transcriptPath: string,
+		analysisTemplateIds: readonly string[] | undefined
+	): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(transcriptPath);
+		if (!(file instanceof TFile) || !this.isTranscriptMarkdownFile(file)) {
+			new Notice(`无法重试记忆提取，转写稿不存在：${transcriptPath}`);
+			return;
+		}
+		await this.startMemoryTask(file, analysisTemplateIds, true, true);
+	}
+
+	private async runMemoryTask(
+		transcriptFile: TFile,
+		analysisTemplateIds: readonly string[] | undefined,
+		processingKey: string,
+		taskId: string,
+		controller: AbortController
+	): Promise<void> {
+		try {
+			const result = await this.memoryService.extractFromTranscript(this.settings, transcriptFile, {
+				apiKey: this.getMemoryApiKey(),
+				analysisTemplateIds,
+				signal: controller.signal,
+				onProgress: (stage) => {
+					if (this.activeMemoryTasks.get(processingKey)?.controller === controller) {
+						this.taskCenter.updateTask(taskId, { stage });
+					}
+				}
+			});
+			if (this.activeMemoryTasks.get(processingKey)?.controller !== controller) {
+				return;
+			}
+			this.taskCenter.updateTask(taskId, {
+				status: result.skipped ? "skipped" : "success",
+				stage: result.skipped
+					? "输入与已有候选包一致，已跳过模型调用"
+					: `${result.assertionCount} 条候选记忆已写入${result.compiled ? "并编译画像" : ""}`,
+				provider: result.provider,
+				model: result.model,
+				outputPath: result.candidateFilePath,
+				traceId: result.traceIds.join(", ") || undefined,
+				completedAt: Date.now()
+			});
+			new Notice(
+				result.skipped
+					? `记忆候选已存在：${transcriptFile.name}`
+					: `已沉淀 ${result.assertionCount} 条候选记忆：${transcriptFile.name}`
+			);
+		} catch (error) {
+			if (controller.signal.aborted || this.activeMemoryTasks.get(processingKey)?.controller !== controller) {
+				return;
+			}
+			const message = getErrorMessage(error);
+			this.taskCenter.updateTask(taskId, {
+				status: "failed",
+				stage: "记忆提取失败",
+				error: message,
+				completedAt: Date.now()
+			});
+			try {
+				await this.memoryService.appendExtractionFailureLog(this.settings, transcriptFile.path, message);
+			} catch (logError) {
+				this.log("写入 Echo Memory 失败日志失败", logError);
+			}
+			new Notice(`记忆提取失败：${message}`);
+			this.log("Echo Memory 记忆提取失败", error);
+		} finally {
+			if (this.activeMemoryTasks.get(processingKey)?.controller === controller) {
+				this.activeMemoryTasks.delete(processingKey);
+			}
 		}
 	}
 

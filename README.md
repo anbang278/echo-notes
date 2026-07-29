@@ -8,9 +8,9 @@ Echo Notes is a personal action capture and AI memory-building plugin for Obsidi
 
 The goal is not just to turn speech into text. Echo Notes is designed to help your actions, thoughts, and decisions continuously enter your personal knowledge system, so they can eventually become long-term context for a Personal Agent. Every recording captures a real moment of action; every transcript becomes a memory that AI can understand; every structured analysis adds experience to a future AI version of yourself.
 
-The workflow is simple: insert or link an audio file in a Markdown note, run a transcription command, and Echo Notes creates a `.transcript.md` file and inserts a "view transcript" link back into the source note. If AI analysis is enabled, Echo Notes can choose an analysis template from nearby keywords and write structured analysis back into the matching transcript.
+The workflow is simple: insert or link an audio file in a Markdown note, run a transcription command, and Echo Notes creates a `.transcript.md` file and inserts a "view transcript" link back into the source note. If AI analysis is enabled, Echo Notes can choose an analysis template from nearby keywords and write structured analysis back into the matching transcript. The experimental Echo Memory workflow can then turn a transcript and its successful analyses into traceable meeting pages, candidate memories, and managed long-term profiles.
 
-> Privacy notice: Echo Notes makes network requests only when you start real-time transcription, transcribe an existing file, or trigger AI analysis. Real-time mode continuously sends microphone PCM to Volcengine AgentPlan. Offline mode sends the selected audio to the configured offline provider. AI analysis sends final transcript text to the configured analysis provider. Do not process content that should not be sent to external services.
+> Privacy notice: Echo Notes makes network requests only when you start real-time transcription, transcribe an existing file, trigger AI analysis, or enable automatic Echo Memory extraction. Real-time mode continuously sends microphone PCM to Volcengine AgentPlan. Offline mode sends the selected audio to the configured offline provider. AI analysis sends final transcript text to the configured analysis provider. Memory extraction sends transcript text and the successful analyses selected for that run to a separately configured memory provider. Do not process content that should not be sent to external services.
 
 ## Why Echo Notes
 
@@ -68,7 +68,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Run a local transcription-provider configuration check for API key, Base URL, model, HTTP risk, endpoint shape, and capability-limit warnings without uploading audio.
 - Standardize transcription provider errors and redact API keys, authorization headers, Base64 audio payloads, and overlong responses before showing or writing failure messages.
 - Use a shared AudioChunkPipeline core for long-audio preparation, chunk progress events, segment transcription, text merging, trace id aggregation, raw segment collection, and releasing completed chunk audio buffers.
-- Open an in-memory Task Center from the ribbon or command palette to inspect transcription and AI analysis status, failures, durations, providers, models, outputs, and retry failed tasks.
+- Open an in-memory Task Center from the ribbon or command palette to inspect transcription, AI analysis, and memory extraction status, failures, durations, providers, models, and outputs. Memory extraction can be retried while running or after failure.
 - Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
 - Markdown-link automation skips source notes marked with Echo Notes privacy frontmatter or private tags.
 - In offline mode, enable or disable Obsidian's core Audio recorder and save hotkeys for its commands. Real-time mode does not intercept or depend on the core recorder's private state.
@@ -82,6 +82,10 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Configure each analysis template with a role group, name, version, recognition keywords, system prompt, and template task.
 - Record Dataview-friendly AI analysis metadata for each generated template result, including template id, template name, template version, provider, model, generated time, and trace id when available.
 - Track AI analysis lifecycle in transcript frontmatter with `analysis_status`, scheduled template ids, pending/done/failed template ids, provider, model, timestamps, and the latest sanitized analysis error.
+- Optionally initialize an Echo Memory workspace and extract evidence-backed candidate memories from a transcript plus the successful analyses included in that run.
+- Keep memory Provider, API key, Base URL, model, and long-text settings isolated from transcription and AI analysis configuration. Memory extraction is disabled by default.
+- Choose between meeting pages plus candidate packages, or automatic compilation into User, person, organization, and project profiles. Candidate packages remain the source of truth, while profiles update only Echo Memory managed blocks.
+- Rebuild managed profiles from candidate packages without scanning the whole vault or overwriting user-authored content.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
 - Markdown audio-link automation deduplicates processed links in the current plugin session using source note, normalized audio path, raw link text, and occurrence order.
@@ -110,7 +114,7 @@ AgentPlan officially limits its text-generation and embedding benefits to AI-too
 
 ## Network and Data Use
 
-Echo Notes makes network requests only when a transcription or AI analysis is triggered.
+Echo Notes makes network requests only when transcription, AI analysis, or Echo Memory extraction is triggered.
 
 - SiliconFlow default endpoint: `https://api.siliconflow.cn`
 - Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
@@ -121,12 +125,13 @@ Echo Notes makes network requests only when a transcription or AI analysis is tr
 - LM Studio transcription default endpoint: `http://localhost:1234/v1`
 - AI analysis default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
 - Other AI analysis endpoints use the Base URL configured for the selected analysis provider.
+- Echo Memory uses the Base URL configured for its separate memory provider and calls the OpenAI-compatible `/chat/completions` endpoint.
 
 Offline transcription sends the selected audio to the configured offline provider. With MOSI, Echo Notes uploads multipart audio to `api.mosi.cn` through a synchronous non-streaming request. Diarization is optional: enabled mode requests speaker segments and timestamps, while disabled mode requests plain text only. No temporary segment files are created in the vault.
 
 Real-time mode does not create or convert a complete WAV first. Echo Notes runs two local paths in parallel: `MediaRecorder` appends WebM Opus chunks to the vault about once per second, while Web Audio continuously downmixes and resamples the microphone to 16 kHz, 16-bit, mono PCM and sends 200 ms packets over one authenticated optimized bidirectional AgentPlan WebSocket. The recording, transcript, audio embed, and transcript link are created as soon as the session starts. Confirmed second-pass utterances are written progressively; unconfirmed text stays in a temporary region. If AgentPlan disconnects, local recording continues and already persisted audio and text remain available.
 
-Real-time AgentPlan and diarization-enabled MOSI speaker IDs distinguish voices but do not identify real names. MOSI speaker IDs remain local to each independently submitted segment. AI analysis reads only completed final transcript text; when AgentPlan analysis is selected, that text is sent to its plan-specific Chat API and consumes plan quota. Transcription and analysis API keys remain isolated by provider and purpose in Obsidian `SecretStorage`. Keys are not written to plugin settings, transcripts, or logs. Recordings, transcripts, and AI analysis output remain in the Obsidian vault.
+Real-time AgentPlan and diarization-enabled MOSI speaker IDs distinguish voices but do not identify real names. MOSI speaker IDs remain local to each independently submitted segment. AI analysis reads only completed final transcript text; when AgentPlan analysis is selected, that text is sent to its plan-specific Chat API and consumes plan quota. Echo Memory sends the transcript body and successful analyses included in the run to the memory provider. Transcription, analysis, and memory API keys remain isolated by provider and purpose in Obsidian `SecretStorage`. Keys are not written to plugin settings, transcripts, candidate packages, or logs. Recordings, transcripts, AI analysis output, and Echo Memory files remain in the Obsidian vault.
 
 If "Confirm before manual transcription upload" is enabled in settings, Echo Notes shows a confirmation dialog before manual transcription uploads. The dialog lists the provider, Base URL, model, file size, and HTTP risk warnings. Automation skips uploads while this confirmation mode is enabled so audio is not sent in the background without user confirmation.
 
@@ -255,6 +260,41 @@ The v2 built-in prompts use role-specific Markdown structures while sharing a ne
 
 Custom templates support a role group, name, recognition keywords, system prompt, template task, and enabled switch. Enabled templates participate in keyword matching; disabled templates keep their configuration but are not used automatically. During migration, an untouched v1 built-in preset is upgraded to v2 while preserving its enabled state. Any built-in template whose editable content was changed remains untouched until you explicitly restore its default.
 
+## Configure Echo Memory MVP
+
+Echo Memory is disabled by default. Open the **Memory extraction** stage in Echo Notes settings, then:
+
+1. Choose a vault-relative memory root folder. The default is `Echo Memory`.
+2. Run initialization and provide only a display name, current role, and recent goal. Initialization creates the workspace and enables memory extraction. The workspace language follows the UI language selected at initialization time.
+3. Select a separate memory Provider, then configure its dedicated API key, Base URL, and model. Memory secrets are stored by Provider in Obsidian `SecretStorage` and are never reused from AI analysis.
+4. Choose whether to create meeting pages and candidate packages only, or also compile managed User and entity profiles.
+5. Keep long-text chunking enabled for large inputs. The default chunk size is 24,000 characters with a maximum of 20 chunks. The default profile threshold is `0.75`.
+
+The default Chinese workspace layout is:
+
+```text
+Echo Memory/
+|-- 00 首页.md
+|-- 01 会议/
+|-- 02 记忆候选/
+|-- 03 实体/人物, 组织, 项目/
+|-- 04 User/SOUL.md and 01-08 profile documents
+`-- 99 系统/echo-memory.json and 运行日志/
+```
+
+Each candidate package contains a readable Markdown table and plugin-managed JSON. Its input fingerprint covers the transcript body, included analyses, schema and prompt versions, output language, initialized user, Provider, and model. Repeating the same input reuses the existing candidate without calling the model again. Profile compilation replaces only content between `echo-memory:managed` markers and preserves user-authored text outside those markers.
+
+Memory extraction has a 15-minute limit shared by all chunks. Running and failed memory tasks can be retried from Task Center. Retry first aborts the current wait and waits for the old attempt to exit, so late responses cannot write candidate data. Timeout, failure, and retry events are written to the Echo Memory run log without storing API keys or full model responses.
+
+Commands:
+
+- `Echo Notes: Initialize Echo Memory`
+- `Echo Notes: Extract memory from current transcript`
+- `Echo Notes: Open Echo Memory home`
+- `Echo Notes: Rebuild memory profiles from candidates`
+
+The current MVP does not include external Agent CLIs, a vector database, cross-vault sync, or automatic calendar and note actions.
+
 ## Usage
 
 ### Transcribe selected audio
@@ -287,6 +327,8 @@ If AI analysis is enabled, each audio link is matched independently. Different r
 ### AI analysis generation
 
 AI analysis runs automatically after a transcript is created or reused. Echo Notes inserts the transcript link first and does not wait for the model response. If "skip existing transcript" is enabled, running the transcription command again reuses only a `status: done` transcript whose source audio path, size, mtime, provider, and model still match, then generates or updates AI analysis in the background.
+
+Each AI analysis task has a 15-minute limit shared by chunk extraction and final synthesis. On timeout, Echo Notes marks the task as failed, preserves the error state in the transcript, and keeps the Task Center retry action available.
 
 To run analysis manually, open a `.transcript.md` file and run `Echo Notes: Analyze current transcript with selected template`, then choose any enabled template.
 
@@ -377,14 +419,14 @@ All automation options are disabled by default.
 
 ## Future Directions
 
-Echo Notes' long-term goal is to evolve from an audio transcription tool into a personal AI Memory Layer. Future work will explore:
+Echo Notes' long-term goal is to evolve from an audio transcription tool into a personal AI Memory Layer. Echo Memory MVP now validates the first transcript-to-candidate-to-profile path. Future work will explore:
 
 - Structured extraction from notes, including tasks, requirements, risks, decisions, action items, acceptance criteria, and retrospective results.
 - Batch analysis across multiple transcripts to produce project-level, topic-level, and timeline-level summaries.
 - A searchable personal action database built from meetings, study sessions, interviews, ideas, and work communication.
 - Long-term context for Personal Agents, so AI can assist decisions based on the user's real history.
 - Broader local model support, so personal memory can stay inside the user's own vault whenever possible.
-- Long-transcript chunking, merging, review, and multi-pass analysis workflows.
+- Reviewed promotion and correction workflows for candidate memories and managed profiles.
 
 ## Build
 
@@ -418,6 +460,7 @@ Development requires Node.js 22 or newer.
 - Local Whisper is not supported.
 - Long-text analysis uses sequential chunk extraction plus a final synthesis call. It increases model calls and cost, and does not yet resume from a partially completed chunk sequence after restart.
 - Task Center is currently an in-memory status panel. Persistent queues, pause/cancel controls, and restart-safe resume are not supported yet.
+- Echo Memory is an experimental MVP. It does not yet include a vector database, cross-vault sync, external Agent execution, or automatic calendar and note actions.
 
 ## Contact and Feedback
 
