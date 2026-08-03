@@ -419,6 +419,106 @@ async function reloadPluginAndOpenSettings(page) {
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
 }
 
+async function verifyDeclarativeSettingsCompatibility(page) {
+	const result = await page.evaluate((pluginId) => {
+		const settingTab = window.app.setting.pluginTabs.find((tab) => tab.id === pluginId);
+		if (!settingTab || typeof settingTab.getSettingDefinitions !== "function") {
+			return { error: "未找到 Echo Notes 设置页声明式定义" };
+		}
+
+		const definition = settingTab
+			.getSettingDefinitions()
+			.find((candidate) => typeof candidate.render === "function");
+		if (!definition) {
+			return { error: "未找到 Echo Notes 自定义 render 定义" };
+		}
+
+		const previousStage = settingTab.activeSettingsStage;
+		const scratchEl = document.body.createDiv({ cls: "echo-notes-declarative-settings-test" });
+		scratchEl.style.position = "fixed";
+		scratchEl.style.left = "-10000px";
+		scratchEl.style.top = "0";
+		const groupEl = scratchEl.createDiv({ cls: "setting-group-list" });
+		const beforeEl = groupEl.createDiv({ cls: "echo-notes-framework-sentinel-before" });
+		const settingEl = groupEl.createDiv({ cls: "setting-item" });
+		const afterEl = groupEl.createDiv({ cls: "echo-notes-framework-sentinel-after" });
+
+		const cleanup = definition.render({ settingEl }, { listEl: groupEl });
+		const initial = {
+			introCount: settingEl.querySelectorAll(".echo-notes-settings-intro").length,
+			workflowCount: settingEl.querySelectorAll(".echo-notes-settings-workflow").length,
+			panelCount: settingEl.querySelectorAll(".echo-notes-settings-panel").length,
+			parentPreserved:
+				groupEl.contains(beforeEl) &&
+				groupEl.contains(settingEl) &&
+				groupEl.contains(afterEl) &&
+				groupEl.children.length === 3,
+			orphanHeading: settingEl.textContent?.includes("Echo Notes settings") ?? false,
+			hostClass: settingEl.classList.contains("echo-notes-settings-definition-host")
+		};
+
+		settingEl.querySelector('[data-settings-stage="analysis"]')?.click();
+		const analysisSelectedBeforeRefresh =
+			settingEl.querySelector('[data-settings-stage="analysis"]')?.getAttribute("aria-selected") === "true";
+		if (typeof settingTab.refreshSettings === "function") {
+			settingTab.refreshSettings();
+		}
+		const afterRefresh = {
+			introCount: settingEl.querySelectorAll(".echo-notes-settings-intro").length,
+			analysisSelected:
+				settingEl.querySelector('[data-settings-stage="analysis"]')?.getAttribute("aria-selected") === "true",
+			parentPreserved:
+				groupEl.contains(beforeEl) &&
+				groupEl.contains(settingEl) &&
+				groupEl.contains(afterEl) &&
+				groupEl.children.length === 3
+		};
+
+		settingTab.activeSettingsStage = previousStage;
+		if (typeof cleanup === "function") {
+			cleanup();
+		}
+		const cleanupResult = {
+			hostEmpty: settingEl.childElementCount === 0,
+			hostClassRemoved: !settingEl.classList.contains("echo-notes-settings-definition-host"),
+			activeHostReleased: settingTab.settingsContainerEl === null
+		};
+		scratchEl.remove();
+
+		return {
+			initial,
+			analysisSelectedBeforeRefresh,
+			afterRefresh,
+			cleanupResult
+		};
+	}, PLUGIN_ID);
+
+	assert(!result.error, result.error ?? "声明式设置兼容验证失败");
+	assert(result.initial.introCount === 1, "声明式入口应渲染一个引导区");
+	assert(result.initial.workflowCount === 1, "声明式入口应渲染一个工作流");
+	assert(result.initial.panelCount === 3, "声明式入口应渲染三个已启用阶段面板");
+	assert(result.initial.parentPreserved, "声明式入口不得清空 Obsidian 管理的父分组或相邻节点");
+	assert(!result.initial.orphanHeading, "声明式入口不得留下孤立的 Echo Notes settings 标题");
+	assert(result.initial.hostClass, "声明式入口缺少独立宿主样式类");
+	assert(result.analysisSelectedBeforeRefresh, "声明式入口应支持阶段切换");
+	assert(result.afterRefresh.introCount === 1, "声明式入口重绘后引导区不得重复");
+	assert(result.afterRefresh.analysisSelected, "声明式入口重绘后应保持当前阶段");
+	assert(result.afterRefresh.parentPreserved, "声明式入口重绘后不得破坏父分组");
+	assert(
+		result.cleanupResult.hostEmpty &&
+			result.cleanupResult.hostClassRemoved &&
+			result.cleanupResult.activeHostReleased,
+		"声明式入口卸载时应清理宿主并释放活动容器"
+	);
+
+	await page.evaluate(async (pluginId) => {
+		window.app.setting.close();
+		window.app.setting.open();
+		await window.app.setting.openTabById(pluginId);
+	}, PLUGIN_ID);
+	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+}
+
 async function verifyIntroduction(page) {
 	const result = await page.evaluate(() => {
 		const intro = document.querySelector(".echo-notes-settings-intro");
@@ -1992,6 +2092,7 @@ try {
 	assert(runtimeState.pluginVersion === manifest.version, `宿主插件版本不匹配：${runtimeState.pluginVersion ?? "未找到"}`);
 	assert(runtimeState.audioWorkletAvailable, "Obsidian 宿主的 AudioContext.audioWorklet 不可用");
 	assert(runtimeState.audioWorkletNodeAvailable, "Obsidian 宿主的 AudioWorkletNode 不可用");
+	await verifyDeclarativeSettingsCompatibility(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
 	await reopenSettings(page);
@@ -2014,6 +2115,7 @@ try {
 		durationMs: Date.now() - verificationStartedAt,
 		semanticChecks: {
 			audioWorkletSupport: true,
+			declarativeSettingsCompatibility: true,
 			introduction: true,
 			keyboardNavigation: true,
 			ariaRelationships: true,

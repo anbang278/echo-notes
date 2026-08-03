@@ -128,8 +128,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			{
 				name: "Echo Notes settings",
 				searchable: false,
-				render: (_setting, group) => {
-					this.renderSettings(group.listEl);
+				render: (setting) => {
+					const hostEl = setting.settingEl;
+					hostEl.addClass("echo-notes-settings-definition-host");
+					this.renderSettings(hostEl);
+					return () => {
+						if (this.settingsContainerEl === hostEl) {
+							this.settingsContainerEl = null;
+						}
+						hostEl.empty();
+						hostEl.removeClass("echo-notes-settings-definition-host");
+					};
 				}
 			}
 		];
