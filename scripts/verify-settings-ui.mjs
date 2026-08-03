@@ -434,39 +434,101 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 		}
 
 		const previousStage = settingTab.activeSettingsStage;
+		const previousTranscriptionSection = settingTab.activeTranscriptionSettingsSection;
+		settingTab.activeSettingsStage = "transcription";
+		settingTab.activeTranscriptionSettingsSection = "service";
 		const scratchEl = document.body.createDiv({ cls: "echo-notes-declarative-settings-test" });
 		scratchEl.style.position = "fixed";
 		scratchEl.style.left = "-10000px";
 		scratchEl.style.top = "0";
+		scratchEl.style.width = "900px";
+		const frameworkStyleEl = document.createElement("style");
+		frameworkStyleEl.textContent = `
+.echo-notes-declarative-settings-test .setting-item {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	column-gap: 16px;
+	align-items: start;
+}`;
+		document.head.append(frameworkStyleEl);
 		const groupEl = scratchEl.createDiv({ cls: "setting-group-list" });
 		const beforeEl = groupEl.createDiv({ cls: "echo-notes-framework-sentinel-before" });
 		const settingEl = groupEl.createDiv({ cls: "setting-item" });
 		const afterEl = groupEl.createDiv({ cls: "echo-notes-framework-sentinel-after" });
 
 		const cleanup = definition.render({ settingEl }, { listEl: groupEl });
+		const hostEl = settingEl.querySelector(":scope > .echo-notes-settings-definition-host");
+		const introEl = hostEl?.querySelector(".echo-notes-settings-intro");
+		const guideEl = hostEl?.querySelector(".echo-notes-settings-intro-guide");
+		const workflowEl = hostEl?.querySelector(".echo-notes-settings-workflow");
+		const initialPanelEl = hostEl?.querySelector(".echo-notes-settings-panel:not([hidden])");
+		const hostRect = hostEl?.getBoundingClientRect();
+		const introRect = introEl?.getBoundingClientRect();
+		const guideRect = guideEl?.getBoundingClientRect();
+		const workflowRect = workflowEl?.getBoundingClientRect();
+		const initialPanelRect = initialPanelEl?.getBoundingClientRect();
 		const initial = {
 			introCount: settingEl.querySelectorAll(".echo-notes-settings-intro").length,
 			workflowCount: settingEl.querySelectorAll(".echo-notes-settings-workflow").length,
 			panelCount: settingEl.querySelectorAll(".echo-notes-settings-panel").length,
+			directChildCount: settingEl.childElementCount,
 			parentPreserved:
 				groupEl.contains(beforeEl) &&
 				groupEl.contains(settingEl) &&
 				groupEl.contains(afterEl) &&
 				groupEl.children.length === 3,
 			orphanHeading: settingEl.textContent?.includes("Echo Notes settings") ?? false,
-			hostClass: settingEl.classList.contains("echo-notes-settings-definition-host")
+			rowClass: settingEl.classList.contains("echo-notes-settings-definition-row"),
+			hostClass: hostEl?.classList.contains("echo-notes-settings-definition-host") ?? false,
+			hostClassNotOnRow: !settingEl.classList.contains("echo-notes-settings-definition-host"),
+			rowDisplay: getComputedStyle(settingEl).display,
+			verticalFlow: Boolean(
+				introRect &&
+				guideRect &&
+				workflowRect &&
+				initialPanelRect &&
+				introRect.bottom <= guideRect.top + 1 &&
+				guideRect.bottom <= workflowRect.top + 1 &&
+				workflowRect.bottom <= initialPanelRect.top + 1
+			),
+			panelFillsHost: Boolean(
+				hostRect && initialPanelRect && Math.abs(hostRect.width - initialPanelRect.width) <= 1
+			)
 		};
 
+		const outputTabEl = [...settingEl.querySelectorAll("button.echo-notes-settings-section-tab")]
+			.find((button) => button.textContent?.trim() === "输出规则");
+		outputTabEl?.click();
+		const outputSelectedBeforeRefresh = outputTabEl?.getAttribute("aria-selected") === "true";
 		settingEl.querySelector('[data-settings-stage="analysis"]')?.click();
 		const analysisSelectedBeforeRefresh =
 			settingEl.querySelector('[data-settings-stage="analysis"]')?.getAttribute("aria-selected") === "true";
+		const analysisPanelEl = settingEl.querySelector(".echo-notes-settings-panel:not([hidden])");
+		const analysisToggleEl = analysisPanelEl?.querySelector(".checkbox-container");
+		const analysisPanelRect = analysisPanelEl?.getBoundingClientRect();
+		const analysisToggleRect = analysisToggleEl?.getBoundingClientRect();
+		const controlContained = Boolean(
+			analysisPanelEl &&
+			analysisToggleEl &&
+			analysisPanelRect &&
+			analysisToggleRect &&
+			analysisPanelEl.contains(analysisToggleEl) &&
+			analysisToggleRect.left >= analysisPanelRect.left - 1 &&
+			analysisToggleRect.right <= analysisPanelRect.right + 1 &&
+			analysisToggleRect.top >= analysisPanelRect.top - 1 &&
+			analysisToggleRect.bottom <= analysisPanelRect.bottom + 1
+		);
 		if (typeof settingTab.refreshSettings === "function") {
 			settingTab.refreshSettings();
 		}
 		const afterRefresh = {
 			introCount: settingEl.querySelectorAll(".echo-notes-settings-intro").length,
+			directChildCount: settingEl.childElementCount,
+			sameHost: settingEl.querySelector(":scope > .echo-notes-settings-definition-host") === hostEl,
 			analysisSelected:
 				settingEl.querySelector('[data-settings-stage="analysis"]')?.getAttribute("aria-selected") === "true",
+			outputSelected: [...settingEl.querySelectorAll("button.echo-notes-settings-section-tab")]
+				.some((button) => button.textContent?.trim() === "输出规则" && button.getAttribute("aria-selected") === "true"),
 			parentPreserved:
 				groupEl.contains(beforeEl) &&
 				groupEl.contains(settingEl) &&
@@ -474,20 +536,25 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 				groupEl.children.length === 3
 		};
 
-		settingTab.activeSettingsStage = previousStage;
 		if (typeof cleanup === "function") {
 			cleanup();
 		}
 		const cleanupResult = {
-			hostEmpty: settingEl.childElementCount === 0,
-			hostClassRemoved: !settingEl.classList.contains("echo-notes-settings-definition-host"),
+			hostRemoved: !settingEl.contains(hostEl),
+			rowEmpty: settingEl.childElementCount === 0,
+			rowClassRemoved: !settingEl.classList.contains("echo-notes-settings-definition-row"),
 			activeHostReleased: settingTab.settingsContainerEl === null
 		};
+		settingTab.activeSettingsStage = previousStage;
+		settingTab.activeTranscriptionSettingsSection = previousTranscriptionSection;
+		frameworkStyleEl.remove();
 		scratchEl.remove();
 
 		return {
 			initial,
 			analysisSelectedBeforeRefresh,
+			outputSelectedBeforeRefresh,
+			controlContained,
 			afterRefresh,
 			cleanupResult
 		};
@@ -497,16 +564,28 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 	assert(result.initial.introCount === 1, "声明式入口应渲染一个引导区");
 	assert(result.initial.workflowCount === 1, "声明式入口应渲染一个工作流");
 	assert(result.initial.panelCount === 3, "声明式入口应渲染三个已启用阶段面板");
+	assert(result.initial.directChildCount === 1, "声明式框架行应只有一个 Echo Notes 内容根节点");
 	assert(result.initial.parentPreserved, "声明式入口不得清空 Obsidian 管理的父分组或相邻节点");
 	assert(!result.initial.orphanHeading, "声明式入口不得留下孤立的 Echo Notes settings 标题");
-	assert(result.initial.hostClass, "声明式入口缺少独立宿主样式类");
+	assert(result.initial.rowClass, "声明式入口缺少框架行兼容样式类");
+	assert(result.initial.hostClass, "声明式入口缺少独立内容宿主样式类");
+	assert(result.initial.hostClassNotOnRow, "声明式内容宿主不得与 Obsidian 框架行共用同一节点");
+	assert(result.initial.rowDisplay === "block", `声明式框架行应为块级布局，实际为 ${result.initial.rowDisplay}`);
+	assert(result.initial.verticalFlow, "声明式入口的引导区、指引、工作流和面板应纵向排列");
+	assert(result.initial.panelFillsHost, "声明式入口的活动面板应填满内容宿主宽度");
 	assert(result.analysisSelectedBeforeRefresh, "声明式入口应支持阶段切换");
+	assert(result.outputSelectedBeforeRefresh, "声明式入口应支持分类切换");
+	assert(result.controlContained, "声明式入口的开关控件应保持在活动面板内");
 	assert(result.afterRefresh.introCount === 1, "声明式入口重绘后引导区不得重复");
+	assert(result.afterRefresh.directChildCount === 1, "声明式入口重绘后不得重复生成内容宿主");
+	assert(result.afterRefresh.sameHost, "声明式入口重绘应复用当前自定义内容宿主");
 	assert(result.afterRefresh.analysisSelected, "声明式入口重绘后应保持当前阶段");
+	assert(result.afterRefresh.outputSelected, "声明式入口重绘后应保持当前分类");
 	assert(result.afterRefresh.parentPreserved, "声明式入口重绘后不得破坏父分组");
 	assert(
-		result.cleanupResult.hostEmpty &&
-			result.cleanupResult.hostClassRemoved &&
+		result.cleanupResult.hostRemoved &&
+			result.cleanupResult.rowEmpty &&
+			result.cleanupResult.rowClassRemoved &&
 			result.cleanupResult.activeHostReleased,
 		"声明式入口卸载时应清理宿主并释放活动容器"
 	);
