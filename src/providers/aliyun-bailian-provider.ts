@@ -84,6 +84,7 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 	private async transcribeLongAudio(audioBuffer: ArrayBuffer, input: TranscriptionInput): Promise<TranscriptionResult> {
 		const pipelineResult = await runAudioChunkPipeline<WavAudioSegment, BailianChatCompletionResponse>({
 			onProgress: input.onProgress,
+			initialSegments: input.resumeSegments,
 			createChunks: () => this.createLongAudioChunks(audioBuffer),
 			transcribeChunk: async (chunk) => {
 				this.assertChunkWithinBase64Limit(chunk);

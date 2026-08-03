@@ -1,6 +1,8 @@
 import type { CopyLanguage } from "../settings/settings";
 
 export const MEMORY_SCHEMA_VERSION = 1;
+export const MEMORY_REVIEW_SCHEMA_VERSION = 1;
+export const MEMORY_EXTRACTION_PROMPT_VERSION = 2;
 
 export const MEMORY_SUBJECT_TYPES = ["user", "person", "organization", "project"] as const;
 export type MemorySubjectType = (typeof MEMORY_SUBJECT_TYPES)[number];
@@ -37,6 +39,11 @@ export interface MemoryPaths {
 	userDir: string;
 	soul: string;
 	userProfiles: Record<MemoryUserCategory, string>;
+	aggregationsDir: string;
+	projectAggregation: string;
+	peopleAggregation: string;
+	timelineAggregation: string;
+	contextPackagesDir: string;
 	systemDir: string;
 	manifest: string;
 	logsDir: string;
@@ -95,12 +102,48 @@ export interface MemoryCandidatePackage {
 	provider: string;
 	model: string;
 	traceIds: string[];
+	rejectedAssertionCount?: number;
 	source: {
 		transcriptPath: string;
 		transcriptTitle: string;
 		analysisTemplateIds: string[];
 	};
 	assertions: MemoryAssertion[];
+}
+
+export const MEMORY_REVIEW_STATUSES = ["pending", "approved", "rejected"] as const;
+export type MemoryReviewStatus = (typeof MEMORY_REVIEW_STATUSES)[number];
+
+export interface MemoryReviewEvent {
+	at: string;
+	status: MemoryReviewStatus;
+	effectiveValue: string;
+	note: string;
+}
+
+export interface MemoryAssertionReview {
+	assertionId: string;
+	status: MemoryReviewStatus;
+	effectiveValue: string;
+	note: string;
+	reviewedAt: string;
+	history: MemoryReviewEvent[];
+}
+
+export interface MemoryReviewPackage {
+	schemaVersion: number;
+	candidateId: string;
+	candidateFingerprint: string;
+	candidatePath: string;
+	updatedAt: string;
+	reviews: Record<string, MemoryAssertionReview>;
+}
+
+export interface MemoryReviewUpdate {
+	assertionId: string;
+	status: MemoryReviewStatus;
+	effectiveValue: string;
+	note: string;
 }
 
 export interface MemoryExtractionResponse {
@@ -112,6 +155,7 @@ export interface MemoryExtractionResult {
 	candidateFilePath: string;
 	meetingFilePath: string;
 	assertionCount: number;
+	rejectedAssertionCount: number;
 	compiled: boolean;
 	provider: string;
 	model: string;

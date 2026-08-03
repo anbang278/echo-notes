@@ -1,4 +1,9 @@
 import type { Hotkey, Modifier } from "obsidian";
+import {
+	EMPTY_TASK_CENTER_STATE,
+	normalizeTaskCenterState,
+	type TaskCenterState
+} from "../task-center/task-center-store";
 
 export type OfflineTranscriptionProviderId =
 	| "aliyun-bailian"
@@ -188,6 +193,7 @@ export interface EchoNotesSettings {
 	officialRecorderStartHotkey: EchoNotesHotkeySetting;
 	officialRecorderStopHotkey: EchoNotesHotkeySetting;
 	transcribeAllAudioHotkey: EchoNotesHotkeySetting;
+	taskCenterState: TaskCenterState;
 	verboseLog: boolean;
 }
 
@@ -954,6 +960,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	officialRecorderStartHotkey: null,
 	officialRecorderStopHotkey: null,
 	transcribeAllAudioHotkey: null,
+	taskCenterState: EMPTY_TASK_CENTER_STATE,
 	verboseLog: false
 };
 
@@ -1269,6 +1276,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		raw.transcribeAllAudioHotkey,
 		DEFAULT_SETTINGS.transcribeAllAudioHotkey
 	);
+	settings.taskCenterState = normalizeTaskCenterState(raw.taskCenterState);
 
 	const mutableSettings = settings as EchoNotesSettings & Record<string, unknown>;
 	delete mutableSettings.provider;

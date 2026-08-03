@@ -88,6 +88,7 @@ export interface TranscriptionInput {
 	audioFile: TFile;
 	sourceNote?: TFile;
 	language?: string;
+	resumeSegments?: TranscriptionSegment[];
 	onProgress?: (progress: TranscriptionProgress) => Promise<void> | void;
 }
 

@@ -16,6 +16,10 @@ import {
 	renderSourceAudioMetadata,
 	type SourceAudioMetadata
 } from "./transcript-source-metadata";
+import {
+	renderTranscriptionCheckpoint,
+	type TranscriptionCheckpoint
+} from "./transcript-checkpoint";
 import { TRANSCRIPT_MANAGED_END, TRANSCRIPT_MANAGED_START } from "./transcript-content";
 
 export interface TranscriptTemplateInput {
@@ -41,6 +45,7 @@ export interface FailedTranscriptTemplateInput {
 	streamingState?: StreamingTranscriptionState;
 	speakerLabelStyle?: AgentPlanSpeakerLabelStyle;
 	copyLanguage: CopyLanguage;
+	checkpoint?: TranscriptionCheckpoint;
 }
 
 export interface ProgressTranscriptTemplateInput {
@@ -54,6 +59,7 @@ export interface ProgressTranscriptTemplateInput {
 	streamingState?: StreamingTranscriptionState;
 	speakerLabelStyle?: AgentPlanSpeakerLabelStyle;
 	copyLanguage: CopyLanguage;
+	checkpoint?: TranscriptionCheckpoint;
 }
 
 export function renderTranscriptTemplate(input: TranscriptTemplateInput): string {
@@ -158,6 +164,7 @@ export function renderProgressTranscriptTemplate(input: ProgressTranscriptTempla
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderProgressBody(input),
+		...(input.checkpoint ? ["", renderTranscriptionCheckpoint(input.checkpoint)] : []),
 		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");
@@ -259,6 +266,7 @@ function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInpu
 		`# ${formatTranscriptTitle(copy, title)}`,
 		"",
 		renderInterruptedBody(input),
+		...(input.checkpoint ? ["", renderTranscriptionCheckpoint(input.checkpoint)] : []),
 		TRANSCRIPT_MANAGED_END,
 		""
 	].join("\n");

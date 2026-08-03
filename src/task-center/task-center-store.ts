@@ -1,6 +1,27 @@
 export type EchoNotesTaskKind = "transcription" | "analysis" | "memory";
 export type EchoNotesTaskStatus = "running" | "success" | "failed" | "skipped";
 
+export type EchoNotesTaskRecovery =
+	| {
+		kind: "transcription";
+		audioPath: string;
+		sourcePath?: string;
+		audioLinkPath?: string;
+	}
+	| {
+		kind: "analysis";
+		transcriptPath: string;
+		templateId: string;
+	}
+	| {
+		kind: "memory-extraction";
+		transcriptPath: string;
+		analysisTemplateIds?: string[];
+	}
+	| {
+		kind: "memory-rebuild";
+	};
+
 export interface EchoNotesTaskRetry {
 	label: string;
 	run: () => Promise<void> | void;
@@ -26,8 +47,24 @@ export interface EchoNotesTask {
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;
+	recovery?: EchoNotesTaskRecovery;
 	retry?: EchoNotesTaskRetry;
 }
+
+export type PersistedEchoNotesTask = Omit<EchoNotesTask, "retry">;
+
+export interface TaskCenterState {
+	schemaVersion: 1;
+	tasks: PersistedEchoNotesTask[];
+}
+
+export const EMPTY_TASK_CENTER_STATE: TaskCenterState = {
+	schemaVersion: 1,
+	tasks: []
+};
+
+const MAX_PERSISTED_TASKS = 100;
+const MAX_PERSISTED_ERROR_LENGTH = 4000;
 
 export interface EchoNotesTaskCounts {
 	running: number;
@@ -92,6 +129,11 @@ export class TaskCenterStore {
 		return Array.from(this.tasks.values()).sort((left, right) => right.updatedAt - left.updatedAt);
 	}
 
+	restoreTasks(tasks: readonly EchoNotesTask[]): void {
+		this.tasks = new Map(tasks.map((task) => [task.id, task]));
+		this.notify();
+	}
+
 	subscribe(listener: TaskCenterListener): () => void {
 		this.listeners.add(listener);
 		return () => {
@@ -132,6 +174,62 @@ export class TaskCenterStore {
 			listener();
 		}
 	}
+}
+
+export function createTaskCenterState(tasks: readonly EchoNotesTask[]): TaskCenterState {
+	return {
+		schemaVersion: 1,
+		tasks: [...tasks]
+			.sort((left, right) => right.updatedAt - left.updatedAt)
+			.slice(0, MAX_PERSISTED_TASKS)
+			.map(({ retry: _retry, ...task }) => {
+				const persisted: PersistedEchoNotesTask = { ...task };
+				if (task.error) {
+					persisted.error = task.error.slice(0, MAX_PERSISTED_ERROR_LENGTH);
+				} else {
+					delete persisted.error;
+				}
+				const recovery = cloneRecovery(task.recovery);
+				if (recovery) {
+					persisted.recovery = recovery;
+				} else {
+					delete persisted.recovery;
+				}
+				return persisted;
+			})
+	};
+}
+
+export function normalizeTaskCenterState(value: unknown): TaskCenterState {
+	if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.tasks)) {
+		return { schemaVersion: 1, tasks: [] };
+	}
+
+	const tasks = value.tasks
+		.map(parsePersistedTask)
+		.filter((task): task is PersistedEchoNotesTask => Boolean(task))
+		.sort((left, right) => right.updatedAt - left.updatedAt)
+		.slice(0, MAX_PERSISTED_TASKS);
+	return { schemaVersion: 1, tasks };
+}
+
+export function markInterruptedTasks(
+	tasks: readonly PersistedEchoNotesTask[],
+	now = Date.now()
+): PersistedEchoNotesTask[] {
+	return tasks.map((task) => {
+		if (task.status !== "running") {
+			return task;
+		}
+		return {
+			...task,
+			status: "failed",
+			stage: "插件重启前任务已中断",
+			error: "任务在 Echo Notes 插件停止或 Obsidian 重启时仍未完成，请确认已有输出后重试。",
+			updatedAt: now,
+			completedAt: now
+		};
+	});
 }
 
 export function createTaskId(kind: EchoNotesTaskKind, targetPath: string, qualifier?: string): string {
@@ -184,4 +282,148 @@ export function formatTaskElapsedTime(task: EchoNotesTask, now = Date.now()): st
 
 function normalizeTaskIdPart(value: string): string {
 	return value.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+}
+
+function parsePersistedTask(value: unknown): PersistedEchoNotesTask | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const kind = readEnum(value.kind, ["transcription", "analysis", "memory"] as const);
+	const status = readEnum(value.status, ["running", "success", "failed", "skipped"] as const);
+	const id = readRequiredString(value.id);
+	const title = readRequiredString(value.title);
+	const stage = readRequiredString(value.stage);
+	const targetPath = readRequiredString(value.targetPath);
+	const createdAt = readTimestamp(value.createdAt);
+	const updatedAt = readTimestamp(value.updatedAt);
+	if (!kind || !status || !id || !title || !stage || !targetPath || createdAt === null || updatedAt === null) {
+		return null;
+	}
+
+	const task: PersistedEchoNotesTask = {
+		id,
+		kind,
+		title,
+		status,
+		stage,
+		targetPath,
+		createdAt,
+		updatedAt
+	};
+	assignOptionalString(task, "provider", value.provider);
+	assignOptionalString(task, "model", value.model);
+	assignOptionalString(task, "sourcePath", value.sourcePath);
+	assignOptionalString(task, "outputPath", value.outputPath);
+	assignOptionalString(task, "traceId", value.traceId);
+	assignOptionalString(task, "error", value.error, MAX_PERSISTED_ERROR_LENGTH);
+	assignOptionalNumber(task, "bytes", value.bytes);
+	assignOptionalNumber(task, "currentSegment", value.currentSegment);
+	assignOptionalNumber(task, "totalSegments", value.totalSegments);
+	assignOptionalNumber(task, "completedAt", value.completedAt);
+	const recovery = parseRecovery(value.recovery);
+	if (recovery) {
+		task.recovery = recovery;
+	}
+	return task;
+}
+
+function parseRecovery(value: unknown): EchoNotesTaskRecovery | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	switch (value.kind) {
+		case "transcription": {
+			const audioPath = readRequiredString(value.audioPath);
+			if (!audioPath) {
+				return undefined;
+			}
+			return {
+				kind: "transcription",
+				audioPath,
+				sourcePath: readOptionalString(value.sourcePath),
+				audioLinkPath: readOptionalString(value.audioLinkPath)
+			};
+		}
+		case "analysis": {
+			const transcriptPath = readRequiredString(value.transcriptPath);
+			const templateId = readRequiredString(value.templateId);
+			return transcriptPath && templateId
+				? { kind: "analysis", transcriptPath, templateId }
+				: undefined;
+		}
+		case "memory-extraction": {
+			const transcriptPath = readRequiredString(value.transcriptPath);
+			if (!transcriptPath) {
+				return undefined;
+			}
+			const analysisTemplateIds = Array.isArray(value.analysisTemplateIds)
+				? value.analysisTemplateIds
+					.map(readRequiredString)
+					.filter((item): item is string => Boolean(item))
+					.slice(0, 20)
+				: undefined;
+			return {
+				kind: "memory-extraction",
+				transcriptPath,
+				analysisTemplateIds: analysisTemplateIds?.length ? analysisTemplateIds : undefined
+			};
+		}
+		case "memory-rebuild":
+			return { kind: "memory-rebuild" };
+		default:
+			return undefined;
+	}
+}
+
+function cloneRecovery(recovery: EchoNotesTaskRecovery | undefined): EchoNotesTaskRecovery | undefined {
+	if (!recovery) {
+		return undefined;
+	}
+	return recovery.kind === "memory-extraction"
+		? { ...recovery, analysisTemplateIds: recovery.analysisTemplateIds ? [...recovery.analysisTemplateIds] : undefined }
+		: { ...recovery };
+}
+
+function assignOptionalString(
+	task: PersistedEchoNotesTask,
+	key: "provider" | "model" | "sourcePath" | "outputPath" | "traceId" | "error",
+	value: unknown,
+	maxLength = 1000
+): void {
+	const parsed = readOptionalString(value, maxLength);
+	if (parsed !== undefined) {
+		task[key] = parsed;
+	}
+}
+
+function assignOptionalNumber(
+	task: PersistedEchoNotesTask,
+	key: "bytes" | "currentSegment" | "totalSegments" | "completedAt",
+	value: unknown
+): void {
+	const parsed = readTimestamp(value);
+	if (parsed !== null) {
+		task[key] = parsed;
+	}
+}
+
+function readRequiredString(value: unknown): string | null {
+	const parsed = readOptionalString(value);
+	return parsed ?? null;
+}
+
+function readOptionalString(value: unknown, maxLength = 1000): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim().slice(0, maxLength) : undefined;
+}
+
+function readTimestamp(value: unknown): number | null {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function readEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+	return typeof value === "string" && allowed.includes(value as T) ? value as T : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

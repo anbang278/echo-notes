@@ -67,8 +67,8 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Show the selected transcription provider's upload mode, endpoint shape, file limit, chunking, language, timestamp, and diarization capabilities in settings.
 - Run a local transcription-provider configuration check for API key, Base URL, model, HTTP risk, endpoint shape, and capability-limit warnings without uploading audio.
 - Standardize transcription provider errors and redact API keys, authorization headers, Base64 audio payloads, and overlong responses before showing or writing failure messages.
-- Use a shared AudioChunkPipeline core for long-audio preparation, chunk progress events, segment transcription, text merging, trace id aggregation, raw segment collection, and releasing completed chunk audio buffers.
-- Open an in-memory Task Center from the ribbon or command palette to inspect transcription, AI analysis, and memory extraction status, failures, durations, providers, models, and outputs. Memory extraction can be retried while running or after failure.
+- Use a shared AudioChunkPipeline core for long-audio preparation, chunk progress events, segment transcription, text merging, trace id aggregation, raw segment collection, and releasing completed chunk audio buffers. Completed Alibaba Bailian, SiliconFlow, and MOSI segments are checkpointed inside the managed transcript and reused after a failure or restart when the source audio and Provider configuration still match.
+- Open Task Center from the ribbon or command palette to inspect transcription, AI analysis, and memory extraction status, failures, durations, providers, models, and outputs. Safe task summaries persist across restarts; interrupted tasks are marked failed and recover transcription, analysis, memory extraction, or profile-rebuild retry actions without storing content or API keys.
 - Optional manual-upload confirmation that previews provider, base URL, model, file size, and HTTP risks before sending audio; automation skips uploads when this confirmation mode is enabled.
 - Markdown-link automation skips source notes marked with Echo Notes privacy frontmatter or private tags.
 - In offline mode, enable or disable Obsidian's core Audio recorder and save hotkeys for its commands. Real-time mode does not intercept or depend on the core recorder's private state.
@@ -76,7 +76,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Run AI analysis in the background and write the result back into the matching transcript.
 - Optionally redact common sensitive fields before sending transcript text to the AI analysis provider.
 - Run a local AI analysis configuration check for API key, Base URL, HTTPS, and model before sending transcript text.
-- Split long transcripts into configurable chunks, analyze each chunk in order, and run a final synthesis pass that deduplicates conclusions, actions, risks, and open questions.
+- Split long transcripts into configurable chunks, checkpoint each successful chunk in the transcript, and run a final synthesis pass that deduplicates conclusions, actions, risks, and open questions. A retry reuses only a continuous prefix whose transcript text, template, Provider configuration, model, and chunk boundaries still match.
 - Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose one or more AI analysis templates from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a role group, name, version, recognition keywords, system prompt, and template task.
@@ -84,8 +84,11 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Track AI analysis lifecycle in transcript frontmatter with `analysis_status`, scheduled template ids, pending/done/failed template ids, provider, model, timestamps, and the latest sanitized analysis error.
 - Optionally initialize an Echo Memory workspace and extract evidence-backed candidate memories from a transcript plus the successful analyses included in that run.
 - Keep memory Provider, API key, Base URL, model, and long-text settings isolated from transcription and AI analysis configuration. Memory extraction is disabled by default.
-- Choose between meeting pages plus candidate packages, or automatic compilation into User, person, organization, and project profiles. Candidate packages remain the source of truth, while profiles update only Echo Memory managed blocks.
-- Rebuild managed profiles from candidate packages without scanning the whole vault or overwriting user-authored content.
+- Checkpoint every validated long-text memory chunk in the Echo Memory system directory. A retry reuses only the continuous prefix whose transcript, included analyses, initialized user, Schema/prompt/pipeline versions, Provider configuration, model, language, and chunk boundaries still match.
+- Review every candidate in a same-directory `.review.md` sidecar, with per-assertion approval, correction, rejection, reset, and append-only event history.
+- Manually confirm conflicts, supplements, supersession, or invalidation between approved assertions for the same subject. Relations live outside immutable candidates, keep endpoint snapshots and append-only confirmation/revocation history, and can be revoked to restore the previous profile view.
+- Choose between saving reviews only or automatically compiling profiles and cross-record views after a review is saved. Only approved, non-suppressed assertions enter User, person, organization, and project profiles.
+- Rebuild managed profiles plus project, people, and timeline aggregations from candidate packages, review sidecars, and approved-memory relations. Each entry keeps transcript, candidate, review, and relation backlinks; rejecting, resetting, superseding, invalidating, or revoking an assertion updates the views without scanning the whole vault or overwriting user-authored content.
 - Optional automation for newly added Markdown audio links.
 - Optional automation for newly created audio files.
 - Markdown audio-link automation deduplicates processed links in the current plugin session using source note, normalized audio path, raw link text, and occurrence order.
@@ -168,6 +171,8 @@ Provider limits:
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
 - MOSI: enabling **Speaker diarization** uses `moss-transcribe-diarize`, version `moss-transcribe-diarize-20260325`, and `diarize=true`; disabling it uses plain `moss-transcribe` with version `moss-transcribe-v1` and omits `diarize`. Both modes use the documented synchronous, non-streaming multipart request. Files longer than three minutes are split locally into roughly three-minute WAV segments and written back progressively. HTTP `500/502/503/504` retries use one- and three-second delays; a persistent server failure, `413`, or an explicit too-long/too-large response shrinks only the failing segment down to 30 seconds and at most four levels. MOSI does not publish a stable file-size limit. See the [MOSI transcription API reference](https://platform.mosi.cn/docs/reference/transcriptions).
 - Ollama and LM Studio: files over 25 MB are blocked before upload.
+
+For chunked Alibaba Bailian, SiliconFlow, and MOSI runs, every successful segment is stored in a managed, source-readable checkpoint with the source path/size/mtime, Provider, model, a secret-free configuration fingerprint, time range, text, trace ID, and diarized utterances when available. A retry reuses only a continuous prefix whose identity and segment boundaries still match. Changed audio or configuration, and damaged checkpoint data, safely start a fresh run.
 
 Capability matrix:
 
@@ -267,8 +272,8 @@ Echo Memory is disabled by default. Open the **Memory extraction** stage in Echo
 1. Choose a vault-relative memory root folder. The default is `Echo Memory`.
 2. Run initialization and provide only a display name, current role, and recent goal. Initialization creates the workspace and enables memory extraction. The workspace language follows the UI language selected at initialization time.
 3. Select a separate memory Provider, then configure its dedicated API key, Base URL, and model. Memory secrets are stored by Provider in Obsidian `SecretStorage` and are never reused from AI analysis.
-4. Choose whether to create meeting pages and candidate packages only, or also compile managed User and entity profiles.
-5. Keep long-text chunking enabled for large inputs. The default chunk size is 24,000 characters with a maximum of 20 chunks. The default profile threshold is `0.75`.
+4. Choose whether review saves remain candidate-only or automatically recompile managed User/entity profiles and cross-record aggregations.
+5. Keep long-text chunking enabled for large inputs. The default chunk size is 24,000 characters with a maximum of 20 chunks. New and legacy candidates start pending; only explicitly approved assertions enter profiles, and their effective values can be corrected during review.
 
 The default Chinese workspace layout is:
 
@@ -276,24 +281,38 @@ The default Chinese workspace layout is:
 Echo Memory/
 |-- 00 首页.md
 |-- 01 会议/
-|-- 02 记忆候选/
+|-- 02 记忆候选/ (candidate `.md` and review `.review.md` files)
 |-- 03 实体/人物, 组织, 项目/
 |-- 04 User/SOUL.md and 01-08 profile documents
-`-- 99 系统/echo-memory.json and 运行日志/
+|-- 05 聚合/项目.md, 人物.md, 时间线.md
+|-- 06 上下文包/ (previewable Personal Agent context packages)
+`-- 99 系统/echo-memory.json, echo-memory-checkpoints.json, echo-memory-relations.json, and 运行日志/
 ```
 
-Each candidate package contains a readable Markdown table and plugin-managed JSON. Its input fingerprint covers the transcript body, included analyses, schema and prompt versions, output language, initialized user, Provider, and model. Repeating the same input reuses the existing candidate without calling the model again. Profile compilation replaces only content between `echo-memory:managed` markers and preserves user-authored text outside those markers.
+Each candidate package contains a readable Markdown table and plugin-managed JSON and remains unchanged by review. Its same-directory review sidecar stores per-assertion status, effective value, note, review time, and full event history inside an `echo-memory-review:managed` block while preserving manual text outside that block. Its input fingerprint covers the transcript body, included analyses, schema and prompt versions, output language, initialized user, Provider, and model. Repeating the same input reuses the existing candidate without calling the model again. A legacy candidate receives a fully pending sidecar when first reviewed or rebuilt and is never silently approved. Profile compilation consumes approved assertions only, replaces content between `echo-memory:managed` markers, and preserves user-authored text outside those markers.
 
 Memory extraction has a 15-minute limit shared by all chunks. Running and failed memory tasks can be retried from Task Center. Retry first aborts the current wait and waits for the old attempt to exit, so late responses cannot write candidate data. Timeout, failure, and retry events are written to the Echo Memory run log without storing API keys or full model responses.
+
+For a chunked extraction, each successful response is evidence-validated before its structured assertions are written to `99 系统/echo-memory-checkpoints.json` (or `99 System` in an English workspace). Each completed chunk is limited to 24,000 characters of structured result data; the shared store is limited to 25,000,000 characters and 100 unfinished transcripts. It never contains API keys, authorization headers, full requests, or raw Provider responses. A failure retains the current transcript entry for an explicit retry; a successful candidate, review sidecar, manifest record, meeting page, and optional profile compilation remove only that transcript entry while keeping the shared store. These checkpoints contain sensitive derived memory and can be removed or archived manually when recovery is not wanted. Resumed output is still a pending candidate and requires review before it can enter a profile.
+
+Approved-memory relations are stored as readable JSON in `99 系统/echo-memory-relations.json` (or `99 System`). Open a candidate or its review sidecar and run **Manage current memory relations**. Only approved assertions from different candidates for the same normalized subject can be linked. Confirmed conflicts and supplements keep both assertions visible with relation IDs and candidate/review backlinks. Supersession and invalidation remove the target from compiled profiles while preserving its audit backlink on the source; revocation restores it on rebuild. If either review is no longer approved or its effective value changes, the active relation becomes non-applicable and suppresses nothing until the user reconfirms it. The store is limited to 5,000 relations, 100 events per relation, and 10,000,000 characters. It contains approved derived-memory snapshots and should be handled as sensitive Vault data; it never rewrites candidate packages.
+
+Every profile rebuild also regenerates three relationship-aware Markdown views under `05 聚合` (or `05 Aggregations`): projects grouped by normalized project, people grouped by normalized person, and a stable chronological timeline across all current approved assertions. Superseded or invalidated targets are omitted, conflicts and supplements remain visible, and every row links back to its transcript, candidate, review, and applicable relation. These files and the home-page navigation use dedicated managed blocks, so manual text outside the blocks is preserved. Existing v1 manifests gain the additive paths on their next rebuild without changing the Schema version.
+
+Run **Create personal agent context package** to preview and generate a local Markdown context package under `06 上下文包` (or `06 Context Packages`). Project and person filters use OR semantics; optional start/end dates filter the assertion `observedAt` day, and the character budget is bounded to 4,000-100,000 characters with a 12,000-character default. Entries are ordered newest-first, preserve evidence plus transcript/candidate/review/relation backlinks, and show how many matching entries were omitted by the budget. Generation uses only approved, relation-resolved memory, updates only the `echo-memory-context:managed` block, preserves manual text outside the block, and makes no network request or external Agent call.
 
 Commands:
 
 - `Echo Notes: Initialize Echo Memory`
 - `Echo Notes: Extract memory from current transcript`
+- `Echo Notes: Review current memory candidate`
+- `Echo Notes: Manage current memory relations`
 - `Echo Notes: Open Echo Memory home`
-- `Echo Notes: Rebuild memory profiles from candidates`
+- `Echo Notes: Open Echo Memory timeline`
+- `Echo Notes: Create personal agent context package`
+- `Echo Notes: Rebuild memory profiles and aggregations from candidates`
 
-The current MVP does not include external Agent CLIs, a vector database, cross-vault sync, or automatic calendar and note actions.
+The current MVP does not include external Agent CLIs, semantic retrieval, a vector database, cross-vault sync, or automatic calendar and note actions; context packages are local, previewable Markdown only.
 
 ## Usage
 
@@ -328,7 +347,9 @@ If AI analysis is enabled, each audio link is matched independently. Different r
 
 AI analysis runs automatically after a transcript is created or reused. Echo Notes inserts the transcript link first and does not wait for the model response. If "skip existing transcript" is enabled, running the transcription command again reuses only a `status: done` transcript whose source audio path, size, mtime, provider, and model still match, then generates or updates AI analysis in the background.
 
-Each AI analysis task has a 15-minute limit shared by chunk extraction and final synthesis. On timeout, Echo Notes marks the task as failed, preserves the error state in the transcript, and keeps the Task Center retry action available.
+Each AI analysis task has a 15-minute limit shared by chunk extraction and final synthesis. On timeout, Echo Notes marks the task as failed, preserves the error state in the transcript, and keeps the Task Center retry action available. For a chunked run, each successful chunk is immediately stored in a template-isolated hidden Obsidian comment in the same transcript. A retry skips the matching completed prefix and always reruns final synthesis; changed transcript text, redaction mode, template content/version, Provider, Base URL, model, language, chunk settings, or boundaries starts safely from the first chunk.
+
+An unfinished analysis checkpoint may contain up to 12,000 characters of derived model output per completed chunk. It never stores API keys or raw Provider responses and is removed after the final analysis has been written successfully. Because failed work keeps these derived outputs in the vault for recovery, treat the transcript file as sensitive data and remove it manually if you do not want to retain the failed run.
 
 To run analysis manually, open a `.transcript.md` file and run `Echo Notes: Analyze current transcript with selected template`, then choose any enabled template.
 
@@ -419,14 +440,13 @@ All automation options are disabled by default.
 
 ## Future Directions
 
-Echo Notes' long-term goal is to evolve from an audio transcription tool into a personal AI Memory Layer. Echo Memory MVP now validates the first transcript-to-candidate-to-profile path. Future work will explore:
+Echo Notes' long-term goal is to evolve from an audio transcription tool into a personal AI Memory Layer. Echo Memory now validates the transcript-to-candidate-to-review-to-relation-to-cross-record-view path. Future work will explore:
 
 - Structured extraction from notes, including tasks, requirements, risks, decisions, action items, acceptance criteria, and retrospective results.
-- Batch analysis across multiple transcripts to produce project-level, topic-level, and timeline-level summaries.
 - A searchable personal action database built from meetings, study sessions, interviews, ideas, and work communication.
 - Long-term context for Personal Agents, so AI can assist decisions based on the user's real history.
 - Broader local model support, so personal memory can stay inside the user's own vault whenever possible.
-- Reviewed promotion and correction workflows for candidate memories and managed profiles.
+- Previewable, length-bounded Personal Agent context packages filtered by project, person, time, and evidence status.
 
 ## Build
 
@@ -439,6 +459,19 @@ npm run build
 ```
 
 Development requires Node.js 22 or newer.
+
+### Release validation
+
+The isolated real-chain gate uses non-private fixtures in the dedicated test vault and removes its temporary Obsidian profile after the run. It validates SiliconFlow `FunAudioLLM/SenseVoiceSmall` transcription followed by Volcengine AgentPlan `doubao-seed-2.0-lite` analysis and Echo Memory extraction. Provide the two keys only through the process environment; the script writes the AgentPlan key into separate analysis and memory `SecretStorage` entries and never prints either value.
+
+```bash
+read -s "SILICONFLOW_API_KEY?SiliconFlow API Key: "
+export SILICONFLOW_API_KEY
+read -s "AGENTPLAN_API_KEY?AgentPlan API Key: "
+export AGENTPLAN_API_KEY
+npm run verify:real-chain
+unset SILICONFLOW_API_KEY AGENTPLAN_API_KEY
+```
 
 ## Install for Local Testing
 
@@ -458,9 +491,9 @@ Development requires Node.js 22 or newer.
 - Word-level timestamps are not rendered.
 - Universal large-file chunking across all providers is not supported yet. The shared AudioChunkPipeline currently covers Alibaba Bailian `qwen3-asr-flash`, SiliconFlow official or custom transcription models, and MOSI.
 - Local Whisper is not supported.
-- Long-text analysis uses sequential chunk extraction plus a final synthesis call. It increases model calls and cost, and does not yet resume from a partially completed chunk sequence after restart.
-- Task Center is currently an in-memory status panel. Persistent queues, pause/cancel controls, and restart-safe resume are not supported yet.
-- Echo Memory is an experimental MVP. It does not yet include a vector database, cross-vault sync, external Agent execution, or automatic calendar and note actions.
+- Long-text analysis uses sequential chunk extraction plus a final synthesis call, so it increases model calls and cost. Matching completed chunks resume after failure or restart, but final synthesis always runs again; whole-text analysis still retries the single request.
+- Task Center persists up to 100 safe task summaries and restores retry actions after restart. It is not a background queue and does not provide pause/cancel controls. Segment-level resume is limited to the chunked Alibaba Bailian, SiliconFlow, and MOSI paths; whole-audio requests and other providers restart the request.
+- Echo Memory relations require explicit user confirmation and do not automatically detect or resolve conflicts. Cross-record views use explicit subject normalization rather than semantic entity resolution and do not yet provide topic aggregation. Multi-reviewer identity, a vector database, cross-vault sync, external Agent execution, and automatic calendar or note actions are not included yet.
 
 ## Contact and Feedback
 

@@ -5,7 +5,8 @@ import {
 	type CopyLanguage
 } from "../settings/settings";
 import type { AnalysisResult } from "./analysis-provider";
-import { TRANSCRIPT_MANAGED_START } from "../transcript/transcript-content";
+import { removeAllAnalysisCheckpoints } from "./analysis-checkpoint";
+import { TRANSCRIPT_MANAGED_END, TRANSCRIPT_MANAGED_START } from "../transcript/transcript-content";
 
 export const ANALYSIS_LINKS_START = "<!-- echo-notes-analysis-links:start -->";
 export const ANALYSIS_LINKS_END = "<!-- echo-notes-analysis-links:end -->";
@@ -26,10 +27,12 @@ export interface ExtractedTranscriptAnalysis {
 }
 
 export function extractTranscriptText(content: string): string {
-	const contentWithoutManagedBlocks = content
+	const contentWithoutManagedBlocks = removeAllAnalysisCheckpoints(content)
 		.replace(/^---\n[\s\S]*?\n---\n?/, "")
 		.replace(new RegExp(`${escapeRegExp(ANALYSIS_LINKS_START)}[\\s\\S]*?${escapeRegExp(ANALYSIS_LINKS_END)}\\n?`, "g"), "")
 		.replace(new RegExp(`${escapeRegExp(TRANSCRIPT_ANALYSIS_START)}[\\s\\S]*?${escapeRegExp(TRANSCRIPT_ANALYSIS_END)}\\n?`, "g"), "")
+		.replaceAll(TRANSCRIPT_MANAGED_START, "")
+		.replaceAll(TRANSCRIPT_MANAGED_END, "")
 		.trim();
 
 	return extractContentAfterTranscriptHeading(contentWithoutManagedBlocks) ?? contentWithoutManagedBlocks;

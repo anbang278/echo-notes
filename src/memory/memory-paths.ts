@@ -23,6 +23,11 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 			organizations: "Organizations",
 			projects: "Projects",
 			user: "04 User",
+			aggregations: "05 Aggregations",
+			projectAggregation: "Projects.md",
+			peopleAggregation: "People.md",
+			timelineAggregation: "Timeline.md",
+			contextPackages: "06 Context Packages",
 			system: "99 System",
 			logs: "Run Logs"
 		}
@@ -35,6 +40,11 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 			organizations: "组织",
 			projects: "项目",
 			user: "04 User",
+			aggregations: "05 聚合",
+			projectAggregation: "项目.md",
+			peopleAggregation: "人物.md",
+			timelineAggregation: "时间线.md",
+			contextPackages: "06 上下文包",
 			system: "99 系统",
 			logs: "运行日志"
 		};
@@ -48,6 +58,7 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 		)
 	) as Record<MemoryUserCategory, string>;
 	const entitiesDir = joinVaultPath(root, names.entities);
+	const aggregationsDir = joinVaultPath(root, names.aggregations);
 	const systemDir = joinVaultPath(root, names.system);
 	return {
 		home: joinVaultPath(root, names.home),
@@ -59,6 +70,11 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 		userDir,
 		soul: joinVaultPath(userDir, "SOUL.md"),
 		userProfiles,
+		aggregationsDir,
+		projectAggregation: joinVaultPath(aggregationsDir, names.projectAggregation),
+		peopleAggregation: joinVaultPath(aggregationsDir, names.peopleAggregation),
+		timelineAggregation: joinVaultPath(aggregationsDir, names.timelineAggregation),
+		contextPackagesDir: joinVaultPath(root, names.contextPackages),
 		systemDir,
 		manifest: joinVaultPath(systemDir, "echo-memory.json"),
 		logsDir: joinVaultPath(systemDir, names.logs)

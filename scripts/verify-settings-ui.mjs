@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import { createServer as createHttpServer } from "node:http";
 import {
 	copyFile,
 	mkdir,
@@ -188,7 +189,7 @@ async function prepareOutputDirectory() {
 			.filter(
 				(entry) =>
 					entry.isFile() &&
-					(entry.name === "summary.json" || /^settings-[a-z0-9-]+\.png$/.test(entry.name))
+					(entry.name === "summary.json" || /^(?:settings|memory-review|memory-relation|memory-context)-[a-z0-9-]+\.png$/.test(entry.name))
 			)
 			.map((entry) => rm(path.join(OUTPUT_DIR, entry.name), { force: true }))
 	);
@@ -205,6 +206,94 @@ async function reservePort() {
 	const { port } = address;
 	await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 	return port;
+}
+
+async function startMemoryProviderMock() {
+	const calls = [];
+	let failSecondChunkOnce = true;
+	const server = createHttpServer((request, response) => {
+		const bodyChunks = [];
+		request.on("data", (chunk) => bodyChunks.push(chunk));
+		request.on("end", () => {
+			try {
+				assert(request.method === "POST", "Memory mock 只接受 POST");
+				assert(request.url === "/v1/chat/completions", `Memory mock 收到未知路径：${request.url}`);
+				const body = JSON.parse(Buffer.concat(bodyChunks).toString("utf8"));
+				const systemMessage = body.messages?.find((message) => message.role === "system")?.content ?? "";
+				const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
+				assert(
+					systemMessage.includes("evidenceQuote 只能逐字复制 <echo-memory-source> 标签内部的文本"),
+					"Memory 系统提示未限定 evidenceQuote 的证据边界"
+				);
+				assert(
+					userMessage.includes("<echo-memory-metadata>") &&
+					userMessage.includes("</echo-memory-metadata>") &&
+					userMessage.includes("不得作为 evidenceQuote"),
+					"Memory 运行元数据未与证据源隔离"
+				);
+				const chunkMatch = /分块：(\d+)\/(\d+)/.exec(userMessage);
+				const sourceMatch = /<echo-memory-source>\n([\s\S]*?)\n<\/echo-memory-source>/.exec(userMessage);
+				assert(chunkMatch && sourceMatch, "Memory mock 请求缺少分块或来源数据");
+				const chunkIndex = Number(chunkMatch[1]);
+				const totalChunks = Number(chunkMatch[2]);
+				calls.push({ chunkIndex, totalChunks });
+				if (chunkIndex === 2 && failSecondChunkOnce) {
+					failSecondChunkOnce = false;
+					response.writeHead(500, { "content-type": "application/json" });
+					response.end(JSON.stringify({ error: { message: "isolated failure" } }));
+					return;
+				}
+				const sourceText = sourceMatch[1];
+				const evidenceQuote = sourceText.slice(0, 48).trim();
+				const result = {
+					assertions: [
+						...(chunkIndex === 1 ? [{
+							subjectType: "user",
+							subjectName: "测试用户",
+							category: "background",
+							predicate: "身份为",
+							value: "本次会话的初始化用户",
+							confidence: 0.9,
+							evidenceQuote: "初始化用户：测试用户"
+						}] : []),
+						{
+							subjectType: "user",
+							subjectName: "测试用户",
+							category: "other",
+							predicate: `隔离分块 ${chunkIndex}`,
+							value: `已完成第 ${chunkIndex}/${totalChunks} 块验证`,
+							confidence: 0.9,
+							evidenceQuote
+						}
+					]
+				};
+				response.writeHead(200, {
+					"content-type": "application/json",
+					"x-request-id": `memory-mock-${chunkIndex}`
+				});
+				response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) } }] }));
+			} catch (error) {
+				response.writeHead(500, { "content-type": "application/json" });
+				response.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : String(error) } }));
+			}
+		});
+	});
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	assert(address && typeof address === "object", "无法启动 Memory mock 服务");
+	return {
+		baseUrl: `http://127.0.0.1:${address.port}/v1`,
+		calls,
+		close: async () => {
+			if (!server.listening) {
+				return;
+			}
+			await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+		}
+	};
 }
 
 async function createIsolatedProfile(obsidianAsar) {
@@ -858,7 +947,748 @@ async function verifyMemoryInitialization(page) {
 	assert(result.manifest?.paths?.candidatesDir === "Echo Memory/02 记忆候选", "Echo Memory 清单路径映射不正确");
 }
 
-async function setViewportMode(page, viewport, theme) {
+async function verifyMemoryCheckpointResume(page, mock) {
+	const result = await page.evaluate(async ({ pluginId, baseUrl }) => {
+		window.app.setting.close();
+		const plugin = window.app.plugins.plugins[pluginId];
+		if (!plugin?.memoryService) {
+			throw new Error("Echo Notes MemoryService 未初始化");
+		}
+		plugin.settings.memoryMode = "candidates-only";
+		plugin.settings.memoryProvider = "ollama";
+		plugin.settings.memoryBaseUrl = baseUrl;
+		plugin.settings.memoryModel = "mock-memory";
+		plugin.settings.memoryLongTextEnabled = true;
+		plugin.settings.memoryChunkCharacters = 4_000;
+		await plugin.saveSettings();
+
+		const transcriptPath = "Echo Notes UI Memory Resume.transcript.md";
+		const transcriptBody = Array.from(
+			{ length: 120 },
+			(_, index) =>
+				`验证记录 ${String(index + 1).padStart(3, "0")}：Echo Notes 检查点必须保留已验证证据并从失败分块续跑。`
+		).join("\n");
+		const transcriptContent = `# 转写稿\n\n${transcriptBody}\n`;
+		const existingTranscript = window.app.vault.getAbstractFileByPath(transcriptPath);
+		const transcriptFile = existingTranscript ?? await window.app.vault.create(transcriptPath, transcriptContent);
+		if (existingTranscript) {
+			await window.app.vault.modify(existingTranscript, transcriptContent);
+		}
+
+		let firstError = "";
+		try {
+			await plugin.memoryService.extractFromTranscript(plugin.settings, transcriptFile, {
+				apiKey: "",
+				analysisTemplateIds: []
+			});
+		} catch (error) {
+			firstError = error instanceof Error ? error.message : String(error);
+		}
+		if (!firstError) {
+			throw new Error("Memory mock 首轮提取未按预期失败");
+		}
+
+		const checkpointPath = "Echo Memory/99 系统/echo-memory-checkpoints.json";
+		const checkpointFile = window.app.vault.getAbstractFileByPath(checkpointPath);
+		if (!checkpointFile) {
+			throw new Error("首轮失败后未写入 Memory 检查点文件");
+		}
+		const checkpointContent = await window.app.vault.read(checkpointFile);
+		const checkpointStore = JSON.parse(checkpointContent);
+		const checkpoint = checkpointStore.checkpoints?.[transcriptPath];
+		const candidatesAfterFailure = window.app.vault.getMarkdownFiles()
+			.filter((file) =>
+				file.path.startsWith("Echo Memory/02 记忆候选/") &&
+				!file.path.toLocaleLowerCase().endsWith(".review.md")
+			)
+			.map((file) => file.path);
+
+		const extraction = await plugin.memoryService.extractFromTranscript(plugin.settings, transcriptFile, {
+			apiKey: "",
+			analysisTemplateIds: []
+		});
+		const candidateFile = window.app.vault.getAbstractFileByPath(extraction.candidateFilePath);
+		const reviewPath = extraction.candidateFilePath.replace(/\.md$/i, ".review.md");
+		const reviewFile = window.app.vault.getAbstractFileByPath(reviewPath);
+		const meetingFile = window.app.vault.getAbstractFileByPath(extraction.meetingFilePath);
+		if (!candidateFile || !reviewFile || !meetingFile) {
+			throw new Error("Memory 续跑成功后缺少候选包、审核文件或会议页");
+		}
+		const candidateContent = await window.app.vault.read(candidateFile);
+		const candidateMatch = /<!-- echo-memory-data:start -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- echo-memory-data:end -->/.exec(candidateContent);
+		if (!candidateMatch) {
+			throw new Error("Memory 候选包缺少结构化数据区块");
+		}
+		const candidate = JSON.parse(candidateMatch[1]);
+		const manifestFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory.json");
+		const manifest = JSON.parse(await window.app.vault.read(manifestFile));
+		const completedCheckpointContent = await window.app.vault.read(checkpointFile);
+		const completedCheckpointStore = JSON.parse(completedCheckpointContent);
+
+		return {
+			transcriptPath,
+			firstError,
+			checkpointPath,
+			checkpointContent,
+			checkpointCreatedAt: checkpoint?.createdAt ?? null,
+			completedChunks: checkpoint?.completedChunks?.length ?? 0,
+			checkpointChunkTotal: checkpoint?.completedChunks?.[0]?.total ?? null,
+			candidatesAfterFailure,
+			extraction,
+			reviewPath,
+			candidateCreatedAt: candidate.createdAt,
+			candidateAssertionCount: candidate.assertions?.length ?? 0,
+			candidateRejectedAssertionCount: candidate.rejectedAssertionCount ?? 0,
+			manifestRun: manifest.runs?.[candidate.fingerprint] ?? null,
+			checkpointFileStillExists: Boolean(window.app.vault.getAbstractFileByPath(checkpointPath)),
+			checkpointRemoved: !completedCheckpointStore.checkpoints?.[transcriptPath]
+		};
+	}, { pluginId: PLUGIN_ID, baseUrl: mock.baseUrl });
+
+	assert(result.firstError.includes("HTTP 500"), `Memory 首轮失败原因不正确：${result.firstError}`);
+	assert(result.completedChunks === 1, `首轮失败后应保留 1 个分块，实际为 ${result.completedChunks}`);
+	assert(result.checkpointChunkTotal === 2, `Memory 集成输入应拆为 2 块，实际为 ${result.checkpointChunkTotal ?? "未知"}`);
+	assert(result.checkpointCreatedAt, "Memory 检查点缺少初次 createdAt");
+	assert(result.candidatesAfterFailure.length === 0, "首轮失败时不应提前生成候选包");
+	assert(
+		!["apiKey", "Authorization", "rawResponse", "choices"].some((term) => result.checkpointContent.includes(term)),
+		"Memory 检查点不应保存 API Key、认证头或 Provider 原始响应"
+	);
+	assert(
+		JSON.stringify(mock.calls.map((call) => call.chunkIndex)) === JSON.stringify([1, 2, 2]),
+		`Memory 续跑调用序列应为 1,2,2，实际为 ${mock.calls.map((call) => call.chunkIndex).join(",")}`
+	);
+	assert(mock.calls.every((call) => call.totalChunks === 2), "Memory mock 收到的总分块数不一致");
+	assert(result.candidateCreatedAt === result.checkpointCreatedAt, "Memory 续跑后的候选 createdAt 未保持首次运行时间");
+	assert(result.candidateAssertionCount === 2, `Memory 续跑候选应包含 2 条断言，实际为 ${result.candidateAssertionCount}`);
+	assert(result.candidateRejectedAssertionCount === 1, "Memory 候选未记录被证据校验拒绝的断言数量");
+	assert(result.extraction.rejectedAssertionCount === 1, "Memory 提取结果未返回证据校验拒绝数量");
+	assert(result.manifestRun?.candidatePath === result.extraction.candidateFilePath, "Memory 清单未记录续跑生成的候选包");
+	assert(result.manifestRun?.meetingPath === result.extraction.meetingFilePath, "Memory 清单未记录续跑生成的会议页");
+	assert(result.reviewPath.endsWith(".review.md"), "Memory 续跑未生成审核 sidecar 路径");
+	assert(result.checkpointFileStillExists, "Memory 成功清理不应删除共享检查点存储文件");
+	assert(result.checkpointRemoved, "Memory 续跑成功后未清理当前转写稿检查点");
+}
+
+async function verifyMemoryReview(page) {
+	const candidatePath = "Echo Memory/02 记忆候选/2026-07-31 隔离审核 abc123.md";
+	const reviewPath = "Echo Memory/02 记忆候选/2026-07-31 隔离审核 abc123.review.md";
+	await page.evaluate(async ({ pluginId, candidatePath: nextCandidatePath }) => {
+		window.app.setting.close();
+		document.querySelectorAll(".notice").forEach((notice) => notice.remove());
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.memoryMode = "compile-profiles";
+		await plugin.saveSettings();
+		const manifestFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory.json");
+		const legacyManifest = JSON.parse(await window.app.vault.read(manifestFile));
+		delete legacyManifest.paths.aggregationsDir;
+		delete legacyManifest.paths.projectAggregation;
+		delete legacyManifest.paths.peopleAggregation;
+		delete legacyManifest.paths.timelineAggregation;
+		await window.app.vault.modify(manifestFile, `${JSON.stringify(legacyManifest, null, 2)}\n`);
+		const candidate = {
+			schemaVersion: 1,
+			id: "memory-ui-review",
+			fingerprint: "ui-review-fingerprint",
+			createdAt: "2026-07-31T00:00:00.000Z",
+			provider: "siliconflow",
+			model: "Qwen/Qwen3.5-4B",
+			traceIds: [],
+			source: {
+				transcriptPath: "Echo Notes UI Review.transcript.md",
+				transcriptTitle: "隔离审核",
+				analysisTemplateIds: ["work-minutes"]
+			},
+			assertions: [
+				{
+					id: "assertion-ui-user",
+					subjectType: "user",
+					subjectName: "测试用户",
+					category: "mission-goal",
+					predicate: "近期目标",
+					value: "完成初版",
+					confidence: 0.91,
+					evidenceQuote: "近期目标是完成初版",
+					observedAt: "2026-07-31T00:00:00.000Z",
+					sourcePath: "Echo Notes UI Review.transcript.md",
+					chunkIndex: 1
+				},
+				{
+					id: "assertion-ui-project",
+					subjectType: "project",
+					subjectName: "Echo Notes",
+					category: "status",
+					predicate: "状态",
+					value: "等待核验",
+					confidence: 0.82,
+					evidenceQuote: "Echo Notes 仍在等待核验",
+					observedAt: "2026-07-31T00:00:00.000Z",
+					sourcePath: "Echo Notes UI Review.transcript.md",
+					chunkIndex: 1
+				}
+			]
+		};
+		const content = [
+			"---",
+			"echo_memory_type: candidate",
+			"---",
+			"",
+			"# 记忆候选 · 隔离审核",
+			"",
+			"<!-- echo-memory-data:start -->",
+			"```json",
+			JSON.stringify(candidate, null, 2),
+			"```",
+			"<!-- echo-memory-data:end -->",
+			""
+		].join("\n");
+		const existing = window.app.vault.getAbstractFileByPath(nextCandidatePath);
+		const file = existing ?? await window.app.vault.create(nextCandidatePath, content);
+		if (existing) {
+			await window.app.vault.modify(existing, content);
+		}
+		await window.app.workspace.getLeaf(false).openFile(file);
+		await window.app.commands.executeCommandById(`${pluginId}:review-current-memory-candidate`);
+	}, { pluginId: PLUGIN_ID, candidatePath });
+
+	const modal = page.locator(".echo-notes-memory-review-modal");
+	await modal.waitFor({ state: "visible" });
+	assert((await modal.locator(".echo-notes-memory-review-item").count()) === 2, "候选审核弹窗断言数量不正确");
+	assert((await modal.locator(".echo-notes-memory-review-summary").textContent())?.includes("待审核 2"), "旧候选未迁移为待审核");
+
+	const layouts = [];
+	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			await modal.evaluate((element) => {
+				element.scrollTop = 0;
+			});
+			const metrics = await page.evaluate((requireTouchTargets) => {
+				const content = document.querySelector(".echo-notes-memory-review-modal");
+				const shell = content?.closest(".modal");
+				const items = [...(content?.querySelectorAll(".echo-notes-memory-review-item") ?? [])];
+				const textareas = [...(content?.querySelectorAll("textarea") ?? [])];
+				const buttons = [...(content?.querySelectorAll(".echo-notes-memory-review-bulk-actions button, .echo-notes-memory-review-actions button") ?? [])];
+				const firstSetting = content?.querySelector(".echo-notes-memory-review-item .setting-item");
+				const info = firstSetting?.querySelector(".setting-item-info");
+				const control = firstSetting?.querySelector(".setting-item-control");
+				return {
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+					shellFits: Boolean(shell) && shell.getBoundingClientRect().width <= window.innerWidth + 1,
+					itemsFit: items.every((item) => item.scrollWidth <= item.clientWidth + 1),
+					textareasFit: textareas.every((textarea) => textarea.getBoundingClientRect().right <= textarea.closest(".echo-notes-memory-review-item").getBoundingClientRect().right + 1),
+					controlsStacked: Boolean(info && control && control.getBoundingClientRect().top >= info.getBoundingClientRect().bottom),
+					touchTargetsMeetMinimum: !requireTouchTargets || buttons.every((button) => button.getBoundingClientRect().height >= 44)
+				};
+			}, viewport.mobileShell);
+			const context = `memory-review/${viewport.name}/${theme}`;
+			assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+			assert(metrics.contentOverflow <= 1, `${context} 审核内容出现横向溢出`);
+			assert(metrics.shellFits, `${context} 审核弹窗超出 viewport`);
+			assert(metrics.itemsFit && metrics.textareasFit, `${context} 审核卡片内容溢出`);
+			assert(metrics.controlsStacked === viewport.mobileShell, `${context} 审核控件响应式布局不正确`);
+			assert(metrics.touchTargetsMeetMinimum, `${context} 移动端审核按钮小于 44px`);
+			const fileName = `memory-review-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.locator(".modal").filter({ has: modal }).screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+			layouts.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await modal.locator("button").filter({ hasText: "全部批准" }).click();
+	const userItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "测试用户 · 近期目标" });
+	const projectItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "Echo Notes · 状态" });
+	await userItem.locator("textarea").nth(0).fill("完成可信审核闭环");
+	await userItem.locator("textarea").nth(1).fill("隔离 UI 已核验");
+	await projectItem.locator("select").selectOption("rejected");
+	await projectItem.locator("textarea").nth(1).fill("状态仍需外部证据");
+	await modal.locator("button").filter({ hasText: "保存审核" }).click();
+	await modal.waitFor({ state: "detached" });
+
+	const approvedState = await page.evaluate(async ({ reviewPath: nextReviewPath }) => {
+		const reviewFile = window.app.vault.getAbstractFileByPath(nextReviewPath);
+		const soulFile = window.app.vault.getAbstractFileByPath("Echo Memory/04 User/SOUL.md");
+		const reviewContent = reviewFile ? await window.app.vault.read(reviewFile) : "";
+		const soulContent = soulFile ? await window.app.vault.read(soulFile) : "";
+		return { reviewContent, soulContent };
+	}, { reviewPath });
+	assert(approvedState.reviewContent.includes('"status": "approved"'), "批准状态未写入审核 sidecar");
+	assert(approvedState.reviewContent.includes('"status": "rejected"'), "拒绝状态未写入审核 sidecar");
+	assert(approvedState.soulContent.includes("完成可信审核闭环"), "批准后的修正值未进入 User 画像");
+	assert(!approvedState.soulContent.includes("等待核验"), "拒绝断言不应进入画像");
+
+	await page.evaluate(async ({ pluginId, reviewPath: nextReviewPath }) => {
+		const reviewFile = window.app.vault.getAbstractFileByPath(nextReviewPath);
+		const content = await window.app.vault.read(reviewFile);
+		await window.app.vault.modify(
+			reviewFile,
+			content.replace("## 人工补充\n\n", "## 人工补充\n\n这段人工审核说明必须保留。\n\n")
+		);
+		await window.app.workspace.getLeaf(false).openFile(reviewFile);
+		await window.app.commands.executeCommandById(`${pluginId}:review-current-memory-candidate`);
+	}, { pluginId: PLUGIN_ID, reviewPath });
+	await modal.waitFor({ state: "visible" });
+	const reopenedUserItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "测试用户 · 近期目标" });
+	await reopenedUserItem.locator("select").selectOption("pending");
+	await reopenedUserItem.locator("textarea").nth(1).fill("等待再次确认");
+	await modal.locator("button").filter({ hasText: "保存审核" }).click();
+	await modal.waitFor({ state: "detached" });
+
+	const revertedState = await page.evaluate(async ({ reviewPath: nextReviewPath }) => {
+		const reviewFile = window.app.vault.getAbstractFileByPath(nextReviewPath);
+		const soulFile = window.app.vault.getAbstractFileByPath("Echo Memory/04 User/SOUL.md");
+		return {
+			reviewContent: await window.app.vault.read(reviewFile),
+			soulContent: await window.app.vault.read(soulFile)
+		};
+	}, { reviewPath });
+	assert(revertedState.reviewContent.includes("这段人工审核说明必须保留。"), "保存审核覆盖了人工正文");
+	assert(revertedState.reviewContent.includes('"status": "pending"'), "重置待审核状态未写入 sidecar");
+	assert(!revertedState.soulContent.includes("完成可信审核闭环"), "重置待审核后未从画像撤销派生内容");
+	assert(revertedState.soulContent.includes("暂无已批准的候选记忆"), "撤销后画像空状态不正确");
+	return layouts;
+}
+
+	async function verifyMemoryRelations(page) {
+	const setup = await page.evaluate(async (pluginId) => {
+		document.querySelectorAll(".notice").forEach((notice) => notice.remove());
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.memoryMode = "compile-profiles";
+		await plugin.saveSettings();
+		const definitions = [
+			{
+				candidatePath: "Echo Memory/02 记忆候选/2026-07-30 关系旧候选 old001.md",
+				id: "memory-ui-relation-old",
+				fingerprint: "ui-relation-old-fingerprint",
+				createdAt: "2026-07-30T08:00:00.000Z",
+				assertionId: "assertion-ui-relation-old",
+				value: "完成候选审核",
+				evidenceQuote: "近期目标是完成候选审核",
+				transcriptPath: "Echo Notes UI Relation Old.transcript.md"
+			},
+			{
+				candidatePath: "Echo Memory/02 记忆候选/2026-07-31 关系新候选 new001.md",
+				id: "memory-ui-relation-new",
+				fingerprint: "ui-relation-new-fingerprint",
+				createdAt: "2026-07-31T08:00:00.000Z",
+				assertionId: "assertion-ui-relation-new",
+				value: "完成关系模型",
+				evidenceQuote: "近期目标是完成关系模型",
+				transcriptPath: "Echo Notes UI Relation New.transcript.md"
+			}
+		];
+		const candidates = [];
+		for (const definition of definitions) {
+			const transcript = window.app.vault.getAbstractFileByPath(definition.transcriptPath) ??
+				await window.app.vault.create(
+					definition.transcriptPath,
+					`# 转写稿\n\n${definition.evidenceQuote}。\n`
+				);
+			const candidate = {
+				schemaVersion: 1,
+				id: definition.id,
+				fingerprint: definition.fingerprint,
+				createdAt: definition.createdAt,
+				provider: "ollama",
+				model: "isolated-relation-model",
+				traceIds: [],
+				source: {
+					transcriptPath: transcript.path,
+					transcriptTitle: transcript.basename,
+					analysisTemplateIds: []
+				},
+				assertions: [
+					{
+						id: definition.assertionId,
+						subjectType: "user",
+						subjectName: "测试用户",
+						category: "mission-goal",
+						predicate: "近期目标",
+						value: definition.value,
+						confidence: 0.95,
+						evidenceQuote: definition.evidenceQuote,
+						observedAt: definition.createdAt,
+						sourcePath: transcript.path,
+						chunkIndex: 1
+					},
+					{
+						id: `${definition.assertionId}-project`,
+						subjectType: "project",
+						subjectName: "Echo Notes",
+						category: "status",
+						predicate: "阶段",
+						value: definition.value,
+						confidence: 0.93,
+						evidenceQuote: definition.evidenceQuote,
+						observedAt: definition.createdAt,
+						sourcePath: transcript.path,
+						chunkIndex: 1
+					},
+					{
+						id: `${definition.assertionId}-person`,
+						subjectType: "person",
+						subjectName: "测试负责人",
+						category: "responsibility",
+						predicate: "负责事项",
+						value: definition.value,
+						confidence: 0.91,
+						evidenceQuote: definition.evidenceQuote,
+						observedAt: definition.createdAt,
+						sourcePath: transcript.path,
+						chunkIndex: 1
+					}
+				]
+			};
+			const content = [
+				"---",
+				"echo_memory_type: candidate",
+				"---",
+				"",
+				`# 记忆候选 · ${transcript.basename}`,
+				"",
+				"<!-- echo-memory-data:start -->",
+				"```json",
+				JSON.stringify(candidate, null, 2),
+				"```",
+				"<!-- echo-memory-data:end -->",
+				""
+			].join("\n");
+			const existing = window.app.vault.getAbstractFileByPath(definition.candidatePath);
+			const candidateFile = existing ?? await window.app.vault.create(definition.candidatePath, content);
+			if (existing) {
+				await window.app.vault.modify(existing, content);
+			}
+			const context = await plugin.memoryService.getReviewContext(plugin.settings, candidateFile);
+			await plugin.memoryService.saveMemoryReview(
+				plugin.settings,
+				definition.candidatePath,
+				candidate.assertions.map((assertion) => ({
+					assertionId: assertion.id,
+					status: "approved",
+					effectiveValue: assertion.value,
+					note: "隔离关系与聚合验证"
+				}))
+			);
+			candidates.push({
+				path: definition.candidatePath,
+				content: await window.app.vault.read(candidateFile),
+				reviewPath: context.reviewPath,
+				reviewContent: await window.app.vault.read(window.app.vault.getAbstractFileByPath(context.reviewPath))
+			});
+		}
+		const aggregationPaths = {
+			projects: "Echo Memory/05 聚合/项目.md",
+			people: "Echo Memory/05 聚合/人物.md",
+			timeline: "Echo Memory/05 聚合/时间线.md"
+		};
+		const projectAggregationFile = window.app.vault.getAbstractFileByPath(aggregationPaths.projects);
+		const projectAggregationContent = await window.app.vault.read(projectAggregationFile);
+		await window.app.vault.modify(
+			projectAggregationFile,
+			projectAggregationContent.replace("## 人工内容\n\n", "## 人工内容\n\n这段跨记录项目判断必须保留。\n\n")
+		);
+		await window.app.vault.create(
+			"Vault 外部聚合噪声.md",
+			"# 不应进入 Echo Memory\n\n外部噪声断言：不得扫描。\n"
+		);
+		const unreviewed = {
+			...definitions[0],
+			candidatePath: "Echo Memory/02 记忆候选/2026-07-29 关系未审核候选 pending001.md",
+			id: "memory-ui-relation-pending",
+			fingerprint: "ui-relation-pending-fingerprint",
+			assertionId: "assertion-ui-relation-pending",
+			value: "尚未审核的旧目标",
+			createdAt: "2026-07-29T08:00:00.000Z"
+		};
+		const unreviewedCandidate = {
+			schemaVersion: 1,
+			id: unreviewed.id,
+			fingerprint: unreviewed.fingerprint,
+			createdAt: unreviewed.createdAt,
+			provider: "ollama",
+			model: "isolated-relation-model",
+			traceIds: [],
+			source: {
+				transcriptPath: definitions[0].transcriptPath,
+				transcriptTitle: "Relation pending",
+				analysisTemplateIds: []
+			},
+			assertions: [{
+				id: unreviewed.assertionId,
+				subjectType: "user",
+				subjectName: "测试用户",
+				category: "mission-goal",
+				predicate: "近期目标",
+				value: unreviewed.value,
+				confidence: 0.95,
+				evidenceQuote: definitions[0].evidenceQuote,
+				observedAt: unreviewed.createdAt,
+				sourcePath: definitions[0].transcriptPath,
+				chunkIndex: 1
+			}]
+		};
+		await window.app.vault.create(unreviewed.candidatePath, [
+			"---",
+			"echo_memory_type: candidate",
+			"---",
+			"",
+			"<!-- echo-memory-data:start -->",
+			"```json",
+			JSON.stringify(unreviewedCandidate, null, 2),
+			"```",
+			"<!-- echo-memory-data:end -->",
+			""
+		].join("\n"));
+		const current = window.app.vault.getAbstractFileByPath(definitions[1].candidatePath);
+		await window.app.workspace.getLeaf(false).openFile(current);
+		await window.app.commands.executeCommandById(`${pluginId}:manage-current-memory-relations`);
+		return {
+			candidates,
+			unreviewedReviewPath: unreviewed.candidatePath.replace(/\.md$/i, ".review.md"),
+			aggregationPaths
+		};
+	}, PLUGIN_ID);
+
+	const modal = page.locator(".echo-notes-memory-relation-modal");
+	await modal.waitFor({ state: "visible" });
+	assert((await modal.locator(".echo-notes-memory-relation-editor select").count()) === 3, "记忆关系编辑器控件不完整");
+	assert((await modal.locator(".echo-notes-memory-relation-list .echo-notes-memory-relation-item").count()) === 0, "新候选不应已有关系");
+	assert(await page.evaluate((reviewPath) => !window.app.vault.getAbstractFileByPath(reviewPath), setup.unreviewedReviewPath), "打开关系管理意外补建了未审核 sidecar");
+
+	const layouts = [];
+	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			await modal.evaluate((element) => {
+				element.scrollTop = 0;
+			});
+			const metrics = await page.evaluate((requireTouchTargets) => {
+				const content = document.querySelector(".echo-notes-memory-relation-modal");
+				const shell = content?.closest(".modal");
+				const controls = [...(content?.querySelectorAll("select, textarea, input") ?? [])];
+				const buttons = [...(content?.querySelectorAll(".echo-notes-memory-relation-actions button, .echo-notes-memory-relation-item button") ?? [])];
+				const firstSetting = content?.querySelector(".echo-notes-memory-relation-editor .setting-item");
+				const info = firstSetting?.querySelector(".setting-item-info");
+				const control = firstSetting?.querySelector(".setting-item-control");
+				return {
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+					shellFits: Boolean(shell) && shell.getBoundingClientRect().width <= window.innerWidth + 1,
+					controlsFit: controls.every((element) => element.getBoundingClientRect().right <= content.getBoundingClientRect().right + 1),
+					controlsStacked: Boolean(info && control && control.getBoundingClientRect().top >= info.getBoundingClientRect().bottom),
+					touchTargetsMeetMinimum: !requireTouchTargets || buttons.every((button) => button.getBoundingClientRect().height >= 44)
+				};
+			}, viewport.mobileShell);
+			const context = `memory-relation/${viewport.name}/${theme}`;
+			assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+			assert(metrics.contentOverflow <= 1, `${context} 关系内容出现横向溢出`);
+			assert(metrics.shellFits && metrics.controlsFit, `${context} 关系弹窗或控件超出 viewport`);
+			assert(metrics.controlsStacked === viewport.mobileShell, `${context} 关系控件响应式布局不正确`);
+			assert(metrics.touchTargetsMeetMinimum, `${context} 移动端关系按钮小于 44px`);
+			const fileName = `memory-relation-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.locator(".modal").filter({ has: modal }).screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+			layouts.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	const relationTypeSetting = modal.locator(".setting-item").filter({ hasText: "关系类型" });
+	await relationTypeSetting.locator("select").selectOption("supersedes");
+	await modal.locator(".setting-item").filter({ hasText: "关系备注" }).locator("textarea").fill("新目标替代旧目标");
+	await modal.locator("button").filter({ hasText: "确认关系" }).click();
+	await modal.locator(".echo-notes-memory-relation-item").filter({ hasText: "替代旧记忆 · 生效" }).waitFor({ state: "visible" });
+
+	const activeState = await page.evaluate(async ({ candidates, aggregationPaths }) => {
+		const relationFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory-relations.json");
+		const soulFile = window.app.vault.getAbstractFileByPath("Echo Memory/04 User/SOUL.md");
+		const manifestFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory.json");
+		const homeFile = window.app.vault.getAbstractFileByPath("Echo Memory/00 首页.md");
+		return {
+			relationContent: await window.app.vault.read(relationFile),
+			soulContent: await window.app.vault.read(soulFile),
+			manifest: JSON.parse(await window.app.vault.read(manifestFile)),
+			homeContent: await window.app.vault.read(homeFile),
+			projectAggregation: await window.app.vault.read(window.app.vault.getAbstractFileByPath(aggregationPaths.projects)),
+			peopleAggregation: await window.app.vault.read(window.app.vault.getAbstractFileByPath(aggregationPaths.people)),
+			timelineAggregation: await window.app.vault.read(window.app.vault.getAbstractFileByPath(aggregationPaths.timeline)),
+			candidateContents: await Promise.all(candidates.map(async (candidate) =>
+				window.app.vault.read(window.app.vault.getAbstractFileByPath(candidate.path)))),
+			reviewContents: await Promise.all(candidates.map(async (candidate) =>
+				window.app.vault.read(window.app.vault.getAbstractFileByPath(candidate.reviewPath))))
+		};
+	}, setup);
+	const activeStore = JSON.parse(activeState.relationContent);
+	const activeRelation = Object.values(activeStore.relations)[0];
+	assert(activeRelation.status === "active", "确认后的记忆关系未处于生效状态");
+	assert(activeRelation.history.length === 1, "确认关系未写入首个历史事件");
+	assert(activeState.soulContent.includes("- **近期目标**：完成关系模型"), "替代关系的来源断言未进入画像");
+	assert(!activeState.soulContent.includes("- **近期目标**：完成候选审核"), "替代关系的目标断言仍作为事实留在画像");
+	assert(activeState.soulContent.includes(activeRelation.id), "画像未记录关系 ID");
+	assert(activeState.soulContent.includes("关联：近期目标：完成候选审核"), "画像未保留被替代记忆的审计回链");
+	assert(activeState.manifest.paths.aggregationsDir === "Echo Memory/05 聚合", "旧 Manifest 未补齐聚合目录路径");
+	assert(activeState.manifest.paths.timelineAggregation === setup.aggregationPaths.timeline, "旧 Manifest 未补齐时间线路径");
+	assert(activeState.homeContent.includes(`[[${setup.aggregationPaths.projects}|项目]]`), "Echo Memory 首页缺少项目聚合入口");
+	assert(activeState.homeContent.includes(`[[${setup.aggregationPaths.people}|人物]]`), "Echo Memory 首页缺少人物聚合入口");
+	assert(activeState.homeContent.includes(`[[${setup.aggregationPaths.timeline}|时间线]]`), "Echo Memory 首页缺少时间线入口");
+	assert(activeState.projectAggregation.includes("这段跨记录项目判断必须保留。"), "聚合重建覆盖了项目页人工内容");
+	assert(activeState.projectAggregation.includes("- 2026-07-30T08:00:00.000Z · **阶段**：完成候选审核"), "项目聚合缺少旧记录");
+	assert(activeState.projectAggregation.includes("- 2026-07-31T08:00:00.000Z · **阶段**：完成关系模型"), "项目聚合缺少新记录");
+	assert(activeState.projectAggregation.indexOf("完成候选审核") < activeState.projectAggregation.indexOf("完成关系模型"), "项目聚合时间排序不稳定");
+	assert(activeState.projectAggregation.includes("Echo Notes UI Relation Old.transcript.md|transcript"), "项目聚合缺少 transcript 回链");
+	assert(activeState.projectAggregation.includes(setup.candidates[0].reviewPath), "项目聚合缺少审核回链");
+	assert(activeState.peopleAggregation.includes("**负责事项**：完成候选审核"), "人物聚合缺少旧记录");
+	assert(activeState.peopleAggregation.includes("**负责事项**：完成关系模型"), "人物聚合缺少新记录");
+	assert(activeState.timelineAggregation.includes("**测试用户 · 近期目标**：完成关系模型"), "时间线缺少当前用户目标");
+	assert(!activeState.timelineAggregation.includes("**测试用户 · 近期目标**：完成候选审核"), "时间线未应用替代关系");
+	assert(activeState.timelineAggregation.includes(activeRelation.id), "时间线缺少关系 ID");
+	assert(!activeState.timelineAggregation.includes("尚未审核的旧目标"), "时间线纳入了未审核候选");
+	assert(!activeState.timelineAggregation.includes("外部噪声断言"), "聚合扫描了 Echo Memory 候选目录之外的笔记");
+	assert(JSON.stringify(activeState.candidateContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.content)), "确认关系改写了原始候选包");
+	assert(JSON.stringify(activeState.reviewContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.reviewContent)), "确认关系改写了审核 sidecar");
+	assert(await page.evaluate((reviewPath) => !window.app.vault.getAbstractFileByPath(reviewPath), setup.unreviewedReviewPath), "确认关系意外补建了未审核 sidecar");
+
+	const relationItem = modal.locator(".echo-notes-memory-relation-item").filter({ hasText: activeRelation.id });
+	await relationItem.locator('input[type="text"]').fill("旧目标重新生效");
+	await relationItem.locator("button").filter({ hasText: "撤销关系" }).click();
+	await modal.locator(".echo-notes-memory-relation-item").filter({ hasText: "替代旧记忆 · 已撤销" }).waitFor({ state: "visible" });
+
+	const revokedState = await page.evaluate(async ({ candidates, aggregationPaths }) => {
+		const relationFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory-relations.json");
+		const soulFile = window.app.vault.getAbstractFileByPath("Echo Memory/04 User/SOUL.md");
+		return {
+			relationContent: await window.app.vault.read(relationFile),
+			soulContent: await window.app.vault.read(soulFile),
+			projectAggregation: await window.app.vault.read(window.app.vault.getAbstractFileByPath(aggregationPaths.projects)),
+			timelineAggregation: await window.app.vault.read(window.app.vault.getAbstractFileByPath(aggregationPaths.timeline)),
+			candidateContents: await Promise.all(candidates.map(async (candidate) =>
+				window.app.vault.read(window.app.vault.getAbstractFileByPath(candidate.path)))),
+			reviewContents: await Promise.all(candidates.map(async (candidate) =>
+				window.app.vault.read(window.app.vault.getAbstractFileByPath(candidate.reviewPath))))
+		};
+	}, setup);
+	const revokedRelation = Object.values(JSON.parse(revokedState.relationContent).relations)[0];
+	assert(revokedRelation.status === "revoked", "撤销后的记忆关系状态不正确");
+	assert(revokedRelation.history.length === 2, "撤销关系未追加历史事件");
+	assert(revokedRelation.history[1].note === "旧目标重新生效", "撤销关系备注未写入历史");
+	assert(revokedState.soulContent.includes("- **近期目标**：完成关系模型"), "撤销关系后新目标意外消失");
+	assert(revokedState.soulContent.includes("- **近期目标**：完成候选审核"), "撤销关系后旧目标未恢复到画像");
+	assert(revokedState.timelineAggregation.includes("**测试用户 · 近期目标**：完成候选审核"), "撤销关系后旧目标未恢复到时间线");
+	assert(revokedState.projectAggregation.includes("这段跨记录项目判断必须保留。"), "撤销关系时覆盖了聚合人工内容");
+	assert(JSON.stringify(revokedState.candidateContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.content)), "撤销关系改写了原始候选包");
+	assert(JSON.stringify(revokedState.reviewContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.reviewContent)), "撤销关系改写了审核 sidecar");
+	assert(await page.evaluate((reviewPath) => !window.app.vault.getAbstractFileByPath(reviewPath), setup.unreviewedReviewPath), "撤销关系意外补建了未审核 sidecar");
+	await page.locator(".modal-close-button").last().click();
+	await modal.waitFor({ state: "detached" });
+	await page.evaluate(async (pluginId) => {
+		await window.app.commands.executeCommandById(`${pluginId}:open-echo-memory-timeline`);
+	}, PLUGIN_ID);
+	await page.waitForFunction(
+		(expectedPath) => window.app.workspace.getActiveFile()?.path === expectedPath,
+		setup.aggregationPaths.timeline
+	);
+		return layouts;
+	}
+
+	async function verifyMemoryContextPackage(page, providerMock) {
+		await page.evaluate(async (pluginId) => {
+			await window.app.commands.executeCommandById(`${pluginId}:create-personal-agent-context-package`);
+		}, PLUGIN_ID);
+		const modal = page.locator(".echo-notes-memory-context-modal");
+		await modal.waitFor({ state: "visible" });
+		await page.evaluate(() => document.querySelectorAll(".notice").forEach((notice) => notice.remove()));
+		assert((await modal.locator(".echo-notes-memory-context-editor select").count()) === 2, "上下文包项目和人物筛选控件不完整");
+		assert((await modal.locator(".echo-notes-memory-context-editor input").count()) === 3, "上下文包日期和预算控件不完整");
+		const initialSummary = await modal.locator(".echo-notes-memory-context-summary").textContent();
+		assert(initialSummary?.includes("匹配"), "上下文包缺少生成前预览摘要");
+
+		const layouts = [];
+		for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+			for (const theme of THEMES) {
+				await setViewportMode(page, viewport, theme);
+				await modal.evaluate((element) => {
+					element.scrollTop = 0;
+				});
+				const metrics = await page.evaluate((requireTouchTargets) => {
+					const content = document.querySelector(".echo-notes-memory-context-modal");
+					const shell = content?.closest(".modal");
+					const controls = [...(content?.querySelectorAll("select, input") ?? [])];
+					const buttons = [...(content?.querySelectorAll(".echo-notes-memory-context-actions button") ?? [])];
+					return {
+						documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+						contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+						shellFits: Boolean(shell) && shell.getBoundingClientRect().width <= window.innerWidth + 1,
+						controlsFit: controls.every((element) => element.getBoundingClientRect().right <= content.getBoundingClientRect().right + 1),
+						touchTargetsMeetMinimum: !requireTouchTargets || buttons.every((button) => button.getBoundingClientRect().height >= 44)
+					};
+				}, viewport.mobileShell);
+				const context = `memory-context/${viewport.name}/${theme}`;
+				assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+				assert(metrics.contentOverflow <= 1, `${context} 上下文内容出现横向溢出`);
+				assert(metrics.shellFits && metrics.controlsFit, `${context} 上下文弹窗或控件超出 viewport`);
+				assert(metrics.touchTargetsMeetMinimum, `${context} 移动端上下文按钮小于 44px`);
+				const fileName = `memory-context-${viewport.name}-${theme}.png`;
+				const screenshotPath = path.join(OUTPUT_DIR, fileName);
+				await page.locator(".modal").filter({ has: modal }).screenshot({ path: screenshotPath });
+				assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+				layouts.push({ viewport: viewport.name, theme, fileName, metrics });
+			}
+		}
+
+		await setViewportMode(page, VIEWPORTS[0], "light");
+		await modal.locator(".setting-item").filter({ hasText: "项目" }).locator("select").selectOption({ label: "Echo Notes" });
+		await modal.locator(".setting-item").filter({ hasText: "开始日期" }).locator("input").fill("2026-07-30");
+		await modal.locator(".setting-item").filter({ hasText: "结束日期" }).locator("input").fill("2026-07-31");
+		await modal.locator(".setting-item").filter({ hasText: "字符预算" }).locator("input").fill("4000");
+		const filteredSummary = await modal.locator(".echo-notes-memory-context-summary").textContent();
+		assert(filteredSummary?.includes("匹配 2"), `项目与日期筛选结果不正确：${filteredSummary}`);
+		assert(filteredSummary?.includes("/4000 字符"), `字符预算未应用：${filteredSummary}`);
+		const callsBeforeGeneration = providerMock.calls.length;
+		await modal.locator("button").filter({ hasText: "生成上下文包" }).click();
+		await modal.waitFor({ state: "detached" });
+		const generatedPath = await page.evaluate(() => window.app.workspace.getActiveFile()?.path ?? "");
+		assert(/^Echo Memory\/06 上下文包\/上下文 \d{4}-\d{2}-\d{2} [a-f0-9]+\.md$/.test(generatedPath), `上下文包路径不正确：${generatedPath}`);
+		const firstContent = await page.evaluate(async (targetPath) => {
+			const file = window.app.vault.getAbstractFileByPath(targetPath);
+			return file ? window.app.vault.read(file) : "";
+		}, generatedPath);
+		assert(firstContent.length <= 4_000, "上下文包超过字符预算");
+		assert(firstContent.includes("Echo Notes UI Relation Old.transcript.md|transcript"), "上下文包缺少 transcript 回链");
+		assert(firstContent.includes("候选审核"), "上下文包缺少已批准旧记录");
+		assert(firstContent.includes("关系模型"), "上下文包缺少已批准新记录");
+		assert(!firstContent.includes("尚未审核的旧目标"), "上下文包纳入了未审核候选");
+		assert(!firstContent.includes("外部噪声断言"), "上下文包扫描了候选目录之外的笔记");
+		assert(providerMock.calls.length === callsBeforeGeneration, "生成上下文包新增了外部 HTTP 请求");
+
+		await page.evaluate(async (targetPath) => {
+			const file = window.app.vault.getAbstractFileByPath(targetPath);
+			const content = await window.app.vault.read(file);
+			await window.app.vault.modify(file, content.replace("## 人工内容\n\n", "## 人工内容\n\n这段上下文使用说明必须保留。\n\n"));
+		}, generatedPath);
+		await page.evaluate(async (pluginId) => {
+			await window.app.commands.executeCommandById(`${pluginId}:create-personal-agent-context-package`);
+		}, PLUGIN_ID);
+		await modal.waitFor({ state: "visible" });
+		await modal.locator(".setting-item").filter({ hasText: "项目" }).locator("select").selectOption({ label: "Echo Notes" });
+		await modal.locator(".setting-item").filter({ hasText: "开始日期" }).locator("input").fill("2026-07-30");
+		await modal.locator(".setting-item").filter({ hasText: "结束日期" }).locator("input").fill("2026-07-31");
+		await modal.locator(".setting-item").filter({ hasText: "字符预算" }).locator("input").fill("4000");
+		await modal.locator("button").filter({ hasText: "生成上下文包" }).click();
+		await modal.waitFor({ state: "detached" });
+		const regeneratedContent = await page.evaluate(async (targetPath) => {
+			const file = window.app.vault.getAbstractFileByPath(targetPath);
+			return file ? window.app.vault.read(file) : "";
+		}, generatedPath);
+		assert(regeneratedContent.includes("这段上下文使用说明必须保留。"), "重新生成上下文包覆盖了人工正文");
+		assert(providerMock.calls.length === callsBeforeGeneration, "重复生成上下文包新增了外部 HTTP 请求");
+		return layouts;
+	}
+
+	async function setViewportMode(page, viewport, theme) {
 	await page.setViewportSize({ width: viewport.width, height: viewport.height });
 	await page.evaluate(
 		({ mobileShellClass, mobileShell, nextTheme }) => {
@@ -1109,6 +1939,7 @@ let isolatedProfile;
 let obsidianProcess;
 let getObsidianOutput = () => "";
 let browser;
+let memoryProviderMock;
 const verificationStartedAt = Date.now();
 
 try {
@@ -1120,6 +1951,7 @@ try {
 	);
 
 	await prepareOutputDirectory();
+	memoryProviderMock = await startMemoryProviderMock();
 	const isolated = await createIsolatedProfile(obsidianAsar);
 	isolatedProfile = isolated.profileDir;
 	const port = await reservePort();
@@ -1167,6 +1999,10 @@ try {
 	const screenshots = await captureViewports(page);
 	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
 	await verifyMemoryInitialization(page);
+	await verifyMemoryCheckpointResume(page, memoryProviderMock);
+		const memoryReviewLayouts = await verifyMemoryReview(page);
+		const memoryRelationLayouts = await verifyMemoryRelations(page);
+		const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
 	assert(pageErrors.length === 0, `设置页出现运行时错误：${pageErrors.join(" | ")}`);
 
 	const summary = {
@@ -1184,10 +2020,18 @@ try {
 			renderStatePersistence: true,
 			templateGrouping: true,
 			memoryInitialization: true,
+			memoryCheckpointResume: true,
+			memoryReview: true,
+			memoryRelations: true,
+			memoryAggregations: true,
+			memoryContextPackages: true,
 			runtimeErrors: pageErrors.length
 		},
 		screenshots,
-		templateLayouts
+		templateLayouts,
+		memoryReviewLayouts,
+		memoryRelationLayouts,
+		memoryContextLayouts
 	};
 	await writeFile(
 		path.join(OUTPUT_DIR, "summary.json"),
@@ -1196,7 +2040,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);
@@ -1210,5 +2054,6 @@ try {
 		await browser.close().catch(() => undefined);
 	}
 	await stopChild(obsidianProcess);
+	await memoryProviderMock?.close().catch(() => undefined);
 	await removeIsolatedProfile(isolatedProfile);
 }

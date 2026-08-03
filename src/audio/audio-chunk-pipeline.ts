@@ -27,6 +27,7 @@ export interface AudioChunkPipelineResult<RawResponse = unknown> {
 export interface AudioChunkPipelineInput<Chunk extends AudioChunk, RawResponse = unknown> {
 	createChunks: () => Promise<Chunk[]>;
 	transcribeChunk: (chunk: Chunk) => Promise<AudioChunkTranscriptionResult<RawResponse>>;
+	initialSegments?: readonly TranscriptionSegment[];
 	onProgress?: (progress: TranscriptionProgress) => Promise<void> | void;
 	releaseChunkBuffer?: boolean;
 }
@@ -47,21 +48,24 @@ export async function runAudioChunkPipeline<Chunk extends AudioChunk, RawRespons
 ): Promise<AudioChunkPipelineResult<RawResponse>> {
 	await input.onProgress?.({
 		type: "long-audio-preparing",
-		segments: []
+		segments: cloneSegments(input.initialSegments ?? [])
 	});
 
 	const chunks = await input.createChunks();
-	const completedSegments: TranscriptionSegment[] = [];
+	const completedSegments = getFixedResumePrefix(chunks, input.initialSegments ?? []);
 	const rawSegments: RawResponse[] = [];
+	for (let index = 0; index < completedSegments.length; index += 1) {
+		releaseIfNeeded(input, chunks[index]);
+	}
 
 	await input.onProgress?.({
 		type: "long-audio-started",
 		totalSegments: chunks.length,
-		segments: []
+		segments: cloneAndNormalizeCompletedSegments(completedSegments, chunks.length)
 	});
 
 	try {
-		for (const chunk of chunks) {
+		for (const chunk of chunks.slice(completedSegments.length)) {
 			await input.onProgress?.({
 				type: "segment-started",
 				segment: chunk,
@@ -121,12 +125,13 @@ export async function runAdaptiveAudioChunkPipeline<Chunk extends AudioChunk, Ra
 ): Promise<AudioChunkPipelineResult<RawResponse>> {
 	await input.onProgress?.({
 		type: "long-audio-preparing",
-		segments: []
+		segments: cloneSegments(input.initialSegments ?? [])
 	});
 
 	const initialChunks = await input.createChunks();
-	const pending = initialChunks.map((chunk) => ({ chunk, splitDepth: 0 }));
-	const completedSegments: TranscriptionSegment[] = [];
+	const prepared = await prepareAdaptiveResume(input, initialChunks);
+	const pending = prepared.pending;
+	const completedSegments = prepared.completedSegments;
 	const rawSegments: RawResponse[] = [];
 	const sleep =
 		input.sleep ??
@@ -135,8 +140,11 @@ export async function runAdaptiveAudioChunkPipeline<Chunk extends AudioChunk, Ra
 	renumberPendingChunks(pending, completedSegments.length);
 	await input.onProgress?.({
 		type: "long-audio-started",
-		totalSegments: pending.length,
-		segments: []
+		totalSegments: completedSegments.length + pending.length,
+		segments: cloneAndNormalizeCompletedSegments(
+			completedSegments,
+			completedSegments.length + pending.length
+		)
 	});
 
 	try {
@@ -302,6 +310,140 @@ function cloneAndNormalizeCompletedSegments(
 		total
 	}));
 }
+
+function getFixedResumePrefix<Chunk extends AudioChunk>(
+	chunks: readonly Chunk[],
+	initialSegments: readonly TranscriptionSegment[]
+): TranscriptionSegment[] {
+	const resumeSegments = getContinuousResumePrefix(initialSegments, chunks.at(-1)?.endSeconds);
+	const completed: TranscriptionSegment[] = [];
+	for (let index = 0; index < Math.min(chunks.length, resumeSegments.length); index += 1) {
+		if (!rangesMatch(chunks[index], resumeSegments[index])) {
+			break;
+		}
+		completed.push(cloneSegment(resumeSegments[index]));
+	}
+	return completed;
+}
+
+async function prepareAdaptiveResume<Chunk extends AudioChunk, RawResponse>(
+	input: AdaptiveAudioChunkPipelineInput<Chunk, RawResponse>,
+	initialChunks: Chunk[]
+): Promise<{
+	completedSegments: TranscriptionSegment[];
+	pending: Array<{ chunk: Chunk; splitDepth: number }>;
+}> {
+	const resumeSegments = getContinuousResumePrefix(
+		input.initialSegments ?? [],
+		initialChunks.at(-1)?.endSeconds
+	);
+	const completedSegments: TranscriptionSegment[] = [];
+	const pending: Array<{ chunk: Chunk; splitDepth: number }> = [];
+	let resumeIndex = 0;
+	let resumeEnabled = resumeSegments.length > 0;
+
+	const prepareChunk = async (chunk: Chunk, splitDepth: number): Promise<void> => {
+		const resumeSegment = resumeSegments[resumeIndex];
+		if (!resumeEnabled || !resumeSegment) {
+			resumeEnabled = false;
+			pending.push({ chunk, splitDepth });
+			return;
+		}
+		if (rangesMatch(chunk, resumeSegment)) {
+			completedSegments.push(cloneSegment(resumeSegment));
+			resumeIndex += 1;
+			releaseIfNeeded(input, chunk);
+			return;
+		}
+
+		const durationSeconds = chunk.endSeconds - chunk.startSeconds;
+		const canRecreatePriorSplit = rangesStartTogether(chunk, resumeSegment) &&
+			resumeSegment.endSeconds < chunk.endSeconds - RANGE_TOLERANCE_SECONDS &&
+			splitDepth < input.maxSplitDepth &&
+			durationSeconds >= input.minSegmentSeconds * 2;
+		if (!canRecreatePriorSplit) {
+			resumeEnabled = false;
+			pending.push({ chunk, splitDepth });
+			return;
+		}
+
+		let replacements: Chunk[];
+		try {
+			replacements = await input.splitChunk(chunk);
+		} catch {
+			resumeEnabled = false;
+			pending.push({ chunk, splitDepth });
+			return;
+		}
+		if (replacements.length < 2) {
+			resumeEnabled = false;
+			pending.push({ chunk, splitDepth });
+			return;
+		}
+		releaseIfNeeded(input, chunk);
+		for (const replacement of replacements) {
+			await prepareChunk(replacement, splitDepth + 1);
+		}
+	};
+
+	for (const chunk of initialChunks) {
+		await prepareChunk(chunk, 0);
+	}
+	return { completedSegments, pending };
+}
+
+function getContinuousResumePrefix(
+	segments: readonly TranscriptionSegment[],
+	maximumEndSeconds: number | undefined
+): TranscriptionSegment[] {
+	if (segments.length === 0 || maximumEndSeconds === undefined) {
+		return [];
+	}
+	const completed: TranscriptionSegment[] = [];
+	let expectedStart = 0;
+	for (const segment of segments) {
+		if (
+			!Number.isFinite(segment.startSeconds) ||
+			!Number.isFinite(segment.endSeconds) ||
+			segment.endSeconds <= segment.startSeconds ||
+			segment.endSeconds > maximumEndSeconds + RANGE_TOLERANCE_SECONDS ||
+			Math.abs(segment.startSeconds - expectedStart) > RANGE_TOLERANCE_SECONDS
+		) {
+			break;
+		}
+		completed.push(cloneSegment(segment));
+		expectedStart = segment.endSeconds;
+	}
+	return completed;
+}
+
+function rangesMatch(
+	left: Pick<TranscriptionSegmentRange, "startSeconds" | "endSeconds">,
+	right: Pick<TranscriptionSegmentRange, "startSeconds" | "endSeconds">
+): boolean {
+	return rangesStartTogether(left, right) &&
+		Math.abs(left.endSeconds - right.endSeconds) <= RANGE_TOLERANCE_SECONDS;
+}
+
+function rangesStartTogether(
+	left: Pick<TranscriptionSegmentRange, "startSeconds">,
+	right: Pick<TranscriptionSegmentRange, "startSeconds">
+): boolean {
+	return Math.abs(left.startSeconds - right.startSeconds) <= RANGE_TOLERANCE_SECONDS;
+}
+
+function cloneSegments(segments: readonly TranscriptionSegment[]): TranscriptionSegment[] {
+	return segments.map(cloneSegment);
+}
+
+function cloneSegment(segment: TranscriptionSegment): TranscriptionSegment {
+	return {
+		...segment,
+		utterances: segment.utterances?.map((utterance) => ({ ...utterance }))
+	};
+}
+
+const RANGE_TOLERANCE_SECONDS = 0.001;
 
 function readHttpStatus(error: unknown): number | undefined {
 	if (!error || typeof error !== "object" || !("httpStatus" in error)) {

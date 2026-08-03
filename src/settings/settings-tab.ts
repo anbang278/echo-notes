@@ -1359,10 +1359,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderMemoryProcessingSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("沉淀模式")
-			.setDesc("候选包始终作为事实源；自动编译模式会额外更新 user、人物、组织和项目画像的托管区块。")
+			.setDesc("候选包与审核 sidecar 始终作为事实源；自动编译模式会在保存审核后，用已批准断言更新画像托管区块。")
 			.addDropdown((dropdown) => dropdown
-				.addOption("candidates-only", "会议页 + 候选包（默认）")
-				.addOption("compile-profiles", "会议页 + 候选包 + 自动编译画像")
+				.addOption("candidates-only", "会议页 + 候选包 + 审核（默认）")
+				.addOption("compile-profiles", "审核后自动编译画像")
 				.setValue(this.plugin.settings.memoryMode)
 				.onChange(async (value) => {
 					this.plugin.settings.memoryMode = value as MemoryMode;
@@ -1398,23 +1398,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(containerEl)
-			.setName("画像编译最低置信度")
-			.setDesc("范围 0.75～1，默认 0.75。低于阈值的断言仍保留在候选包，但不会进入画像。")
-			.addText((text) => text
-				.setPlaceholder("0.75")
-				.setValue(String(this.plugin.settings.memoryMinimumConfidence))
-				.onChange(async (value) => {
-					const parsed = Number(value);
-					if (!Number.isFinite(parsed)) {
-						return;
-					}
-					this.plugin.settings.memoryMinimumConfidence = Math.min(1, Math.max(0.75, parsed));
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName("从候选包重建画像")
-			.setDesc("只读取配置根目录内的候选包，重写画像托管区块，不修改人工正文。")
+			.setName("从候选包重建画像与聚合")
+			.setDesc("只读取配置根目录内已批准的断言和关系，重写画像与跨记录视图托管区块，不修改人工正文。")
 			.addButton((button) => button
 				.setButtonText("立即重建")
 				.setDisabled(!this.plugin.settings.memoryInitialized)

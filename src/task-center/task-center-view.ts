@@ -95,7 +95,11 @@ export class EchoNotesTaskCenterView extends ItemView {
 		}
 		this.renderMeta(metaEl, "耗时", formatTaskElapsedTime(task));
 		if (task.totalSegments) {
-			this.renderMeta(metaEl, "分段", `${task.currentSegment ?? 0}/${task.totalSegments}`);
+			this.renderMeta(
+				metaEl,
+				task.kind === "transcription" ? "分段" : "分块",
+				`${task.currentSegment ?? 0}/${task.totalSegments}`
+			);
 		}
 		if (task.sourcePath) {
 			this.renderMeta(metaEl, "来源", task.sourcePath);

@@ -11,6 +11,14 @@ import {
 	renderTranscriptAnalysisBlock
 } from "./analysis-output";
 import type { AnalysisResult } from "./analysis-provider";
+import type { AnalysisTextChunk } from "./analysis-chunking";
+import {
+	readResumableAnalysisResults,
+	removeAnalysisCheckpoint,
+	upsertAnalysisCheckpoint,
+	type AnalysisCheckpoint,
+	type AnalysisCheckpointIdentity
+} from "./analysis-checkpoint";
 
 export class AnalysisService {
 	private app: App;
@@ -49,6 +57,23 @@ export class AnalysisService {
 				[formatSectionHeading(copy.transcriptHeading, transcriptTitle), copy.transcriptHeading]
 			)
 		);
+	}
+
+	async readResumableChunkResults(
+		transcriptFile: TFile,
+		identity: AnalysisCheckpointIdentity,
+		chunks: readonly AnalysisTextChunk[]
+	): Promise<AnalysisResult[]> {
+		const content = await this.app.vault.cachedRead(transcriptFile);
+		return readResumableAnalysisResults(content, identity, chunks);
+	}
+
+	async writeAnalysisCheckpoint(transcriptFile: TFile, checkpoint: AnalysisCheckpoint): Promise<void> {
+		await this.app.vault.process(transcriptFile, (content) => upsertAnalysisCheckpoint(content, checkpoint));
+	}
+
+	async clearAnalysisCheckpoint(transcriptFile: TFile, templateId: string): Promise<void> {
+		await this.app.vault.process(transcriptFile, (content) => removeAnalysisCheckpoint(content, templateId));
 	}
 }
 

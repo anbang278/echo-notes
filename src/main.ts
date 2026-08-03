@@ -14,9 +14,16 @@ import {
 } from "obsidian";
 import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
 import type { AnalysisResult, ChunkedAnalysisProvider } from "./analysis/analysis-provider";
+import { analyzeChunkSequence } from "./analysis/analysis-chunked-service";
 import { AnalysisService } from "./analysis/analysis-service";
 import { diagnoseAnalysisProviderSettings } from "./analysis/analysis-diagnostics";
 import { splitAnalysisText, estimateAnalysisTextTokens } from "./analysis/analysis-chunking";
+import {
+	ANALYSIS_CHECKPOINT_MAX_CHUNKS,
+	createAnalysisCheckpoint,
+	createAnalysisCheckpointIdentity,
+	prepareAnalysisCheckpointResult
+} from "./analysis/analysis-checkpoint";
 import {
 	getAnalysisContextAroundAudioMatch,
 	getDefaultAnalysisTemplate,
@@ -41,6 +48,9 @@ import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
 import { MemoryInitializationModal } from "./memory/memory-initialization-modal";
+import { MemoryContextModal } from "./memory/memory-context-modal";
+import { MemoryRelationModal } from "./memory/memory-relation-modal";
+import { MemoryReviewModal } from "./memory/memory-review-modal";
 import { MemoryService } from "./memory/memory-service";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
@@ -84,13 +94,22 @@ import {
 	type UploadPreviewAudioFile
 } from "./security/upload-preview";
 import { EchoNotesSettingTab } from "./settings/settings-tab";
-import { createTaskId, TaskCenterStore, type EchoNotesTask } from "./task-center/task-center-store";
+import {
+	createTaskCenterState,
+	createTaskId,
+	markInterruptedTasks,
+	TaskCenterStore,
+	type EchoNotesTask,
+	type EchoNotesTaskRecovery,
+	type EchoNotesTaskRetry
+} from "./task-center/task-center-store";
 import { ECHO_NOTES_TASK_CENTER_VIEW_TYPE, EchoNotesTaskCenterView } from "./task-center/task-center-view";
 import {
 	markTranscriptAnalysisDone,
 	markTranscriptAnalysisFailed,
 	markTranscriptAnalysisPending
 } from "./transcript/transcript-analysis-metadata";
+import { createTranscriptionCheckpointIdentity } from "./transcript/transcript-checkpoint";
 import { TranscriptService } from "./transcript/transcript-service";
 
 const LEGACY_API_KEY_SECRET_ID = "echo-notes-api-key";
@@ -111,7 +130,11 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"analyze-current-transcript-with-template",
 	"initialize-echo-memory",
 	"extract-memory-from-current-transcript",
+	"review-current-memory-candidate",
+	"manage-current-memory-relations",
 	"open-echo-memory-home",
+	"open-echo-memory-timeline",
+	"create-personal-agent-context-package",
 	"rebuild-memory-profiles"
 ];
 
@@ -198,11 +221,17 @@ export default class EchoNotesPlugin extends Plugin {
 	private realtimeRibbonEl: HTMLElement | null = null;
 	private realtimeStatusEl: HTMLElement | null = null;
 	private realtimeStatusTimer: number | null = null;
+	private taskCenterPersistenceTimer: number | null = null;
+	private unsubscribeTaskCenterPersistence: (() => void) | null = null;
 	private loadedAt = Date.now();
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.refreshServices();
+		this.unsubscribeTaskCenterPersistence = this.taskCenter.subscribe(() => {
+			this.scheduleTaskCenterPersistence();
+		});
+		this.restoreTaskCenter();
 		this.addSettingTab(new EchoNotesSettingTab(this.app, this));
 		this.registerView(ECHO_NOTES_TASK_CENTER_VIEW_TYPE, (leaf) => new EchoNotesTaskCenterView(leaf, this));
 		this.realtimeRibbonEl = this.addRibbonIcon("audio-lines", "开始 Echo Notes 实时转写", () => {
@@ -229,6 +258,15 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		if (this.taskCenterPersistenceTimer !== null) {
+			window.clearTimeout(this.taskCenterPersistenceTimer);
+			this.taskCenterPersistenceTimer = null;
+		}
+		void this.persistTaskCenter().catch((error) => {
+			this.log("持久化 Task Center 状态失败", error);
+		});
+		this.unsubscribeTaskCenterPersistence?.();
+		this.unsubscribeTaskCenterPersistence = null;
 		for (const timer of this.markdownDebounceTimers.values()) {
 			window.clearTimeout(timer);
 		}
@@ -261,6 +299,7 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	async saveSettings(): Promise<void> {
+		this.settings.taskCenterState = createTaskCenterState(this.taskCenter.getTasks());
 		this.settings = normalizeEchoNotesSettings(this.settings);
 		delete this.settings.apiKey;
 		delete this.settings.analysisApiKey;
@@ -300,6 +339,60 @@ export default class EchoNotesPlugin extends Plugin {
 
 	clearFinishedTaskCenterTasks(): void {
 		this.taskCenter.clearFinishedTasks();
+	}
+
+	private restoreTaskCenter(): void {
+		const restoredTasks = markInterruptedTasks(this.settings.taskCenterState.tasks).map((task): EchoNotesTask => ({
+			...task,
+			retry: this.createTaskRecoveryRetry(task.recovery)
+		}));
+		this.taskCenter.restoreTasks(restoredTasks);
+	}
+
+	private createTaskRecoveryRetry(recovery: EchoNotesTaskRecovery | undefined): EchoNotesTaskRetry | undefined {
+		if (!recovery) {
+			return undefined;
+		}
+		switch (recovery.kind) {
+			case "transcription":
+				return {
+					label: "重试转写",
+					run: () => this.retryTranscriptionTask(
+						recovery.audioPath,
+						recovery.sourcePath,
+						recovery.audioLinkPath
+					)
+				};
+			case "analysis":
+				return {
+					label: "重试分析",
+					run: () => this.retryAnalysisTask(recovery.transcriptPath, recovery.templateId)
+				};
+			case "memory-extraction":
+				return {
+					label: "重试记忆提取",
+					run: () => this.retryMemoryTask(recovery.transcriptPath, recovery.analysisTemplateIds)
+				};
+			case "memory-rebuild":
+				return { label: "重试重建", run: () => this.rebuildMemoryProfiles() };
+		}
+	}
+
+	private scheduleTaskCenterPersistence(): void {
+		if (this.taskCenterPersistenceTimer !== null) {
+			return;
+		}
+		this.taskCenterPersistenceTimer = window.setTimeout(() => {
+			this.taskCenterPersistenceTimer = null;
+			void this.persistTaskCenter().catch((error) => {
+				this.log("持久化 Task Center 状态失败", error);
+			});
+		}, 1000);
+	}
+
+	private async persistTaskCenter(): Promise<void> {
+		this.settings.taskCenterState = createTaskCenterState(this.taskCenter.getTasks());
+		await this.saveData(this.settings);
 	}
 
 	async openTaskCenterTask(task: EchoNotesTask): Promise<void> {
@@ -499,6 +592,38 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	async openMemoryTimeline(): Promise<void> {
+		try {
+			const timelineFile = await this.memoryService.getTimelineFile(this.settings);
+			await this.app.workspace.getLeaf(false).openFile(timelineFile);
+		} catch (error) {
+			new Notice(getErrorMessage(error));
+		}
+	}
+
+	async openPersonalAgentContextPackage(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		try {
+			const context = await this.memoryService.getMemoryContextPackageContext(this.settings);
+			new MemoryContextModal(this.app, context.entries, context.choices, context.language, {
+				onGenerate: async (options) => {
+					const result = await this.memoryService.createMemoryContextPackage(this.settings, options);
+					const file = this.app.vault.getAbstractFileByPath(result.path);
+					if (!(file instanceof TFile)) {
+						throw new Error(`上下文包已生成，但文件不存在：${result.path}`);
+					}
+					await this.app.workspace.getLeaf(false).openFile(file);
+					new Notice(`Personal Agent 上下文包已生成：${result.preview.includedCount}/${result.preview.matchingCount} 条记忆。`);
+				}
+			}).open();
+		} catch (error) {
+			new Notice(`无法打开 Personal Agent 上下文包：${getErrorMessage(error)}`);
+		}
+	}
+
 	async rebuildMemoryProfiles(): Promise<void> {
 		if (!this.settings.memoryInitialized) {
 			new Notice("请先初始化 Echo Memory。");
@@ -508,12 +633,13 @@ export default class EchoNotesPlugin extends Plugin {
 		this.taskCenter.upsertTask({
 			id: taskId,
 			kind: "memory",
-			title: "重建 Echo Memory 画像",
+			title: "重建 Echo Memory 画像与聚合视图",
 			status: "running",
 			stage: "正在读取记忆候选包",
 			targetPath: this.settings.memoryRootFolder,
 			provider: "本地编译器",
 			model: "候选包 Schema v1",
+			recovery: { kind: "memory-rebuild" },
 			completedAt: undefined,
 			error: undefined,
 			retry: { label: "重试重建", run: () => this.rebuildMemoryProfiles() }
@@ -523,20 +649,104 @@ export default class EchoNotesPlugin extends Plugin {
 			const homeFile = await this.memoryService.getHomeFile(this.settings);
 			this.taskCenter.updateTask(taskId, {
 				status: "success",
-				stage: `已重建 ${count} 份画像`,
+				stage: `已重建 ${count} 份画像和 3 份聚合视图`,
 				outputPath: homeFile.path,
 				completedAt: Date.now()
 			});
-			new Notice(`Echo Memory 已从候选包重建 ${count} 份画像。`);
+			new Notice(`Echo Memory 已从候选包重建 ${count} 份画像和 3 份聚合视图。`);
 		} catch (error) {
 			const message = getErrorMessage(error);
 			this.taskCenter.updateTask(taskId, {
 				status: "failed",
-				stage: "画像重建失败",
+				stage: "画像与聚合视图重建失败",
 				error: message,
 				completedAt: Date.now()
 			});
-			new Notice(`Echo Memory 画像重建失败：${message}`);
+			new Notice(`Echo Memory 画像与聚合视图重建失败：${message}`);
+		}
+	}
+
+	async reviewCurrentMemoryCandidate(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const currentFile = this.app.workspace.getActiveFile();
+		if (!currentFile) {
+			new Notice("请先打开一个 Echo Memory 候选包或审核文件。");
+			return;
+		}
+		try {
+			const context = await this.memoryService.getReviewContext(this.settings, currentFile);
+			new MemoryReviewModal(this.app, context.candidate, context.review, async (updates) => {
+				const result = await this.memoryService.saveMemoryReview(this.settings, context.candidatePath, updates);
+				const reviewFile = this.app.vault.getAbstractFileByPath(result.reviewPath);
+				if (reviewFile instanceof TFile) {
+					await this.app.workspace.getLeaf(false).openFile(reviewFile);
+				}
+				const compilation = result.compiledProfiles === undefined
+					? "画像与聚合视图未自动重建"
+					: `已重建 ${result.compiledProfiles} 份画像和 3 份聚合视图`;
+				new Notice(
+					`审核已保存：批准 ${result.counts.approved} 条，拒绝 ${result.counts.rejected} 条，待审核 ${result.counts.pending} 条；${compilation}。`
+				);
+			}).open();
+		} catch (error) {
+			new Notice(`无法打开候选审核：${getErrorMessage(error)}`);
+		}
+	}
+
+	async manageCurrentMemoryRelations(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const currentFile = this.app.workspace.getActiveFile();
+		if (!currentFile) {
+			new Notice("请先打开一个 Echo Memory 候选包或审核文件。");
+			return;
+		}
+		try {
+			const context = await this.memoryService.getMemoryRelationContext(this.settings, currentFile);
+			const reloadContext = async () => {
+				const candidateFile = this.app.vault.getAbstractFileByPath(context.candidatePath);
+				if (!(candidateFile instanceof TFile)) {
+					throw new Error(`记忆候选包不存在：${context.candidatePath}`);
+				}
+				return this.memoryService.getMemoryRelationContext(this.settings, candidateFile);
+			};
+			new MemoryRelationModal(this.app, context, {
+				onConfirm: async (input) => {
+					const result = await this.memoryService.confirmMemoryRelation(
+						this.settings,
+						context.candidatePath,
+						input.type,
+						input.source,
+						input.target,
+						input.note
+					);
+					const compilation = result.compiledProfiles === undefined
+						? "画像与聚合视图未自动重建"
+						: `已重建 ${result.compiledProfiles} 份画像和 3 份聚合视图`;
+					new Notice(`记忆关系已确认：${compilation}。`);
+					return reloadContext();
+				},
+				onRevoke: async (relationId, note) => {
+					const result = await this.memoryService.revokeMemoryRelation(
+						this.settings,
+						context.candidatePath,
+						relationId,
+						note
+					);
+					const compilation = result.compiledProfiles === undefined
+						? "画像与聚合视图未自动重建"
+						: `已重建 ${result.compiledProfiles} 份画像和 3 份聚合视图`;
+					new Notice(`记忆关系已撤销：${compilation}。`);
+					return reloadContext();
+				}
+			}).open();
+		} catch (error) {
+			new Notice(`无法管理记忆关系：${getErrorMessage(error)}`);
 		}
 	}
 
@@ -634,6 +844,22 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "review-current-memory-candidate",
+			name: "Review current memory candidate",
+			callback: () => {
+				void this.reviewCurrentMemoryCandidate();
+			}
+		});
+
+		this.addCommand({
+			id: "manage-current-memory-relations",
+			name: "Manage current memory relations",
+			callback: () => {
+				void this.manageCurrentMemoryRelations();
+			}
+		});
+
+		this.addCommand({
 			id: "open-echo-memory-home",
 			name: "Open Echo Memory home",
 			callback: () => {
@@ -642,8 +868,24 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "open-echo-memory-timeline",
+			name: "Open Echo Memory timeline",
+			callback: () => {
+				void this.openMemoryTimeline();
+			}
+		});
+
+		this.addCommand({
+			id: "create-personal-agent-context-package",
+			name: "Create personal agent context package",
+			callback: () => {
+				void this.openPersonalAgentContextPackage();
+			}
+		});
+
+		this.addCommand({
 			id: "rebuild-memory-profiles",
-			name: "Rebuild memory profiles from candidates",
+			name: "Rebuild memory profiles and aggregations from candidates",
 			callback: () => {
 				void this.rebuildMemoryProfiles();
 			}
@@ -978,6 +1220,7 @@ export default class EchoNotesPlugin extends Plugin {
 		options: ProcessAudioOptions
 	): Promise<ProcessAudioResult | null> {
 		const transcriptionConfig = this.settings.offlineTranscription;
+		const checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
 		let notifiedTranscriptPath: string | null = null;
 		const notifyTranscriptFileReady = async (transcriptFile: TFile): Promise<void> => {
 			if (notifiedTranscriptPath === transcriptFile.path) {
@@ -1070,6 +1313,12 @@ export default class EchoNotesPlugin extends Plugin {
 			totalSegments: undefined,
 			error: undefined,
 			traceId: undefined,
+			recovery: {
+				kind: "transcription",
+				audioPath: audioFile.path,
+				sourcePath: sourceNote?.path,
+				audioLinkPath: options.audioLinkPath
+			},
 			completedAt: undefined,
 			retry: {
 				label: "重试转写",
@@ -1094,12 +1343,18 @@ export default class EchoNotesPlugin extends Plugin {
 				transcriptionConfig,
 				this.getApiKey(transcriptionConfig.provider)
 			);
+			completedSegments = await this.transcriptService.getResumableTranscriptionSegments(
+				audioFile,
+				checkpointIdentity
+			);
 			const initialTranscriptFile = await this.transcriptService.writeTranscribingTranscript(
 				audioFile,
 				sourceNote,
 				provider.id,
 				transcriptionConfig.model,
-				completedSegments
+				completedSegments,
+				undefined,
+				checkpointIdentity
 			);
 			await notifyTranscriptFileReady(initialTranscriptFile);
 			this.taskCenter.updateTask(transcriptionTaskId, {
@@ -1133,7 +1388,8 @@ export default class EchoNotesPlugin extends Plugin {
 						provider.id,
 						transcriptionConfig.model,
 						completedSegments,
-						streamingState
+						streamingState,
+						checkpointIdentity
 					);
 					await notifyTranscriptFileReady(transcriptFile);
 					const stableUtteranceCount = progress.utterances?.length ?? 0;
@@ -1146,19 +1402,21 @@ export default class EchoNotesPlugin extends Plugin {
 				}
 
 				if (progress.type === "long-audio-preparing") {
-					completedSegments = [];
+					completedSegments = progress.segments;
 					const transcriptFile = await this.transcriptService.writeTranscribingTranscript(
 						audioFile,
 						sourceNote,
 						provider.id,
 						transcriptionConfig.model,
-						completedSegments
+						completedSegments,
+						undefined,
+						checkpointIdentity
 					);
 					await notifyTranscriptFileReady(transcriptFile);
 					this.taskCenter.updateTask(transcriptionTaskId, {
 						stage: "正在准备长音频分段",
 						outputPath: transcriptFile.path,
-						currentSegment: 0,
+						currentSegment: completedSegments.length,
 						totalSegments: undefined
 					});
 					new Notice(`正在准备长音频分段：${audioFile.name}`);
@@ -1166,22 +1424,30 @@ export default class EchoNotesPlugin extends Plugin {
 				}
 
 				if (progress.type === "long-audio-started") {
-					completedSegments = [];
+					completedSegments = progress.segments;
 					const transcriptFile = await this.transcriptService.writeTranscribingTranscript(
 						audioFile,
 						sourceNote,
 						provider.id,
 						transcriptionConfig.model,
-						completedSegments
+						completedSegments,
+						undefined,
+						checkpointIdentity
 					);
 					await notifyTranscriptFileReady(transcriptFile);
 					this.taskCenter.updateTask(transcriptionTaskId, {
-						stage: `长音频分段已开始，共 ${progress.totalSegments} 段`,
+						stage: completedSegments.length > 0
+							? `已恢复 ${completedSegments.length}/${progress.totalSegments} 个成功分段`
+							: `长音频分段已开始，共 ${progress.totalSegments} 段`,
 						outputPath: transcriptFile.path,
-						currentSegment: 0,
+						currentSegment: completedSegments.length,
 						totalSegments: progress.totalSegments
 					});
-					new Notice(`长音频将分 ${progress.totalSegments} 段逐步转写：${audioFile.name}`);
+					new Notice(
+						completedSegments.length > 0
+							? `已恢复 ${completedSegments.length} 个成功分段，只转写剩余内容：${audioFile.name}`
+							: `长音频将分 ${progress.totalSegments} 段逐步转写：${audioFile.name}`
+					);
 					return;
 				}
 
@@ -1222,7 +1488,9 @@ export default class EchoNotesPlugin extends Plugin {
 						sourceNote,
 						provider.id,
 						transcriptionConfig.model,
-						completedSegments
+						completedSegments,
+						undefined,
+						checkpointIdentity
 					);
 					const rangeText = formatSegmentTimeRange(progress.segment);
 					this.taskCenter.updateTask(transcriptionTaskId, {
@@ -1242,7 +1510,9 @@ export default class EchoNotesPlugin extends Plugin {
 					sourceNote,
 					provider.id,
 					transcriptionConfig.model,
-					completedSegments
+					completedSegments,
+					undefined,
+					checkpointIdentity
 				);
 				this.taskCenter.updateTask(transcriptionTaskId, {
 					stage: `已写入分段 ${progress.segment.index}/${progress.segment.total}`,
@@ -1255,6 +1525,7 @@ export default class EchoNotesPlugin extends Plugin {
 				audioFile,
 				sourceNote,
 				language: transcriptionConfig.language,
+				resumeSegments: completedSegments,
 				onProgress: handleProgress
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
@@ -1299,7 +1570,8 @@ export default class EchoNotesPlugin extends Plugin {
 						message,
 						traceId,
 						completedSegments,
-						streamingState
+						streamingState,
+						checkpointIdentity
 					);
 					await notifyTranscriptFileReady(transcriptFile);
 					this.taskCenter.updateTask(transcriptionTaskId, {
@@ -1455,6 +1727,11 @@ export default class EchoNotesPlugin extends Plugin {
 			outputPath: transcriptFile.path,
 			error: undefined,
 			traceId: undefined,
+			recovery: {
+				kind: "analysis",
+				transcriptPath: transcriptFile.path,
+				templateId: template.id
+			},
 			completedAt: undefined,
 			retry: {
 				label: "重试分析",
@@ -1464,6 +1741,20 @@ export default class EchoNotesPlugin extends Plugin {
 		this.processingAnalyses.add(processingKey);
 		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
 		return this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId);
+	}
+
+	private async retryAnalysisTask(transcriptPath: string, templateId: string): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(transcriptPath);
+		if (!(file instanceof TFile) || !this.isTranscriptMarkdownFile(file)) {
+			new Notice(`无法重试分析，转写稿不存在：${transcriptPath}`);
+			return;
+		}
+		const template = this.settings.analysisTemplates.find((item) => item.id === templateId);
+		if (!template) {
+			new Notice(`无法重试分析，模板不存在：${templateId}`);
+			return;
+		}
+		await this.startAnalysisTask(file, template);
 	}
 
 	private async runAnalysisTask(
@@ -1537,10 +1828,9 @@ export default class EchoNotesPlugin extends Plugin {
 						overlapCharacters: 400
 					})
 				: [];
-			const maxAnalysisChunks = 20;
-			if (chunks.length > maxAnalysisChunks) {
+			if (chunks.length > ANALYSIS_CHECKPOINT_MAX_CHUNKS) {
 				throw new Error(
-					`转写稿将产生 ${chunks.length} 个分析分块，超过安全上限 ${maxAnalysisChunks}。请提高分块字符数、缩短转写稿或拆分文件后重试。`
+					`转写稿将产生 ${chunks.length} 个分析分块，超过安全上限 ${ANALYSIS_CHECKPOINT_MAX_CHUNKS}。请提高分块字符数、缩短转写稿或拆分文件后重试。`
 				);
 			}
 			if (!this.settings.analysisLongTextEnabled && analysisTranscriptText.length > this.settings.analysisChunkCharacters) {
@@ -1548,15 +1838,58 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			let result: AnalysisResult;
 			if (chunks.length > 1 && isChunkedAnalysisProvider(provider)) {
-				const chunkResults: AnalysisResult[] = [];
-				for (const chunk of chunks) {
+				const checkpointIdentity = createAnalysisCheckpointIdentity({
+					transcriptPath: transcriptFile.path,
+					analysisText: analysisTranscriptText,
+					template,
+					settings: this.settings,
+					overlapCharacters: 400
+				});
+				const resumeResults = await this.analysisService.readResumableChunkResults(
+					transcriptFile,
+					checkpointIdentity,
+					chunks
+				);
+				if (resumeResults.length > 0) {
 					this.taskCenter.updateTask(analysisTaskId, {
-						stage: `正在分析长文本分块 ${chunk.index}/${chunk.total}（约 ${estimateAnalysisTextTokens(chunk.text)} tokens）`
+						stage: `已恢复 ${resumeResults.length}/${chunks.length} 个分析分块`,
+						currentSegment: resumeResults.length,
+						totalSegments: chunks.length
 					});
-					chunkResults.push(await provider.analyzeChunk({ ...analysisInput, transcriptText: chunk.text }, chunk.index, chunk.total));
 				}
-				this.taskCenter.updateTask(analysisTaskId, { stage: `正在汇总 ${chunks.length} 个分析分块` });
-				result = await provider.synthesizeChunks(analysisInput, chunkResults);
+				result = await analyzeChunkSequence({
+					analysisInput,
+					chunks,
+					resumeResults,
+					analyzeChunk: (input, chunk) => provider.analyzeChunk(input, chunk.index, chunk.total),
+					prepareResult: prepareAnalysisCheckpointResult,
+					synthesize: (input, chunkResults) => provider.synthesizeChunks(input, chunkResults),
+					onChunkStart: (chunk) => {
+						this.taskCenter.updateTask(analysisTaskId, {
+							stage: `正在分析长文本分块 ${chunk.index}/${chunk.total}（约 ${estimateAnalysisTextTokens(chunk.text)} tokens）`,
+							currentSegment: chunk.index - 1,
+							totalSegments: chunk.total
+						});
+					},
+					onChunkComplete: async (chunk, chunkResults) => {
+						await this.analysisService.writeAnalysisCheckpoint(
+							transcriptFile,
+							createAnalysisCheckpoint(checkpointIdentity, chunks, chunkResults)
+						);
+						this.taskCenter.updateTask(analysisTaskId, {
+							stage: `已保存分析分块 ${chunk.index}/${chunk.total}`,
+							currentSegment: chunk.index,
+							totalSegments: chunk.total
+						});
+					},
+					onSynthesisStart: () => {
+						this.taskCenter.updateTask(analysisTaskId, {
+							stage: `正在汇总 ${chunks.length} 个分析分块`,
+							currentSegment: chunks.length,
+							totalSegments: chunks.length
+						});
+					}
+				});
 			} else {
 				result = await provider.analyze(analysisInput);
 			}
@@ -1574,6 +1907,11 @@ export default class EchoNotesPlugin extends Plugin {
 					timestamp: new Date().toISOString()
 				})
 			);
+			try {
+				await this.analysisService.clearAnalysisCheckpoint(transcriptFile, template.id);
+			} catch (error) {
+				this.log("清理 AI 分析检查点失败", error);
+			}
 			this.taskCenter.updateTask(analysisTaskId, {
 				status: "success",
 				stage: `${templateTitle} 已写入转写稿`,
@@ -1652,6 +1990,11 @@ export default class EchoNotesPlugin extends Plugin {
 			sourcePath: transcriptFile.path,
 			error: undefined,
 			traceId: undefined,
+			recovery: {
+				kind: "memory-extraction",
+				transcriptPath: transcriptFile.path,
+				analysisTemplateIds: analysisTemplateIds ? [...analysisTemplateIds] : undefined
+			},
 			completedAt: undefined,
 			retry: {
 				label: "重试记忆提取",
@@ -1699,9 +2042,13 @@ export default class EchoNotesPlugin extends Plugin {
 				apiKey: this.getMemoryApiKey(),
 				analysisTemplateIds,
 				signal: controller.signal,
-				onProgress: (stage) => {
+				onProgress: (stage, progress) => {
 					if (this.activeMemoryTasks.get(processingKey)?.controller === controller) {
-						this.taskCenter.updateTask(taskId, { stage });
+						this.taskCenter.updateTask(taskId, {
+							stage,
+							currentSegment: progress?.currentChunk,
+							totalSegments: progress?.totalChunks
+						});
 					}
 				}
 			});
@@ -1712,7 +2059,7 @@ export default class EchoNotesPlugin extends Plugin {
 				status: result.skipped ? "skipped" : "success",
 				stage: result.skipped
 					? "输入与已有候选包一致，已跳过模型调用"
-					: `${result.assertionCount} 条候选记忆已写入${result.compiled ? "并编译画像" : ""}`,
+					: `${result.assertionCount} 条候选记忆已写入${result.compiled ? "并编译画像" : ""}${formatRejectedMemoryAssertionSummary(result.rejectedAssertionCount)}`,
 				provider: result.provider,
 				model: result.model,
 				outputPath: result.candidateFilePath,
@@ -1722,7 +2069,7 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(
 				result.skipped
 					? `记忆候选已存在：${transcriptFile.name}`
-					: `已沉淀 ${result.assertionCount} 条候选记忆：${transcriptFile.name}`
+					: `已沉淀 ${result.assertionCount} 条候选记忆${formatRejectedMemoryAssertionSummary(result.rejectedAssertionCount)}：${transcriptFile.name}`
 			);
 		} catch (error) {
 			if (controller.signal.aborted || this.activeMemoryTasks.get(processingKey)?.controller !== controller) {
@@ -1904,6 +2251,12 @@ export default class EchoNotesPlugin extends Plugin {
 				bytes: 0,
 				error: undefined,
 				traceId: undefined,
+				recovery: {
+					kind: "transcription",
+					audioPath: audioFile.path,
+					sourcePath: sourceNote.path,
+					audioLinkPath: audioFile.path
+				},
 				completedAt: undefined
 			});
 			mediaRecorder.start();
@@ -2019,7 +2372,7 @@ export default class EchoNotesPlugin extends Plugin {
 						? finalAsr.reason
 						: recording.asrError ?? "AgentPlan 实时转写失败"
 				);
-			recording.streamingState.provisionalText = "";
+				recording.streamingState.provisionalText = "";
 			recording.streamingState.connectionStatus = audioSaveError
 				? "本地录音保存失败"
 				: "实时识别已中断";
@@ -2306,6 +2659,10 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 		lineStart: match.lineStart + lineOffset,
 		lineEnd: match.lineEnd + lineOffset
 	};
+}
+
+function formatRejectedMemoryAssertionSummary(count: number): string {
+	return count > 0 ? `（证据校验拒绝 ${count} 条）` : "";
 }
 
 function getErrorMessage(error: unknown): string {

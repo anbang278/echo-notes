@@ -1,6 +1,6 @@
 {
 	"name": "echo-notes",
-	"version": "0.4.1",
+	"version": "0.4.2",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
@@ -11,6 +11,7 @@
 		"typecheck": "tsc -noEmit -skipLibCheck",
 		"build": "npm run typecheck && node esbuild.config.mjs production",
 		"verify:settings-ui": "npm run build && node scripts/verify-settings-ui.mjs",
+		"verify:real-chain": "npm run build && node scripts/real-chain-validation.mjs",
 		"package": "npm run build && node scripts/package-release.mjs",
 		"test": "node scripts/run-tests.mjs"
 	},

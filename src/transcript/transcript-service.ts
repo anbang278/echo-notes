@@ -20,6 +20,11 @@ import {
 	isReusableTranscriptForAudio
 } from "./transcript-source-metadata";
 import { createTranscriptBackupPath, mergeManagedTranscriptDocument } from "./transcript-content";
+import {
+	createTranscriptionCheckpoint,
+	readResumableTranscriptionSegments,
+	type TranscriptionCheckpointIdentity
+} from "./transcript-checkpoint";
 
 export class TranscriptService {
 	private app: App;
@@ -68,6 +73,17 @@ export class TranscriptService {
 			: null;
 	}
 
+	async getResumableTranscriptionSegments(
+		audioFile: TFile,
+		identity: TranscriptionCheckpointIdentity
+	): Promise<TranscriptionSegment[]> {
+		const transcriptFile = this.getTranscriptFile(audioFile);
+		if (!transcriptFile) {
+			return [];
+		}
+		return readResumableTranscriptionSegments(await this.app.vault.cachedRead(transcriptFile), identity);
+	}
+
 	async writeSuccessTranscript(audioFile: TFile, sourceNote: TFile | undefined, result: TranscriptionResult): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
 		const content = renderTranscriptTemplate({
@@ -88,7 +104,8 @@ export class TranscriptService {
 		provider: string,
 		model: string,
 		segments: TranscriptionSegment[],
-		streamingState?: StreamingTranscriptionState
+		streamingState?: StreamingTranscriptionState,
+		checkpointIdentity?: TranscriptionCheckpointIdentity
 	): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
 		const content = renderProgressTranscriptTemplate({
@@ -100,6 +117,9 @@ export class TranscriptService {
 			model,
 			segments,
 			streamingState,
+			checkpoint: checkpointIdentity
+				? createTranscriptionCheckpoint(checkpointIdentity, segments)
+				: undefined,
 			speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle,
 			copyLanguage: this.settings.copyLanguage
 		});
@@ -114,7 +134,8 @@ export class TranscriptService {
 		error: string,
 		traceId?: string,
 		segments?: TranscriptionSegment[],
-		streamingState?: StreamingTranscriptionState
+		streamingState?: StreamingTranscriptionState,
+		checkpointIdentity?: TranscriptionCheckpointIdentity
 	): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
 		const content = renderFailedTranscriptTemplate({
@@ -128,6 +149,9 @@ export class TranscriptService {
 			traceId,
 			segments,
 			streamingState,
+			checkpoint: checkpointIdentity
+				? createTranscriptionCheckpoint(checkpointIdentity, segments ?? [])
+				: undefined,
 			speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle,
 			copyLanguage: this.settings.copyLanguage
 		});

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import {
 	ANALYSIS_LINKS_END,
@@ -105,6 +106,41 @@ import {
 } from "../src/security/provider-secrets";
 import { buildMemoryPaths } from "../src/memory/memory-paths";
 import {
+	MEMORY_AGGREGATION_MANAGED_END,
+	MEMORY_AGGREGATION_MANAGED_START,
+	createMemoryAggregationCompilations,
+	renderInitialMemoryAggregation,
+	renderMemoryAggregationHomeBlock,
+	updateMemoryAggregationDocument,
+	updateMemoryAggregationHome,
+	type MemoryAggregationEntry
+} from "../src/memory/memory-aggregation";
+import {
+	MEMORY_CONTEXT_MANAGED_END,
+	MEMORY_CONTEXT_MANAGED_START,
+	MEMORY_CONTEXT_MIN_CHARACTERS,
+	buildMemoryContextPackagePreview,
+	getMemoryContextFilterChoices,
+	getMemoryContextPackagePath,
+	renderInitialMemoryContextPackage,
+	updateMemoryContextPackageDocument
+} from "../src/memory/memory-context";
+import { extractMemoryChunkSequence } from "../src/memory/memory-chunked-service";
+import {
+	MEMORY_EXTRACTION_CHECKPOINT_RESULT_MAX_CHARACTERS,
+	createMemoryExtractionCheckpoint,
+	createMemoryExtractionCheckpointIdentity,
+	createMemoryExtractionCheckpointStore,
+	getMemoryExtractionCheckpointStorePath,
+	parseMemoryExtractionCheckpointStore,
+	prepareMemoryExtractionCheckpointResult,
+	readResumableMemoryExtraction,
+	removeMemoryExtractionCheckpoint,
+	renderMemoryExtractionCheckpointStore,
+	upsertMemoryExtractionCheckpoint,
+	type MemoryExtractionChunkResult
+} from "../src/memory/memory-checkpoint";
+import {
 	MEMORY_MANAGED_END,
 	MEMORY_MANAGED_START,
 	createStableFingerprint,
@@ -114,10 +150,40 @@ import {
 	normalizeEntityName,
 	parseMemoryCandidate,
 	parseMemoryExtractionResponse,
+	parseMemoryExtractionResponseWithDiagnostics,
 	renderMemoryCandidate,
 	sanitizeMemoryFileName
 } from "../src/memory/memory-output";
-import { MEMORY_SCHEMA_VERSION, type MemoryCandidatePackage } from "../src/memory/memory-types";
+import {
+	MEMORY_EXTRACTION_PROMPT_VERSION,
+	MEMORY_SCHEMA_VERSION,
+	type MemoryCandidatePackage
+} from "../src/memory/memory-types";
+import {
+	MEMORY_REVIEW_MANAGED_END,
+	MEMORY_REVIEW_MANAGED_START,
+	MEMORY_REVIEW_DATA_END,
+	MEMORY_REVIEW_DATA_START,
+	applyMemoryReviewUpdates,
+	createMemoryReview,
+	getApprovedMemoryAssertions,
+	getCandidatePathFromReviewPath,
+	getMemoryReviewPath,
+	parseMemoryReview,
+	renderMemoryReview,
+	updateMemoryReviewDocument
+} from "../src/memory/memory-review";
+import {
+	confirmMemoryRelation,
+	createMemoryRelationEndpoint,
+	createMemoryRelationStore,
+	getMemoryRelationEndpointKey,
+	getMemoryRelationStorePath,
+	parseMemoryRelationStore,
+	renderMemoryRelationStore,
+	resolveMemoryRelations,
+	revokeMemoryRelation
+} from "../src/memory/memory-relation";
 import {
 	MEMORY_TASK_TIMEOUT_MS,
 	createMemoryDeadline,
@@ -125,12 +191,24 @@ import {
 } from "../src/memory/memory-timeout";
 import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
 import { splitAnalysisText, estimateAnalysisTextTokens } from "../src/analysis/analysis-chunking";
+import { analyzeChunkSequence } from "../src/analysis/analysis-chunked-service";
+import {
+	ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS,
+	createAnalysisCheckpoint,
+	createAnalysisCheckpointIdentity,
+	parseAnalysisCheckpoint,
+	prepareAnalysisCheckpointResult,
+	readResumableAnalysisResults,
+	removeAnalysisCheckpoint,
+	renderAnalysisCheckpoint,
+	upsertAnalysisCheckpoint
+} from "../src/analysis/analysis-checkpoint";
 import {
 	ANALYSIS_TASK_TIMEOUT_MS,
 	createAnalysisDeadline,
 	waitForAnalysisResponse
 } from "../src/analysis/analysis-timeout";
-import { AnalysisError } from "../src/analysis/analysis-provider";
+import { AnalysisError, type AnalysisResult } from "../src/analysis/analysis-provider";
 import {
 	createChunkAnalysisInput,
 	createSynthesisAnalysisInput
@@ -197,6 +275,14 @@ import {
 	isReusableTranscriptForAudio
 } from "../src/transcript/transcript-source-metadata";
 import {
+	TRANSCRIPTION_CHECKPOINT_START,
+	createTranscriptionCheckpoint,
+	createTranscriptionCheckpointIdentity,
+	parseTranscriptionCheckpoint,
+	readResumableTranscriptionSegments,
+	renderTranscriptionCheckpoint
+} from "../src/transcript/transcript-checkpoint";
+import {
 	TRANSCRIPT_MANAGED_END,
 	TRANSCRIPT_MANAGED_START,
 	createTranscriptBackupPath,
@@ -208,9 +294,12 @@ import {
 	markTranscriptAnalysisPending
 } from "../src/transcript/transcript-analysis-metadata";
 import {
+	createTaskCenterState,
 	createTaskId,
 	formatTaskBytes,
 	formatTaskElapsedTime,
+	markInterruptedTasks,
+	normalizeTaskCenterState,
 	summarizeTaskCounts,
 	TaskCenterStore
 } from "../src/task-center/task-center-store";
@@ -378,6 +467,52 @@ assert.throws(
 	),
 	/无法在本次输入中定位/
 );
+const partiallyGroundedMemoryExtraction = JSON.stringify({
+	assertions: [
+		{
+			subjectType: "user",
+			subjectName: "Echo Notes 验收用户",
+			category: "background",
+			predicate: "身份为",
+			value: "本次会话的初始化用户",
+			confidence: 0.9,
+			evidenceQuote: "初始化用户：Echo Notes 验收用户"
+		},
+		{
+			subjectType: "project",
+			subjectName: "Hrelease项目",
+			category: "status",
+			predicate: "已确认上线日期为",
+			value: "2026年8月15日",
+			confidence: 0.9,
+			evidenceQuote: "Hrelease项目的上线日期为2026年8月15日"
+		}
+	]
+});
+const partiallyGroundedMemoryResult = parseMemoryExtractionResponseWithDiagnostics(
+	partiallyGroundedMemoryExtraction,
+	"2026年7月31日团队正式确认，Hrelease项目的上线日期为2026年8月15日。"
+);
+assert.equal(partiallyGroundedMemoryResult.response.assertions.length, 1);
+assert.equal(partiallyGroundedMemoryResult.response.assertions[0].subjectType, "project");
+assert.deepEqual(partiallyGroundedMemoryResult.rejectedAssertions, [{
+	index: 0,
+	reason: "assertions[0].evidenceQuote 无法在本次输入中定位。"
+}]);
+assert.throws(
+	() => parseMemoryExtractionResponse(
+		partiallyGroundedMemoryExtraction,
+		"2026年7月31日团队正式确认，Hrelease项目的上线日期为2026年8月15日。"
+	),
+	/assertions\[0\]\.evidenceQuote 无法在本次输入中定位/
+);
+assert.throws(
+	() => parseMemoryExtractionResponseWithDiagnostics(
+		JSON.stringify({ assertions: [JSON.parse(partiallyGroundedMemoryExtraction).assertions[0]] }),
+		"Hrelease项目的上线日期为2026年8月15日。"
+	),
+	/返回的 1 条断言均因原文证据无法定位被拒绝/
+);
 
 const memoryCandidate: MemoryCandidatePackage = {
 	schemaVersion: MEMORY_SCHEMA_VERSION,
@@ -387,6 +522,7 @@ const memoryCandidate: MemoryCandidatePackage = {
 	provider: "aliyun-bailian",
 	model: "deepseek-v4-pro",
 	traceIds: ["trace-test"],
+	rejectedAssertionCount: 1,
 	source: {
 		transcriptPath: "Meetings/Test.transcript.md",
 		transcriptTitle: "Test.transcript",
@@ -403,6 +539,110 @@ const memoryCandidate: MemoryCandidatePackage = {
 const renderedMemoryCandidate = renderMemoryCandidate(memoryCandidate);
 assert.deepEqual(parseMemoryCandidate(renderedMemoryCandidate), memoryCandidate);
 assert.match(renderedMemoryCandidate, /echo-memory-data:start/);
+assert.match(renderedMemoryCandidate, /证据校验拒绝：1 条/);
+const candidatePath = "Echo Memory/02 记忆候选/2026-07-29 Test abc123.md";
+const reviewPath = getMemoryReviewPath(candidatePath);
+assert.equal(reviewPath, "Echo Memory/02 记忆候选/2026-07-29 Test abc123.review.md");
+assert.equal(getCandidatePathFromReviewPath(reviewPath), candidatePath);
+assert.throws(() => getMemoryReviewPath(reviewPath), /非审核 Markdown/);
+assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /审核：\[\[Echo Memory\/02 记忆候选\/2026-07-29 Test abc123\.review\.md\]\]/);
+
+const initialMemoryReview = createMemoryReview(memoryCandidate, candidatePath, "2026-07-29T08:10:00.000Z");
+assert.equal(initialMemoryReview.reviews["assertion-test"].status, "pending");
+assert.deepEqual(getApprovedMemoryAssertions(memoryCandidate, initialMemoryReview, candidatePath), []);
+const approvedMemoryReview = applyMemoryReviewUpdates(initialMemoryReview, memoryCandidate, [{
+	assertionId: "assertion-test",
+	status: "approved",
+	effectiveValue: "星海科技协作工具产品负责人",
+	note: "已按原文校正"
+}], "2026-07-29T08:20:00.000Z");
+assert.equal(approvedMemoryReview.reviews["assertion-test"].history.length, 2);
+assert.equal(approvedMemoryReview.reviews["assertion-test"].reviewedAt, "2026-07-29T08:20:00.000Z");
+const approvedAssertions = getApprovedMemoryAssertions(memoryCandidate, approvedMemoryReview, candidatePath);
+assert.equal(approvedAssertions.length, 1);
+assert.equal(approvedAssertions[0].assertion.value, "星海科技协作工具产品负责人");
+assert.equal(memoryCandidate.assertions[0].value, "星海科技产品负责人，负责协作工具");
+const rejectedMemoryReview = applyMemoryReviewUpdates(approvedMemoryReview, memoryCandidate, [{
+	assertionId: "assertion-test",
+	status: "rejected",
+	effectiveValue: "星海科技协作工具产品负责人",
+	note: "不应进入长期画像"
+}], "2026-07-29T08:30:00.000Z");
+assert.equal(rejectedMemoryReview.reviews["assertion-test"].history.length, 3);
+assert.deepEqual(getApprovedMemoryAssertions(memoryCandidate, rejectedMemoryReview, candidatePath), []);
+const pendingMemoryReview = applyMemoryReviewUpdates(rejectedMemoryReview, memoryCandidate, [{
+	assertionId: "assertion-test",
+	status: "pending",
+	effectiveValue: "星海科技协作工具产品负责人",
+	note: "等待再次核对"
+}], "2026-07-29T08:40:00.000Z");
+assert.equal(pendingMemoryReview.reviews["assertion-test"].history.length, 4);
+assert.deepEqual(getApprovedMemoryAssertions(memoryCandidate, pendingMemoryReview, candidatePath), []);
+assert.throws(
+	() => applyMemoryReviewUpdates(initialMemoryReview, memoryCandidate, [{
+		assertionId: "assertion-test",
+		status: "approved",
+		effectiveValue: "   ",
+		note: ""
+	}]),
+	/修正值不能为空/
+);
+
+const renderedMemoryReview = renderMemoryReview(approvedMemoryReview, memoryCandidate);
+assert.deepEqual(parseMemoryReview(renderedMemoryReview), approvedMemoryReview);
+assert.match(renderedMemoryReview, /echo-memory-review:managed:start/);
+assert.match(renderedMemoryReview, /echo-memory-review-data:start/);
+const bracesMemoryReview = applyMemoryReviewUpdates(approvedMemoryReview, memoryCandidate, [{
+	assertionId: "assertion-test",
+	status: "approved",
+	effectiveValue: "负责 {协作工具} 产品",
+	note: "保留结构符号"
+}], "2026-07-29T08:25:00.000Z");
+assert.deepEqual(parseMemoryReview(renderMemoryReview(bracesMemoryReview, memoryCandidate)), bracesMemoryReview);
+const inconsistentMemoryReview = structuredClone(approvedMemoryReview);
+inconsistentMemoryReview.reviews["assertion-test"].status = "rejected";
+assert.throws(
+	() => parseMemoryReview(renderMemoryReview(inconsistentMemoryReview, memoryCandidate)),
+	/Schema 不受支持/
+);
+const reviewWithManualContent = [
+	"# 候选审核",
+	"",
+	"## 人工补充",
+	"请保留这段审核说明。",
+	"",
+	MEMORY_REVIEW_MANAGED_START,
+	"旧审核数据",
+	MEMORY_REVIEW_MANAGED_END
+].join("\n");
+const updatedMemoryReviewDocument = updateMemoryReviewDocument(
+	reviewWithManualContent,
+	approvedMemoryReview,
+	memoryCandidate
+);
+assert.match(updatedMemoryReviewDocument, /请保留这段审核说明/);
+assert.match(updatedMemoryReviewDocument, /星海科技协作工具产品负责人/);
+assert.doesNotMatch(updatedMemoryReviewDocument, /旧审核数据/);
+assert.throws(
+	() => parseMemoryReview([
+		MEMORY_REVIEW_MANAGED_START,
+		MEMORY_REVIEW_DATA_START,
+		"{bad json}",
+		MEMORY_REVIEW_DATA_END,
+		MEMORY_REVIEW_MANAGED_END
+	].join("\n")),
+	/JSON/
+);
+assert.throws(
+	() => parseMemoryReview([
+		MEMORY_REVIEW_MANAGED_START,
+		MEMORY_REVIEW_DATA_START,
+		"{}",
+		MEMORY_REVIEW_DATA_END,
+		MEMORY_REVIEW_MANAGED_END
+	].join("\n")),
+	/Schema 不受支持/
+);
 const profileWithManualContent = [
 	"# 张三",
 	"",
@@ -424,6 +664,269 @@ assert.match(replacedMemoryProfile, /新汇总/);
 assert.doesNotMatch(replacedMemoryProfile, /旧汇总/);
 assert.equal(createStableFingerprint("same"), createStableFingerprint("same"));
 assert.notEqual(createStableFingerprint("same"), createStableFingerprint("different"));
+
+const relationSourceEndpoint = createMemoryRelationEndpoint({
+	candidate: memoryCandidate,
+	candidatePath,
+	reviewPath,
+	assertion: approvedAssertions[0].assertion
+});
+const olderMemoryCandidate: MemoryCandidatePackage = {
+	...memoryCandidate,
+	id: "memory-older",
+	fingerprint: "older-fingerprint",
+	createdAt: "2026-07-28T08:00:00.000Z",
+	source: {
+		...memoryCandidate.source,
+		transcriptPath: "Meetings/Older.transcript.md",
+		transcriptTitle: "Older.transcript"
+	},
+	assertions: [{
+		...memoryCandidate.assertions[0],
+		id: "assertion-older",
+		value: "星海科技旧产品负责人",
+		observedAt: "2026-07-28T08:00:00.000Z",
+		sourcePath: "Meetings/Older.transcript.md"
+	}]
+};
+const olderCandidatePath = "Echo Memory/02 记忆候选/2026-07-28 Older def456.md";
+const relationTargetEndpoint = createMemoryRelationEndpoint({
+	candidate: olderMemoryCandidate,
+	candidatePath: olderCandidatePath,
+	reviewPath: getMemoryReviewPath(olderCandidatePath),
+	assertion: olderMemoryCandidate.assertions[0]
+});
+assert.equal(
+	getMemoryRelationStorePath("Echo Memory/99 系统/"),
+	"Echo Memory/99 系统/echo-memory-relations.json"
+);
+const emptyRelationStore = createMemoryRelationStore("2026-07-29T09:00:00.000Z");
+const supersededRelationStore = confirmMemoryRelation(
+	emptyRelationStore,
+	"supersedes",
+	relationSourceEndpoint,
+	relationTargetEndpoint,
+	"职责已更新",
+	"2026-07-29T09:10:00.000Z"
+);
+const supersededRelation = Object.values(supersededRelationStore.relations)[0];
+assert.equal(supersededRelation.status, "active");
+assert.equal(supersededRelation.history.length, 1);
+assert.deepEqual(
+	parseMemoryRelationStore(renderMemoryRelationStore(supersededRelationStore)),
+	supersededRelationStore
+);
+assert.doesNotMatch(renderMemoryRelationStore(supersededRelationStore), /apiKey|rawResponse|Authorization/);
+const supersededResolution = resolveMemoryRelations(
+	supersededRelationStore,
+	[relationSourceEndpoint, relationTargetEndpoint]
+);
+assert.ok(supersededResolution.suppressedEndpointKeys.has(getMemoryRelationEndpointKey(relationTargetEndpoint)));
+assert.equal(supersededResolution.annotations.get(getMemoryRelationEndpointKey(relationSourceEndpoint))?.length, 1);
+assert.ok(supersededResolution.applicableRelationIds.has(supersededRelation.id));
+const changedTargetEndpoint = { ...relationTargetEndpoint, effectiveValue: "人工修改后的旧职责" };
+const staleRelationResolution = resolveMemoryRelations(
+	supersededRelationStore,
+	[relationSourceEndpoint, changedTargetEndpoint]
+);
+assert.equal(staleRelationResolution.suppressedEndpointKeys.size, 0);
+assert.ok(staleRelationResolution.staleRelationIds.has(supersededRelation.id));
+const refreshedRelationStore = confirmMemoryRelation(
+	supersededRelationStore,
+	"supersedes",
+	relationSourceEndpoint,
+	changedTargetEndpoint,
+	"职责已更新",
+	"2026-07-29T09:15:00.000Z"
+);
+const refreshedRelation = refreshedRelationStore.relations[supersededRelation.id];
+assert.equal(refreshedRelation.history.length, 2);
+assert.equal(refreshedRelation.history[0].target.effectiveValue, "星海科技旧产品负责人");
+assert.equal(refreshedRelation.history[1].target.effectiveValue, "人工修改后的旧职责");
+assert.ok(
+	resolveMemoryRelations(refreshedRelationStore, [relationSourceEndpoint, changedTargetEndpoint])
+		.suppressedEndpointKeys.has(getMemoryRelationEndpointKey(changedTargetEndpoint))
+);
+assert.equal(
+	confirmMemoryRelation(
+		supersededRelationStore,
+		"supersedes",
+		relationSourceEndpoint,
+		relationTargetEndpoint,
+		"职责已更新",
+		"2026-07-29T09:20:00.000Z"
+	),
+	supersededRelationStore
+);
+assert.throws(
+	() => confirmMemoryRelation(
+		supersededRelationStore,
+		"conflicts",
+		relationSourceEndpoint,
+		relationTargetEndpoint,
+		"",
+		"2026-07-29T09:20:00.000Z"
+	),
+	/请先撤销/
+);
+const revokedRelationStore = revokeMemoryRelation(
+	supersededRelationStore,
+	supersededRelation.id,
+	"重新核对",
+	"2026-07-29T09:30:00.000Z"
+);
+assert.equal(revokedRelationStore.relations[supersededRelation.id].status, "revoked");
+assert.equal(revokedRelationStore.relations[supersededRelation.id].history.length, 2);
+assert.equal(resolveMemoryRelations(revokedRelationStore, [relationSourceEndpoint, relationTargetEndpoint]).suppressedEndpointKeys.size, 0);
+const reactivatedRelationStore = confirmMemoryRelation(
+	revokedRelationStore,
+	"supersedes",
+	relationSourceEndpoint,
+	relationTargetEndpoint,
+	"再次确认",
+	"2026-07-29T09:40:00.000Z"
+);
+assert.equal(reactivatedRelationStore.relations[supersededRelation.id].history.length, 3);
+assert.equal(reactivatedRelationStore.relations[supersededRelation.id].createdAt, "2026-07-29T09:10:00.000Z");
+const conflictRelationStore = confirmMemoryRelation(
+	emptyRelationStore,
+	"conflicts",
+	relationSourceEndpoint,
+	relationTargetEndpoint,
+	"两份记录口径不一致",
+	"2026-07-29T10:00:00.000Z"
+);
+const conflictResolution = resolveMemoryRelations(conflictRelationStore, [relationSourceEndpoint, relationTargetEndpoint]);
+assert.equal(conflictResolution.suppressedEndpointKeys.size, 0);
+assert.equal(conflictResolution.annotations.get(getMemoryRelationEndpointKey(relationSourceEndpoint))?.length, 1);
+assert.equal(conflictResolution.annotations.get(getMemoryRelationEndpointKey(relationTargetEndpoint))?.length, 1);
+const supplementalResolution = resolveMemoryRelations(
+	confirmMemoryRelation(
+		emptyRelationStore,
+		"supplements",
+		relationSourceEndpoint,
+		relationTargetEndpoint,
+		"补充职责范围",
+		"2026-07-29T10:05:00.000Z"
+	),
+	[relationSourceEndpoint, relationTargetEndpoint]
+);
+assert.equal(supplementalResolution.suppressedEndpointKeys.size, 0);
+assert.equal(supplementalResolution.annotations.size, 2);
+const invalidationResolution = resolveMemoryRelations(
+	confirmMemoryRelation(
+		emptyRelationStore,
+		"invalidates",
+		relationSourceEndpoint,
+		relationTargetEndpoint,
+		"旧职责记录无效",
+		"2026-07-29T10:06:00.000Z"
+	),
+	[relationSourceEndpoint, relationTargetEndpoint]
+);
+assert.ok(invalidationResolution.suppressedEndpointKeys.has(getMemoryRelationEndpointKey(relationTargetEndpoint)));
+assert.throws(
+	() => confirmMemoryRelation(
+		emptyRelationStore,
+		"conflicts",
+		relationSourceEndpoint,
+		relationTargetEndpoint,
+		"过".repeat(4_001),
+		"2026-07-29T10:07:00.000Z"
+	),
+	/4,000/
+);
+assert.throws(
+	() => confirmMemoryRelation(
+		emptyRelationStore,
+		"supersedes",
+		relationSourceEndpoint,
+		{ ...relationTargetEndpoint, subjectName: "李四" },
+		"",
+		"2026-07-29T10:10:00.000Z"
+	),
+	/同一主体/
+);
+assert.throws(
+	() => confirmMemoryRelation(
+		emptyRelationStore,
+		"supersedes",
+		relationSourceEndpoint,
+		relationSourceEndpoint,
+		"",
+		"2026-07-29T10:10:00.000Z"
+	),
+	/自身/
+);
+const oldestMemoryCandidate: MemoryCandidatePackage = {
+	...olderMemoryCandidate,
+	id: "memory-oldest",
+	fingerprint: "oldest-fingerprint",
+	assertions: [{
+		...olderMemoryCandidate.assertions[0],
+		id: "assertion-oldest",
+		value: "星海科技最早职责",
+		observedAt: "2026-07-27T08:00:00.000Z"
+	}]
+};
+const oldestCandidatePath = "Echo Memory/02 记忆候选/2026-07-27 Oldest 987abc.md";
+const oldestEndpoint = createMemoryRelationEndpoint({
+	candidate: oldestMemoryCandidate,
+	candidatePath: oldestCandidatePath,
+	reviewPath: getMemoryReviewPath(oldestCandidatePath),
+	assertion: oldestMemoryCandidate.assertions[0]
+});
+const firstSuppression = confirmMemoryRelation(
+	emptyRelationStore,
+	"supersedes",
+	relationSourceEndpoint,
+	relationTargetEndpoint,
+	"",
+	"2026-07-29T10:20:00.000Z"
+);
+const secondSuppression = confirmMemoryRelation(
+	firstSuppression,
+	"supersedes",
+	relationTargetEndpoint,
+	oldestEndpoint,
+	"",
+	"2026-07-29T10:21:00.000Z"
+);
+assert.throws(
+	() => confirmMemoryRelation(
+		secondSuppression,
+		"supersedes",
+		oldestEndpoint,
+		relationSourceEndpoint,
+		"",
+		"2026-07-29T10:22:00.000Z"
+	),
+	/环形/
+);
+const thirdSuppression = confirmMemoryRelation(
+	emptyRelationStore,
+	"supersedes",
+	oldestEndpoint,
+	relationSourceEndpoint,
+	"",
+	"2026-07-29T10:22:00.000Z"
+);
+const manuallyCyclicStore = {
+	...secondSuppression,
+	updatedAt: "2026-07-29T10:22:00.000Z",
+	relations: { ...secondSuppression.relations, ...thirdSuppression.relations }
+};
+assert.equal(parseMemoryRelationStore(renderMemoryRelationStore(manuallyCyclicStore)), null);
+const manuallyDuplicatedPairStore = {
+	...supersededRelationStore,
+	updatedAt: "2026-07-29T10:00:00.000Z",
+	relations: { ...supersededRelationStore.relations, ...conflictRelationStore.relations }
+};
+assert.equal(parseMemoryRelationStore(renderMemoryRelationStore(manuallyDuplicatedPairStore)), null);
+const damagedRelationStore = structuredClone(supersededRelationStore);
+damagedRelationStore.relations[supersededRelation.id].status = "revoked";
+assert.equal(parseMemoryRelationStore(renderMemoryRelationStore(damagedRelationStore)), null);
+assert.equal(memoryCandidate.assertions[0].value, "星海科技产品负责人，负责协作工具");
 assert.equal(normalizeEntityName("  星海　科技  "), "星海 科技");
 assert.equal(sanitizeMemoryFileName('项目/A: "MVP"'), "项目 A MVP");
 assert.equal(
@@ -439,9 +942,406 @@ const zhMemoryPaths = buildMemoryPaths("Echo Memory", "zh");
 assert.equal(zhMemoryPaths.home, "Echo Memory/00 首页.md");
 assert.equal(zhMemoryPaths.peopleDir, "Echo Memory/03 实体/人物");
 assert.equal(zhMemoryPaths.userProfiles["privacy-boundary"], "Echo Memory/04 User/08 隐私与授权边界.md");
+assert.equal(zhMemoryPaths.projectAggregation, "Echo Memory/05 聚合/项目.md");
+assert.equal(zhMemoryPaths.peopleAggregation, "Echo Memory/05 聚合/人物.md");
+assert.equal(zhMemoryPaths.timelineAggregation, "Echo Memory/05 聚合/时间线.md");
 const enMemoryPaths = buildMemoryPaths("Memory", "en");
 assert.equal(enMemoryPaths.home, "Memory/00 Home.md");
 assert.equal(enMemoryPaths.manifest, "Memory/99 System/echo-memory.json");
+assert.equal(enMemoryPaths.timelineAggregation, "Memory/05 Aggregations/Timeline.md");
+assert.equal(
+	getMemoryExtractionCheckpointStorePath(zhMemoryPaths.systemDir),
+	"Echo Memory/99 系统/echo-memory-checkpoints.json"
+);
+
+const aggregateProjectOld: MemoryAggregationEntry = {
+	assertion: {
+		...olderMemoryCandidate.assertions[0],
+		id: "assertion-project-old",
+		subjectType: "project",
+		subjectName: "Echo Notes",
+		predicate: "阶段",
+		value: "候选审核",
+		observedAt: "2026-07-28T08:00:00.000Z"
+	},
+	candidateId: olderMemoryCandidate.id,
+	candidatePath: olderCandidatePath,
+	reviewPath: getMemoryReviewPath(olderCandidatePath),
+	relationAnnotations: conflictResolution.annotations.get(getMemoryRelationEndpointKey(relationTargetEndpoint)) ?? []
+};
+const aggregateProjectNew: MemoryAggregationEntry = {
+	assertion: {
+		...memoryCandidate.assertions[0],
+		id: "assertion-project-new",
+		subjectType: "project",
+		subjectName: " Echo　Notes ",
+		predicate: "阶段",
+		value: "关系模型",
+		observedAt: "2026-07-30T08:00:00.000Z"
+	},
+	candidateId: memoryCandidate.id,
+	candidatePath,
+	reviewPath,
+	relationAnnotations: []
+};
+const aggregatePerson: MemoryAggregationEntry = {
+	assertion: {
+		...memoryCandidate.assertions[0],
+		id: "assertion-person",
+		subjectType: "person",
+		subjectName: "张三",
+		predicate: "职责",
+		value: "产品负责人",
+		observedAt: "无法确认"
+	},
+	candidateId: memoryCandidate.id,
+	candidatePath,
+	reviewPath,
+	relationAnnotations: []
+};
+const aggregationCompilations = createMemoryAggregationCompilations(
+	[aggregateProjectNew, aggregatePerson, aggregateProjectOld],
+	zhMemoryPaths,
+	{
+		"project:echo notes": "Echo Memory/03 实体/项目/Echo Notes abc123.md",
+		"person:张三": "Echo Memory/03 实体/人物/张三 def456.md"
+	},
+	"zh"
+);
+const projectAggregation = aggregationCompilations.find((item) => item.kind === "projects");
+const peopleAggregation = aggregationCompilations.find((item) => item.kind === "people");
+const timelineAggregation = aggregationCompilations.find((item) => item.kind === "timeline");
+assert.ok(projectAggregation && peopleAggregation && timelineAggregation);
+assert.equal(projectAggregation.entryCount, 2);
+assert.equal(peopleAggregation.entryCount, 1);
+assert.equal(timelineAggregation.entryCount, 3);
+assert.match(projectAggregation.managedBlock, /\[\[Echo Memory\/03 实体\/项目\/Echo Notes abc123\.md\|Echo Notes\]\]/);
+assert.ok(projectAggregation.managedBlock.indexOf("候选审核") < projectAggregation.managedBlock.indexOf("关系模型"));
+assert.match(projectAggregation.managedBlock, /Meetings\/Older\.transcript\.md\|transcript/);
+assert.match(projectAggregation.managedBlock, new RegExp(Object.keys(conflictRelationStore.relations)[0]));
+assert.match(peopleAggregation.managedBlock, /产品负责人/);
+assert.match(timelineAggregation.managedBlock, /### 2026-07-28/);
+assert.match(timelineAggregation.managedBlock, /### 时间待确认/);
+assert.ok(timelineAggregation.managedBlock.indexOf("2026-07-28") < timelineAggregation.managedBlock.indexOf("2026-07-30"));
+const initialAggregation = renderInitialMemoryAggregation(projectAggregation, "zh")
+	.replace("## 人工内容\n\n", "## 人工内容\n\n保留这段项目判断。\n\n");
+const updatedAggregation = updateMemoryAggregationDocument(
+	initialAggregation,
+	projectAggregation.managedBlock.replace("关系模型", "跨记录聚合")
+);
+assert.match(updatedAggregation, /保留这段项目判断/);
+assert.match(updatedAggregation, /跨记录聚合/);
+assert.equal((updatedAggregation.match(new RegExp(MEMORY_AGGREGATION_MANAGED_START, "g")) ?? []).length, 1);
+assert.equal((updatedAggregation.match(new RegExp(MEMORY_AGGREGATION_MANAGED_END, "g")) ?? []).length, 1);
+const aggregationHomeBlock = renderMemoryAggregationHomeBlock(zhMemoryPaths, "zh");
+assert.match(aggregationHomeBlock, /05 聚合\/项目\.md/);
+const updatedAggregationHome = updateMemoryAggregationHome("# 首页\n\n人工导航。\n", zhMemoryPaths, "zh");
+assert.match(updatedAggregationHome, /人工导航/);
+assert.match(updatedAggregationHome, /05 聚合\/时间线\.md/);
+
+const contextChoices = getMemoryContextFilterChoices([aggregateProjectOld, aggregateProjectNew, aggregatePerson]);
+assert.deepEqual(contextChoices.projects, ["Echo Notes"]);
+assert.deepEqual(contextChoices.people, ["张三"]);
+const contextGeneratedAt = "2026-07-31T04:00:00.000Z";
+const projectContextPreview = buildMemoryContextPackagePreview(
+	[aggregateProjectOld, aggregateProjectNew, aggregatePerson],
+	{
+		project: " Echo Notes ",
+		person: "张三",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.equal(projectContextPreview.matchingCount, 3, "项目和人物筛选应使用 OR 语义");
+assert.equal(projectContextPreview.includedCount, 3);
+assert.ok(
+	projectContextPreview.managedBlock.indexOf("关系模型") <
+		projectContextPreview.managedBlock.indexOf("候选审核"),
+	"上下文包应按最新观察时间优先排序"
+);
+const dateContextPreview = buildMemoryContextPackagePreview(
+	[aggregateProjectOld, aggregateProjectNew, aggregatePerson],
+	{
+		project: "",
+		person: "",
+		startDate: "2026-07-29",
+		endDate: "2026-07-31",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.equal(dateContextPreview.matchingCount, 1);
+assert.match(dateContextPreview.managedBlock, /关系模型/);
+assert.doesNotMatch(dateContextPreview.managedBlock, /候选审核/);
+const longContextEntry: MemoryAggregationEntry = {
+		...aggregateProjectNew,
+		assertion: {
+			...aggregateProjectNew.assertion,
+			id: "assertion-context-long",
+			value: "超长事实".repeat(1_500),
+			evidenceQuote: "超长证据".repeat(1_500)
+		}
+};
+const budgetContextPreview = buildMemoryContextPackagePreview(
+	[longContextEntry, aggregateProjectNew],
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.ok(budgetContextPreview.managedBlock.length <= MEMORY_CONTEXT_MIN_CHARACTERS);
+assert.equal(budgetContextPreview.omittedCount, 1, "超长条目应被预算省略");
+const changedContextPreview = buildMemoryContextPackagePreview(
+	[{ ...aggregateProjectNew, assertion: { ...aggregateProjectNew.assertion, value: "新事实值" } }],
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.notEqual(projectContextPreview.id, changedContextPreview.id, "生效值变化必须产生新快照指纹");
+assert.equal(
+	getMemoryContextPackagePath(zhMemoryPaths, projectContextPreview, "zh"),
+	getMemoryContextPackagePath(zhMemoryPaths, projectContextPreview, "zh"),
+	"相同事实快照应复用同一路径"
+);
+const initialContextDocument = renderInitialMemoryContextPackage(projectContextPreview, "zh")
+	.replace("## 人工内容\n\n", "## 人工内容\n\n保留这段 Agent 使用说明。\n\n");
+const updatedContextDocument = updateMemoryContextPackageDocument(initialContextDocument, dateContextPreview);
+assert.match(updatedContextDocument, /保留这段 Agent 使用说明/);
+assert.match(updatedContextDocument, /关系模型/);
+assert.equal((updatedContextDocument.match(new RegExp(MEMORY_CONTEXT_MANAGED_START, "g")) ?? []).length, 1);
+assert.equal((updatedContextDocument.match(new RegExp(MEMORY_CONTEXT_MANAGED_END, "g")) ?? []).length, 1);
+
+const memoryCheckpointParts = [
+	"张三负责星海协作工具的产品规划。",
+	"我的近期目标是完成 Echo Memory 可靠性闭环。"
+];
+const memoryCheckpointSource = memoryCheckpointParts.join("\n\n");
+const memoryCheckpointChunks = [
+	{
+		index: 1,
+		total: 2,
+		start: 0,
+		end: memoryCheckpointParts[0].length,
+		text: memoryCheckpointParts[0]
+	},
+	{
+		index: 2,
+		total: 2,
+		start: memoryCheckpointParts[0].length + 2,
+		end: memoryCheckpointSource.length,
+		text: memoryCheckpointParts[1]
+	}
+];
+const memoryCheckpointSettings = {
+	...DEFAULT_SETTINGS,
+	memoryProvider: "aliyun-bailian" as const,
+	memoryBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	memoryModel: "deepseek-v4-pro",
+	memoryLongTextEnabled: true,
+	memoryChunkCharacters: 40
+};
+const memoryCheckpointUser = {
+	displayName: "测试用户",
+	role: "产品负责人",
+	recentGoal: "完成 Echo Memory"
+};
+const memoryCheckpointIdentity = createMemoryExtractionCheckpointIdentity({
+	transcriptPath: "Meetings/Memory Long.transcript.md",
+	sourceText: memoryCheckpointSource,
+	inputFingerprint: createStableFingerprint(memoryCheckpointSource),
+	analysisTemplateIds: ["work-minutes"],
+	user: memoryCheckpointUser,
+	settings: memoryCheckpointSettings,
+	overlapCharacters: 0,
+	promptVersion: MEMORY_EXTRACTION_PROMPT_VERSION
+});
+const memoryCheckpointResults: MemoryExtractionChunkResult[] = [
+	{
+		assertions: parseMemoryExtractionResponse(JSON.stringify({
+			assertions: [{
+				subjectType: "person",
+				subjectName: "张三",
+				category: "responsibility",
+				predicate: "负责",
+				value: "星海协作工具的产品规划",
+				confidence: 0.92,
+				evidenceQuote: "张三负责星海协作工具的产品规划"
+			}]
+		}), memoryCheckpointChunks[0].text).assertions,
+		provider: memoryCheckpointIdentity.provider,
+		model: memoryCheckpointIdentity.model,
+		rejectedAssertionCount: 1,
+		traceId: "memory-trace-1"
+	},
+	{
+		assertions: parseMemoryExtractionResponse(JSON.stringify({
+			assertions: [{
+				subjectType: "user",
+				subjectName: "测试用户",
+				category: "mission-goal",
+				predicate: "近期目标",
+				value: "完成 Echo Memory 可靠性闭环",
+				confidence: 0.96,
+				evidenceQuote: "我的近期目标是完成 Echo Memory 可靠性闭环"
+			}]
+		}), memoryCheckpointChunks[1].text).assertions,
+		provider: memoryCheckpointIdentity.provider,
+		model: memoryCheckpointIdentity.model,
+		traceId: " memory-trace-2 "
+	}
+];
+const memoryResultWithRaw = {
+	...memoryCheckpointResults[0],
+	raw: { apiKey: "sk-memory-secret" }
+};
+const memoryExtractionCheckpoint = createMemoryExtractionCheckpoint(
+	memoryCheckpointIdentity,
+	memoryCheckpointChunks,
+	[memoryResultWithRaw],
+	"2026-07-31T02:30:00.000Z",
+	"2026-07-31T02:31:00.000Z"
+);
+const memoryCheckpointStore = upsertMemoryExtractionCheckpoint(
+	createMemoryExtractionCheckpointStore("2026-07-31T02:30:00.000Z"),
+	memoryExtractionCheckpoint,
+	"2026-07-31T02:31:00.000Z"
+);
+const renderedMemoryCheckpointStore = renderMemoryExtractionCheckpointStore(memoryCheckpointStore);
+assert.doesNotMatch(renderedMemoryCheckpointStore, /sk-memory-secret|"raw"|apiKey/);
+assert.deepEqual(parseMemoryExtractionCheckpointStore(renderedMemoryCheckpointStore), memoryCheckpointStore);
+const resumableMemoryExtraction = readResumableMemoryExtraction(
+	memoryCheckpointStore,
+	memoryCheckpointIdentity,
+	memoryCheckpointChunks
+);
+assert.equal(resumableMemoryExtraction?.createdAt, "2026-07-31T02:30:00.000Z");
+assert.deepEqual(resumableMemoryExtraction?.results, [memoryCheckpointResults[0]]);
+assert.equal(resumableMemoryExtraction?.results[0].rejectedAssertionCount, 1);
+const changedMemoryCheckpointIdentity = createMemoryExtractionCheckpointIdentity({
+	transcriptPath: memoryCheckpointIdentity.transcriptPath,
+	sourceText: memoryCheckpointSource,
+	inputFingerprint: memoryCheckpointIdentity.inputFingerprint,
+	analysisTemplateIds: ["work-minutes"],
+	user: memoryCheckpointUser,
+	settings: { ...memoryCheckpointSettings, memoryBaseUrl: "https://memory.example.com/v1" },
+	overlapCharacters: 0,
+	promptVersion: MEMORY_EXTRACTION_PROMPT_VERSION
+});
+assert.equal(
+	readResumableMemoryExtraction(memoryCheckpointStore, changedMemoryCheckpointIdentity, memoryCheckpointChunks),
+	null
+);
+const changedMemoryCheckpointChunks = memoryCheckpointChunks.map((chunk, index) =>
+	index === 0 ? { ...chunk, end: chunk.end - 1 } : chunk
+);
+assert.equal(
+	readResumableMemoryExtraction(memoryCheckpointStore, memoryCheckpointIdentity, changedMemoryCheckpointChunks),
+	null
+);
+const nonContinuousMemoryCheckpoint = structuredClone(memoryExtractionCheckpoint);
+nonContinuousMemoryCheckpoint.completedChunks[0].index = 2;
+assert.equal(
+	readResumableMemoryExtraction(
+		upsertMemoryExtractionCheckpoint(createMemoryExtractionCheckpointStore(), nonContinuousMemoryCheckpoint),
+		memoryCheckpointIdentity,
+		memoryCheckpointChunks
+	),
+	null
+);
+const invalidEvidenceMemoryCheckpoint = structuredClone(memoryExtractionCheckpoint);
+invalidEvidenceMemoryCheckpoint.completedChunks[0].result.assertions[0].evidenceQuote = "不存在的证据";
+assert.equal(
+	readResumableMemoryExtraction(
+		upsertMemoryExtractionCheckpoint(createMemoryExtractionCheckpointStore(), invalidEvidenceMemoryCheckpoint),
+		memoryCheckpointIdentity,
+		memoryCheckpointChunks
+	),
+	null
+);
+assert.equal(parseMemoryExtractionCheckpointStore("{bad json}"), null);
+assert.throws(
+	() => createMemoryExtractionCheckpoint(
+		memoryCheckpointIdentity,
+		memoryCheckpointChunks,
+		[{
+			...memoryCheckpointResults[0],
+			assertions: [{
+				...memoryCheckpointResults[0].assertions[0],
+				value: "长".repeat(MEMORY_EXTRACTION_CHECKPOINT_RESULT_MAX_CHARACTERS)
+			}]
+		}],
+		"2026-07-31T02:30:00.000Z"
+	),
+	/检查点上限/
+);
+const secondMemoryCheckpointIdentity = {
+	...memoryCheckpointIdentity,
+	transcriptPath: "Meetings/Second.transcript.md",
+	inputFingerprint: createStableFingerprint(`second:${memoryCheckpointSource}`)
+};
+const secondMemoryExtractionCheckpoint = createMemoryExtractionCheckpoint(
+	secondMemoryCheckpointIdentity,
+	memoryCheckpointChunks,
+	[memoryCheckpointResults[0]],
+	"2026-07-31T02:32:00.000Z"
+);
+const twoMemoryCheckpointStore = upsertMemoryExtractionCheckpoint(
+	memoryCheckpointStore,
+	secondMemoryExtractionCheckpoint
+);
+assert.equal(Object.keys(twoMemoryCheckpointStore.checkpoints).length, 2);
+assert.equal(
+	removeMemoryExtractionCheckpoint(
+		twoMemoryCheckpointStore,
+		memoryCheckpointIdentity.transcriptPath,
+		changedMemoryCheckpointIdentity
+	),
+	twoMemoryCheckpointStore
+);
+const firstMemoryCheckpointRemoved = removeMemoryExtractionCheckpoint(
+	twoMemoryCheckpointStore,
+	memoryCheckpointIdentity.transcriptPath,
+	memoryCheckpointIdentity
+);
+assert.equal(firstMemoryCheckpointRemoved.checkpoints[memoryCheckpointIdentity.transcriptPath], undefined);
+assert.ok(firstMemoryCheckpointRemoved.checkpoints[secondMemoryCheckpointIdentity.transcriptPath]);
+
+const resumedMemoryChunkCalls: number[] = [];
+const persistedMemoryChunkCounts: number[] = [];
+const resumedMemoryChunkResults = await extractMemoryChunkSequence({
+	chunks: memoryCheckpointChunks,
+	resumeResults: resumableMemoryExtraction?.results,
+	prepareResult: (result, chunk) =>
+		prepareMemoryExtractionCheckpointResult(result, chunk.text, memoryCheckpointIdentity),
+	extractChunk: async (chunk) => {
+		resumedMemoryChunkCalls.push(chunk.index);
+		return memoryCheckpointResults[chunk.index - 1];
+	},
+	onChunkComplete: (_chunk, results) => {
+		persistedMemoryChunkCounts.push(results.length);
+	}
+});
+assert.deepEqual(resumedMemoryChunkCalls, [2]);
+assert.deepEqual(persistedMemoryChunkCounts, [2]);
+assert.deepEqual(resumedMemoryChunkResults, [
+	memoryCheckpointResults[0],
+	{ ...memoryCheckpointResults[1], traceId: "memory-trace-2" }
+]);
 const transcriptAnalysisItems = [
 	TRANSCRIPT_ANALYSIS_START,
 	"# 纪要分析",
@@ -475,6 +1375,12 @@ taskCenter.upsertTask({
 	status: "running",
 	stage: "准备转写",
 	targetPath: "Audio.m4a",
+	recovery: {
+		kind: "transcription",
+		audioPath: "Audio.m4a",
+		sourcePath: "Daily.md",
+		audioLinkPath: "Audio.m4a"
+	},
 	createdAt: 1000,
 	updatedAt: 1000
 });
@@ -490,6 +1396,11 @@ taskCenter.upsertTask({
 	createdAt: 2000,
 	updatedAt: 2000,
 	completedAt: 5000,
+	recovery: {
+		kind: "analysis",
+		transcriptPath: "Audio.transcript.md",
+		templateId: "work-minutes"
+	},
 	retry: {
 		label: "重试分析",
 		run: async () => {
@@ -509,6 +1420,32 @@ assert.equal(formatTaskElapsedTime(taskCenter.getTasks()[0], 6000), "3s");
 assert.equal(await taskCenter.retryTask(failedTaskId), true);
 assert.equal(retriedTask, true);
 assert.equal(await taskCenter.retryTask("missing"), false);
+const persistedTaskCenter = createTaskCenterState(taskCenter.getTasks());
+assert.equal(persistedTaskCenter.schemaVersion, 1);
+assert.equal(Object.prototype.hasOwnProperty.call(persistedTaskCenter.tasks[0], "retry"), false);
+assert.equal(
+	persistedTaskCenter.tasks.find((task) => task.id === runningTaskId)?.recovery?.kind,
+	"transcription"
+);
+const normalizedTaskCenter = normalizeTaskCenterState(JSON.parse(JSON.stringify(persistedTaskCenter)));
+assert.deepEqual(normalizedTaskCenter, persistedTaskCenter);
+const interruptedTasks = markInterruptedTasks(normalizedTaskCenter.tasks, 7000);
+const interruptedTask = interruptedTasks.find((task) => task.id === runningTaskId);
+assert.equal(interruptedTask?.status, "failed");
+assert.equal(interruptedTask?.stage, "插件重启前任务已中断");
+assert.equal(interruptedTask?.completedAt, 7000);
+assert.equal(interruptedTask?.recovery?.kind, "transcription");
+assert.deepEqual(normalizeTaskCenterState({ schemaVersion: 2, tasks: persistedTaskCenter.tasks }), {
+	schemaVersion: 1,
+	tasks: []
+});
+assert.deepEqual(
+	normalizeTaskCenterState({
+		schemaVersion: 1,
+		tasks: [{ id: "invalid", kind: "unknown", status: "running" }]
+	}),
+	{ schemaVersion: 1, tasks: [] }
+);
 taskCenter.clearFinishedTasks();
 assert.equal(taskCenter.getTasks().length, 1);
 assert.equal(taskCenter.getTasks()[0].id, runningTaskId);
@@ -948,6 +1885,52 @@ assert.equal(chunkPipelineResult.segments[0].utterances?.[0].speakerId, "S01");
 assert.deepEqual(chunkPipelineResult.rawSegments, [{ index: 1 }, { index: 2 }]);
 assert.deepEqual(chunkPipelineChunks.map((chunk) => chunk.audioBuffer.byteLength), [0, 0]);
 
+const resumedFixedUploads: string[] = [];
+const resumedFixedEvents: Array<{ type: string; completed: number }> = [];
+const resumedFixedChunks = [
+	{
+		index: 1,
+		total: 2,
+		startSeconds: 0,
+		endSeconds: 180,
+		audioBuffer: new ArrayBuffer(8),
+		mimeType: "audio/wav"
+	},
+	{
+		index: 2,
+		total: 2,
+		startSeconds: 180,
+		endSeconds: 321,
+		audioBuffer: new ArrayBuffer(8),
+		mimeType: "audio/wav"
+	}
+];
+const resumedFixedResult = await runAudioChunkPipeline({
+	initialSegments: [{
+		index: 1,
+		total: 2,
+		startSeconds: 0,
+		endSeconds: 180,
+		text: "已缓存第一段",
+		traceId: "cached-trace"
+	}],
+	createChunks: async () => resumedFixedChunks,
+	transcribeChunk: async (chunk) => {
+		resumedFixedUploads.push(`${chunk.startSeconds}-${chunk.endSeconds}`);
+		return { text: "新转写第二段", traceId: "new-trace", raw: { uploaded: true } };
+	},
+	onProgress: (progress) => {
+		if (progress.type === "long-audio-started") {
+			resumedFixedEvents.push({ type: progress.type, completed: progress.segments.length });
+		}
+	}
+});
+assert.deepEqual(resumedFixedUploads, ["180-321"]);
+assert.equal(resumedFixedResult.text, "已缓存第一段\n\n新转写第二段");
+assert.equal(resumedFixedResult.traceId, "cached-trace, new-trace");
+assert.deepEqual(resumedFixedEvents, [{ type: "long-audio-started", completed: 1 }]);
+assert.deepEqual(resumedFixedChunks.map((chunk) => chunk.audioBuffer.byteLength), [0, 0]);
+
 const siliconFlowSenseVoicePolicy = resolveProviderTranscriptionPolicy({
 	provider: "siliconflow",
 	model: "FunAudioLLM/SenseVoiceSmall"
@@ -1141,6 +2124,78 @@ assert.deepEqual(
 		[3, 3, 900, 1200]
 	]
 );
+
+const resumedAdaptiveUploads: string[] = [];
+const resumedAdaptiveStarted: Array<{ total: number; completed: number }> = [];
+const resumedAdaptiveResult = await runAdaptiveAudioChunkPipeline({
+	initialSegments: [
+		{
+			index: 1,
+			total: 3,
+			startSeconds: 0,
+			endSeconds: 600,
+			text: "已缓存 0-600"
+		},
+		{
+			index: 2,
+			total: 3,
+			startSeconds: 600,
+			endSeconds: 900,
+			text: "已缓存 600-900"
+		}
+	],
+	createChunks: async () => [
+		{
+			index: 1,
+			total: 2,
+			startSeconds: 0,
+			endSeconds: 600,
+			audioBuffer: new ArrayBuffer(8),
+			mimeType: "audio/wav"
+		},
+		{
+			index: 2,
+			total: 2,
+			startSeconds: 600,
+			endSeconds: 1200,
+			audioBuffer: new ArrayBuffer(8),
+			mimeType: "audio/wav"
+		}
+	],
+	transcribeChunk: async (chunk) => {
+		const range = `${chunk.startSeconds}-${chunk.endSeconds}`;
+		resumedAdaptiveUploads.push(range);
+		return { text: `新转写 ${range}`, raw: { range } };
+	},
+	splitChunk: (chunk) => {
+		const midpoint = (chunk.startSeconds + chunk.endSeconds) / 2;
+		return [
+			{ ...chunk, endSeconds: midpoint, audioBuffer: new ArrayBuffer(4) },
+			{ ...chunk, startSeconds: midpoint, audioBuffer: new ArrayBuffer(4) }
+		];
+	},
+	shouldRetry: () => false,
+	shouldSplit: () => false,
+	retryDelaysMs: [],
+	maxSplitDepth: 4,
+	minSegmentSeconds: 60,
+	onProgress: (progress) => {
+		if (progress.type === "long-audio-started") {
+			resumedAdaptiveStarted.push({ total: progress.totalSegments, completed: progress.segments.length });
+		}
+	}
+});
+assert.deepEqual(resumedAdaptiveUploads, ["900-1200"]);
+assert.deepEqual(resumedAdaptiveStarted, [{ total: 3, completed: 2 }]);
+assert.deepEqual(
+	resumedAdaptiveResult.segments.map((segment) => [segment.index, segment.total, segment.startSeconds, segment.endSeconds]),
+	[
+		[1, 3, 0, 600],
+		[2, 3, 600, 900],
+		[3, 3, 900, 1200]
+	]
+);
+assert.equal(resumedAdaptiveResult.text, "已缓存 0-600\n\n已缓存 600-900\n\n新转写 900-1200");
 
 let directSplitAttempts = 0;
 const directSplitEvents: string[] = [];
@@ -1426,6 +2481,22 @@ assert.match(diarizedTranscript, /单人录音正文/);
 assert.doesNotMatch(diarizedTranscript, /原始全文回退/);
 assert.doesNotMatch(diarizedTranscript, /说话人编号仍可能调整/);
 
+const checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile as never, {
+	provider: "aliyun-bailian",
+	baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	model: "qwen3-asr-flash",
+	language: "zh"
+});
+const transcriptionCheckpoint = createTranscriptionCheckpoint(
+	checkpointIdentity,
+	[{ ...transcriptSegments[0], text: "第一段含有 %% 标记。" }],
+	"2026-07-31T01:00:00.000Z"
+);
+const renderedCheckpoint = renderTranscriptionCheckpoint(transcriptionCheckpoint);
+assert.match(renderedCheckpoint, new RegExp(TRANSCRIPTION_CHECKPOINT_START));
+assert.doesNotMatch(renderedCheckpoint, /%% 标记/);
+assert.equal(parseTranscriptionCheckpoint(renderedCheckpoint)?.segments[0].text, "第一段含有 %% 标记。");
+
 const progressTranscript = renderProgressTranscriptTemplate({
 	app: templateApp as never,
 	audioFile: audioFile as never,
@@ -1433,12 +2504,43 @@ const progressTranscript = renderProgressTranscriptTemplate({
 	provider: "aliyun-bailian",
 	model: "qwen3-asr-flash",
 	segments: [transcriptSegments[0]],
+	checkpoint: transcriptionCheckpoint,
 	copyLanguage: "zh"
 });
 assert.match(progressTranscript, /status: transcribing/);
 assert.match(progressTranscript, /音频正在转写/);
 assert.match(progressTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(progressTranscript, /第一段内容。/);
+assert.equal(readResumableTranscriptionSegments(progressTranscript, checkpointIdentity).length, 1);
+const mergedCheckpointTranscript = mergeManagedTranscriptDocument(existingManagedTranscript, progressTranscript);
+assert.ok(mergedCheckpointTranscript);
+assert.match(mergedCheckpointTranscript, /custom_user_field: "keep-me"/);
+assert.match(mergedCheckpointTranscript, /用户手工批注/);
+assert.equal(readResumableTranscriptionSegments(mergedCheckpointTranscript, checkpointIdentity).length, 1);
+assert.deepEqual(
+	readResumableTranscriptionSegments(progressTranscript, {
+		...checkpointIdentity,
+		model: "changed-model"
+	}),
+	[]
+);
+assert.deepEqual(
+	readResumableTranscriptionSegments(progressTranscript, {
+		...checkpointIdentity,
+		sourceAudio: { ...checkpointIdentity.sourceAudio, mtime: checkpointIdentity.sourceAudio.mtime + 1 }
+	}),
+	[]
+);
+assert.equal(
+	parseTranscriptionCheckpoint(progressTranscript.replace('"schemaVersion": 1', '"schemaVersion": 99')),
+	null
+);
+const gappedCheckpoint = renderTranscriptionCheckpoint(createTranscriptionCheckpoint(
+	checkpointIdentity,
+	[{ ...transcriptSegments[0], startSeconds: 10 }]
+));
+assert.deepEqual(readResumableTranscriptionSegments(gappedCheckpoint, checkpointIdentity), []);
+assert.doesNotMatch(chineseTranscript, new RegExp(TRANSCRIPTION_CHECKPOINT_START));
 
 const realtimeProgressTranscript = renderProgressTranscriptTemplate({
 	app: templateApp as never,
@@ -1479,12 +2581,14 @@ const partialFailedTranscript = renderFailedTranscriptTemplate({
 	model: "qwen3-asr-flash",
 	error: "第 2 段请求失败。",
 	segments: [transcriptSegments[0]],
+	checkpoint: transcriptionCheckpoint,
 	copyLanguage: "zh"
 });
 assert.match(partialFailedTranscript, /status: failed/);
 assert.match(partialFailedTranscript, /音频转写已中断/);
 assert.match(partialFailedTranscript, /# 转写稿 Recording 20260531001942/);
 assert.match(partialFailedTranscript, /第一段内容。/);
+assert.equal(readResumableTranscriptionSegments(partialFailedTranscript, checkpointIdentity).length, 1);
 
 const streamingFailedTranscript = renderFailedTranscriptTemplate({
 	app: templateApp as never,
@@ -2289,6 +3393,225 @@ assert.ok(analysisChunks.length >= 3);
 assert.deepEqual(analysisChunks.map((chunk) => chunk.index), analysisChunks.map((_chunk, index) => index + 1));
 assert.ok(analysisChunks.every((chunk) => chunk.total === analysisChunks.length));
 assert.ok(analysisChunks.every((chunk) => chunk.text.length <= 48));
+const analysisCheckpointTemplate = DEFAULT_SETTINGS.analysisTemplates[0];
+const analysisCheckpointSettings = {
+	...DEFAULT_SETTINGS,
+	analysisProvider: "aliyun-bailian" as const,
+	analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	analysisModel: "deepseek-v4-pro",
+	analysisChunkCharacters: 40,
+	analysisLongTextEnabled: true,
+	redactTranscriptBeforeAnalysis: false
+};
+const analysisCheckpointText = analysisChunks.map((chunk) => chunk.text).join("\n");
+const analysisCheckpointIdentity = createAnalysisCheckpointIdentity({
+	transcriptPath: "Meetings/Long.transcript.md",
+	analysisText: analysisCheckpointText,
+	template: analysisCheckpointTemplate,
+	settings: analysisCheckpointSettings,
+	overlapCharacters: 8
+});
+const analysisCheckpointResults = analysisChunks.slice(0, 2).map((chunk) => ({
+	text: `分块结果 ${chunk.index}，含 Obsidian 注释 %% 标记`,
+	provider: analysisCheckpointIdentity.provider,
+	model: analysisCheckpointIdentity.model,
+	traceId: `trace-${chunk.index}`,
+	raw: { api_key: "sk-must-not-persist" }
+}));
+const analysisCheckpoint = createAnalysisCheckpoint(
+	analysisCheckpointIdentity,
+	analysisChunks,
+	analysisCheckpointResults,
+	"2026-07-31T02:00:00.000Z"
+);
+const renderedAnalysisCheckpoint = renderAnalysisCheckpoint(analysisCheckpoint);
+assert.doesNotMatch(renderedAnalysisCheckpoint, /sk-must-not-persist|api_key/);
+assert.deepEqual(
+	parseAnalysisCheckpoint(renderedAnalysisCheckpoint, analysisCheckpointTemplate.id),
+	analysisCheckpoint
+);
+const analysisCheckpointDocument = [
+	"---",
+	"custom_field: keep",
+	"---",
+	"",
+	"人工前言。  ",
+	"",
+	"",
+	TRANSCRIPT_MANAGED_START,
+	"# 转写稿 Long",
+	"",
+	analysisCheckpointText,
+	TRANSCRIPT_MANAGED_END,
+	""
+].join("\n");
+const documentWithAnalysisCheckpoint = upsertAnalysisCheckpoint(analysisCheckpointDocument, analysisCheckpoint);
+assert.match(documentWithAnalysisCheckpoint, /人工前言。 {2}\n\n\n/);
+assert.equal(extractTranscriptText(documentWithAnalysisCheckpoint), analysisCheckpointText);
+assert.equal(
+	removeAnalysisCheckpoint(documentWithAnalysisCheckpoint, analysisCheckpointTemplate.id),
+	analysisCheckpointDocument
+);
+assert.equal(
+	upsertAnalysisCheckpoint(documentWithAnalysisCheckpoint, analysisCheckpoint),
+	documentWithAnalysisCheckpoint
+);
+const unmanagedAnalysisDocument = "人工正文第一段\n\n\n人工正文第二段";
+const unmanagedDocumentWithCheckpoint = upsertAnalysisCheckpoint(unmanagedAnalysisDocument, analysisCheckpoint);
+assert.equal(
+	removeAnalysisCheckpoint(unmanagedDocumentWithCheckpoint, analysisCheckpointTemplate.id),
+	unmanagedAnalysisDocument
+);
+assert.equal(extractTranscriptText(unmanagedDocumentWithCheckpoint), unmanagedAnalysisDocument);
+const crlfAnalysisDocument = "---\r\ncustom_field: keep\r\n---\r\n\r\n人工正文。\r\n";
+const crlfDocumentWithCheckpoint = upsertAnalysisCheckpoint(crlfAnalysisDocument, analysisCheckpoint);
+assert.ok(crlfDocumentWithCheckpoint.startsWith("---\r\ncustom_field: keep\r\n---\r\n"));
+assert.match(crlfDocumentWithCheckpoint, /echo-notes-analysis-checkpoint:start[^\r\n]+\r\n/);
+assert.equal(
+	removeAnalysisCheckpoint(crlfDocumentWithCheckpoint, analysisCheckpointTemplate.id),
+	crlfAnalysisDocument
+);
+assert.deepEqual(
+	readResumableAnalysisResults(documentWithAnalysisCheckpoint, analysisCheckpointIdentity, analysisChunks),
+	analysisCheckpointResults.map(({ raw: _raw, ...result }) => result)
+);
+const changedAnalysisModelIdentity = createAnalysisCheckpointIdentity({
+	transcriptPath: "Meetings/Long.transcript.md",
+	analysisText: analysisCheckpointText,
+	template: analysisCheckpointTemplate,
+	settings: { ...analysisCheckpointSettings, analysisModel: "changed-model" },
+	overlapCharacters: 8
+});
+assert.deepEqual(
+	readResumableAnalysisResults(documentWithAnalysisCheckpoint, changedAnalysisModelIdentity, analysisChunks),
+	[]
+);
+const changedAnalysisTemplateIdentity = createAnalysisCheckpointIdentity({
+	transcriptPath: "Meetings/Long.transcript.md",
+	analysisText: analysisCheckpointText,
+	template: { ...analysisCheckpointTemplate, customPrompt: `${analysisCheckpointTemplate.customPrompt}\n新规则` },
+	settings: analysisCheckpointSettings,
+	overlapCharacters: 8
+});
+assert.deepEqual(
+	readResumableAnalysisResults(documentWithAnalysisCheckpoint, changedAnalysisTemplateIdentity, analysisChunks),
+	[]
+);
+const changedAnalysisInputIdentity = createAnalysisCheckpointIdentity({
+	transcriptPath: "Meetings/Long.transcript.md",
+	analysisText: `${analysisCheckpointText} 已修改`,
+	template: analysisCheckpointTemplate,
+	settings: analysisCheckpointSettings,
+	overlapCharacters: 8
+});
+assert.deepEqual(
+	readResumableAnalysisResults(documentWithAnalysisCheckpoint, changedAnalysisInputIdentity, analysisChunks),
+	[]
+);
+const changedAnalysisChunks = analysisChunks.map((chunk, index) => index === 0 ? { ...chunk, end: chunk.end - 1 } : chunk);
+assert.deepEqual(
+	readResumableAnalysisResults(documentWithAnalysisCheckpoint, analysisCheckpointIdentity, changedAnalysisChunks),
+	[]
+);
+const nonContinuousAnalysisCheckpoint = structuredClone(analysisCheckpoint);
+nonContinuousAnalysisCheckpoint.completedChunks[1].index = 3;
+assert.deepEqual(
+	readResumableAnalysisResults(
+		renderAnalysisCheckpoint(nonContinuousAnalysisCheckpoint),
+		analysisCheckpointIdentity,
+		analysisChunks
+	),
+	[]
+);
+assert.deepEqual(
+	readResumableAnalysisResults(
+		renderedAnalysisCheckpoint.replace('"schemaVersion": 1', '"schemaVersion": 999'),
+		analysisCheckpointIdentity,
+		analysisChunks
+	),
+	[]
+);
+const oversizedAnalysisCheckpoint = createAnalysisCheckpoint(
+	analysisCheckpointIdentity,
+	analysisChunks,
+	[{
+		text: "长".repeat(ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS + 200),
+		provider: analysisCheckpointIdentity.provider,
+		model: analysisCheckpointIdentity.model
+	}]
+);
+assert.equal(
+	oversizedAnalysisCheckpoint.completedChunks[0].result.text.length,
+	ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS
+);
+const secondAnalysisTemplate = DEFAULT_SETTINGS.analysisTemplates[1];
+const secondAnalysisCheckpointIdentity = createAnalysisCheckpointIdentity({
+	transcriptPath: "Meetings/Long.transcript.md",
+	analysisText: analysisCheckpointText,
+	template: secondAnalysisTemplate,
+	settings: analysisCheckpointSettings,
+	overlapCharacters: 8
+});
+const secondAnalysisCheckpoint = createAnalysisCheckpoint(
+	secondAnalysisCheckpointIdentity,
+	analysisChunks,
+	[analysisCheckpointResults[0]]
+);
+const twoTemplateCheckpointDocument = upsertAnalysisCheckpoint(
+	documentWithAnalysisCheckpoint,
+	secondAnalysisCheckpoint
+);
+assert.ok(parseAnalysisCheckpoint(twoTemplateCheckpointDocument, analysisCheckpointTemplate.id));
+assert.ok(parseAnalysisCheckpoint(twoTemplateCheckpointDocument, secondAnalysisTemplate.id));
+const firstCheckpointRemoved = removeAnalysisCheckpoint(
+	twoTemplateCheckpointDocument,
+	analysisCheckpointTemplate.id
+);
+assert.equal(parseAnalysisCheckpoint(firstCheckpointRemoved, analysisCheckpointTemplate.id), null);
+assert.ok(parseAnalysisCheckpoint(firstCheckpointRemoved, secondAnalysisTemplate.id));
+assert.match(firstCheckpointRemoved, /人工前言。 {2}\n\n\n/);
+
+const resumedAnalysisCalls: number[] = [];
+const persistedAnalysisCounts: number[] = [];
+let synthesisAnalysisResults: readonly AnalysisResult[] = [];
+const synthesizedAnalysisResult = await analyzeChunkSequence({
+	analysisInput: {
+		template: analysisCheckpointTemplate,
+		transcriptTitle: "Long.transcript",
+		transcriptText: analysisCheckpointText,
+		copyLanguage: "zh"
+	},
+	chunks: analysisChunks,
+	resumeResults: [analysisCheckpointResults[0]],
+	analyzeChunk: async (_input, chunk) => {
+		resumedAnalysisCalls.push(chunk.index);
+		return {
+			text: chunk.index === 2
+				? ` ${"长".repeat(ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS + 200)} `
+				: `新分块结果 ${chunk.index}`,
+			provider: analysisCheckpointIdentity.provider,
+			model: analysisCheckpointIdentity.model,
+			raw: { api_key: "sk-must-not-reach-synthesis" }
+		};
+	},
+	prepareResult: prepareAnalysisCheckpointResult,
+	synthesize: async (_input, results) => {
+		synthesisAnalysisResults = results;
+		return {
+			text: `汇总 ${results.length} 块`,
+			provider: analysisCheckpointIdentity.provider,
+			model: analysisCheckpointIdentity.model
+		};
+	},
+	onChunkComplete: (_chunk, results) => {
+		persistedAnalysisCounts.push(results.length);
+	}
+});
+assert.deepEqual(resumedAnalysisCalls, analysisChunks.slice(1).map((chunk) => chunk.index));
+assert.deepEqual(persistedAnalysisCounts, analysisChunks.slice(1).map((chunk) => chunk.index));
+assert.equal(synthesizedAnalysisResult.text, `汇总 ${analysisChunks.length} 块`);
+assert.equal(synthesisAnalysisResults[1].text.length, ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS);
+assert.ok(synthesisAnalysisResults.every((result) => result.raw === undefined));
 const sanitizedErrorText = sanitizeSensitiveText(sensitiveErrorText);
 assert.doesNotMatch(sanitizedErrorText, /testsecret/);
 assert.doesNotMatch(sanitizedErrorText, /jsonsecret/);
@@ -2635,6 +3958,12 @@ assert.equal(siliconFlowAnalysisSettings.analysisProvider, "siliconflow");
 assert.equal(siliconFlowAnalysisSettings.analysisBaseUrl, "https://api.siliconflow.cn/v1");
 assert.equal(siliconFlowAnalysisSettings.analysisModel, "Qwen/Qwen3.5-4B");
 assert.equal(normalizeEchoNotesSettings({ redactTranscriptBeforeAnalysis: true }).redactTranscriptBeforeAnalysis, true);
+const normalizedTaskCenterSettings = normalizeEchoNotesSettings({ taskCenterState: persistedTaskCenter });
+assert.deepEqual(normalizedTaskCenterSettings.taskCenterState, persistedTaskCenter);
+assert.deepEqual(normalizeEchoNotesSettings({ taskCenterState: { schemaVersion: 1, tasks: "invalid" } }).taskCenterState, {
+	schemaVersion: 1,
+	tasks: []
+});
 const normalizedMemorySettings = normalizeEchoNotesSettings({
 	memoryEnabled: true,
 	memoryInitialized: true,
@@ -2878,6 +4207,22 @@ assert.equal(
 		customOutputFolder: "Transcripts"
 	}),
 	"Transcripts/Meeting.transcript.md"
+);
+const realChainValidationSource = readFileSync("scripts/real-chain-validation.mjs", "utf8");
+assert.match(
+	realChainValidationSource,
+	/transcriptPath:\s*result\.transcriptPath/,
+	"真实链路验收必须沿用转写返回的实际 transcript 路径"
+);
+assert.match(
+	realChainValidationSource,
+	/await vault\.modify\(existingTranscript, transcriptContentForRelation\)/,
+	"真实链路关系验收必须使用同一份真实转写内容构造确定性双候选夹具"
+);
+assert.match(
+	realChainValidationSource,
+	/if \(checkpointFile\?\.path\?\.endsWith\("\.json"\)\)/,
+	"真实链路验收应允许成功流程不创建记忆检查点文件"
 );
 
 assert.equal(createAnalysisTemplateId("review", ["review"]), "review-2");

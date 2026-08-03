@@ -16,7 +16,37 @@ export const MEMORY_MANAGED_END = "<!-- echo-memory:managed:end -->";
 export const MEMORY_MEETING_START = "<!-- echo-memory-meeting:start -->";
 export const MEMORY_MEETING_END = "<!-- echo-memory-meeting:end -->";
 
+export interface RejectedMemoryAssertion {
+	index: number;
+	reason: string;
+}
+
+export interface MemoryExtractionResponseDiagnostics {
+	response: MemoryExtractionResponse;
+	rejectedAssertions: RejectedMemoryAssertion[];
+}
+
 export function parseMemoryExtractionResponse(text: string, sourceText: string): MemoryExtractionResponse {
+	const diagnostics = parseMemoryExtractionResponseDiagnostics(text, sourceText, false);
+	const rejected = diagnostics.rejectedAssertions[0];
+	if (rejected) {
+		throw new Error(rejected.reason);
+	}
+	return diagnostics.response;
+}
+
+export function parseMemoryExtractionResponseWithDiagnostics(
+	text: string,
+	sourceText: string
+): MemoryExtractionResponseDiagnostics {
+	return parseMemoryExtractionResponseDiagnostics(text, sourceText, true);
+}
+
+function parseMemoryExtractionResponseDiagnostics(
+	text: string,
+	sourceText: string,
+	rejectFullyUngroundedResponse: boolean
+): MemoryExtractionResponseDiagnostics {
 	const jsonText = extractJsonObject(text);
 	let parsed: unknown;
 	try {
@@ -29,14 +59,29 @@ export function parseMemoryExtractionResponse(text: string, sourceText: string):
 		throw new Error("记忆提取结果必须包含 assertions 数组。");
 	}
 
+	const assertions: RawMemoryAssertion[] = [];
+	const rejectedAssertions: RejectedMemoryAssertion[] = [];
+	parsed.assertions.forEach((value, index) => {
+		const assertion = parseRawAssertion(value, index);
+		if (!includesNormalized(sourceText, assertion.evidenceQuote)) {
+			rejectedAssertions.push({
+				index,
+				reason: `assertions[${index}].evidenceQuote 无法在本次输入中定位。`
+			});
+			return;
+		}
+		assertions.push(assertion);
+	});
+	if (rejectFullyUngroundedResponse && parsed.assertions.length > 0 && assertions.length === 0) {
+		throw new Error(`模型返回的 ${rejectedAssertions.length} 条断言均因原文证据无法定位被拒绝。`);
+	}
 	return {
-		assertions: parsed.assertions.map((value, index) =>
-			parseRawAssertion(value, index, sourceText)
-		)
+		response: { assertions },
+		rejectedAssertions
 	};
 }
 
-export function renderMemoryCandidate(candidate: MemoryCandidatePackage): string {
+export function renderMemoryCandidate(candidate: MemoryCandidatePackage, reviewPath?: string): string {
 	const rows = candidate.assertions.length > 0
 		? candidate.assertions.map((assertion) => [
 			assertion.subjectType,
@@ -61,6 +106,10 @@ export function renderMemoryCandidate(candidate: MemoryCandidatePackage): string
 		"",
 		`来源：[[${candidate.source.transcriptPath}]]`,
 		`Provider：${candidate.provider} · 模型：${candidate.model}`,
+		...(candidate.rejectedAssertionCount
+			? [`证据校验拒绝：${candidate.rejectedAssertionCount} 条`]
+			: []),
+		...(reviewPath ? [`审核：[[${reviewPath}]]`] : []),
 		"",
 		"| 类型 | 主体 | 关系/属性 | 内容 | 置信度 | 原文证据 |",
 		"| --- | --- | --- | --- | ---: | --- |",
@@ -96,6 +145,11 @@ export function parseMemoryCandidate(content: string): MemoryCandidatePackage {
 		typeof parsed.model !== "string" ||
 		!Array.isArray(parsed.traceIds) ||
 		!parsed.traceIds.every((value) => typeof value === "string") ||
+		(parsed.rejectedAssertionCount !== undefined && (
+			typeof parsed.rejectedAssertionCount !== "number" ||
+			!Number.isInteger(parsed.rejectedAssertionCount) ||
+			parsed.rejectedAssertionCount < 0
+		)) ||
 		typeof parsed.source.transcriptPath !== "string" ||
 		typeof parsed.source.transcriptTitle !== "string" ||
 		!Array.isArray(parsed.source.analysisTemplateIds) ||
@@ -157,7 +211,7 @@ export function formatMemoryExtractionRetryLog(transcriptPath: string): string {
 	return `从任务中心重试记忆提取 [[${sanitizeMemoryLogPath(transcriptPath)}]]。`;
 }
 
-function parseRawAssertion(value: unknown, index: number, sourceText: string): RawMemoryAssertion {
+function parseRawAssertion(value: unknown, index: number): RawMemoryAssertion {
 	if (!isRecord(value)) {
 		throw new Error(`assertions[${index}] 必须是对象。`);
 	}
@@ -174,9 +228,6 @@ function parseRawAssertion(value: unknown, index: number, sourceText: string): R
 		evidenceQuote: readNonEmptyString(value.evidenceQuote, `assertions[${index}].evidenceQuote`)
 	};
 
-	if (!includesNormalized(sourceText, assertion.evidenceQuote)) {
-		throw new Error(`assertions[${index}].evidenceQuote 无法在本次输入中定位。`);
-	}
 	return assertion;
 }
 

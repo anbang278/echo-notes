@@ -82,6 +82,9 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			model: this.settings.model
 		});
 		const durationSeconds = await this.probeDuration(audioBuffer, mimeType);
+		if (input.resumeSegments && input.resumeSegments.length > 0) {
+			return this.transcribeLongAudio(audioBuffer, input, policy, true);
+		}
 		if (
 			shouldPreChunkTranscription({
 				policy,
@@ -129,6 +132,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			SiliconFlowTranscriptionResponse
 		>({
 			onProgress: input.onProgress,
+			initialSegments: input.resumeSegments,
 			createChunks: async () => {
 				const chunks = await this.createLongAudioChunks(audioBuffer, policy);
 				if (
