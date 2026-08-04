@@ -43,6 +43,7 @@ import { SequentialBlobWriteQueue } from "../src/audio/realtime-blob-write-queue
 import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/audio/audio-link-fingerprint";
 import { LinkService } from "../src/obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "../src/obsidian/realtime-link-insertion";
+import { buildMultipartFormDataBody } from "../src/network/multipart-form-data";
 import { shouldSkipAutomationForPrivateNote } from "../src/privacy/note-privacy";
 import {
 	formatProviderCapabilityBytes,
@@ -2809,7 +2810,7 @@ const mosiMultipartBody = new TextDecoder().decode(
 	buildMosiMultipartBody(
 		"mosi-test-boundary",
 		new Uint8Array([65, 66, 67]).buffer,
-		"双人 验收.wav",
+		'双人 验收 (final) "draft" \\ copy.wav',
 		"audio/wav"
 	)
 );
@@ -2820,8 +2821,11 @@ assert.match(
 );
 assert.match(mosiMultipartBody, /name="diarize"\r\n\r\ntrue\r\n/);
 assert.match(mosiMultipartBody, /name="response_format"\r\n\r\njson\r\n/);
-assert.match(mosiMultipartBody, /name="file"; filename="双人 验收\.wav"; filename\*=UTF-8''/);
+assert.match(mosiMultipartBody, /name="file"; filename="audio\.wav"\r\n/);
+assert.doesNotMatch(mosiMultipartBody, /filename\*=/);
+assert.doesNotMatch(mosiMultipartBody, /双人|final|draft|copy/);
 assert.match(mosiMultipartBody, /Content-Type: audio\/wav\r\n\r\nABC\r\n/);
+assert.ok(mosiMultipartBody.endsWith("--mosi-test-boundary--\r\n"));
 assert.doesNotMatch(mosiMultipartBody, /name="language"/);
 assert.doesNotMatch(mosiMultipartBody, /name="stream"/);
 assert.doesNotMatch(mosiMultipartBody, /name="async"/);
@@ -2847,6 +2851,32 @@ assert.match(mosiPlainMultipartBody, /name="response_format"\r\n\r\njson\r\n/);
 assert.doesNotMatch(mosiPlainMultipartBody, /name="language"/);
 assert.doesNotMatch(mosiPlainMultipartBody, /name="stream"/);
 assert.doesNotMatch(mosiPlainMultipartBody, /name="async"/);
+const multipartBinaryPayload = Uint8Array.from([0, 255, 13, 10, 34, 92]);
+const multipartBinaryBody = new Uint8Array(
+	buildMultipartFormDataBody("binary-test-boundary", [
+		{
+			name: "file",
+			fileName: '会议 录音 (final) "draft" \\ copy.M4A',
+			contentType: "audio/mp4",
+			value: multipartBinaryPayload.buffer
+		}
+	])
+);
+const multipartBinaryPrefix = new TextEncoder().encode(
+	'--binary-test-boundary\r\nContent-Disposition: form-data; name="file"; filename="audio.m4a"\r\nContent-Type: audio/mp4\r\n\r\n'
+);
+assert.deepEqual(multipartBinaryBody.slice(0, multipartBinaryPrefix.byteLength), multipartBinaryPrefix);
+assert.deepEqual(
+	multipartBinaryBody.slice(
+		multipartBinaryPrefix.byteLength,
+		multipartBinaryPrefix.byteLength + multipartBinaryPayload.byteLength
+	),
+	multipartBinaryPayload
+);
+assert.deepEqual(
+	multipartBinaryBody.slice(multipartBinaryPrefix.byteLength + multipartBinaryPayload.byteLength),
+	new TextEncoder().encode("\r\n--binary-test-boundary--\r\n")
+);
 const normalizedMosiResponse = normalizeMosiTranscriptionResponse({
 	task: "transcribe",
 	duration: 3.5,

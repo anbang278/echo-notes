@@ -1,5 +1,9 @@
 import { App, requestUrl } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
+import {
+	buildMultipartFormDataBody,
+	type MultipartFormDataPart
+} from "../network/multipart-form-data";
 import type { OfflineTranscriptionProviderId, TranscriptionConfig } from "../settings/settings";
 import {
 	createHttpTranscriptionError,
@@ -56,7 +60,7 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 
 		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
 		const boundary = `----EchoNotesBoundary${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
-		const parts: MultipartPart[] = [
+		const parts: MultipartFormDataPart[] = [
 			{
 				name: "model",
 				value: this.settings.model
@@ -86,7 +90,7 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 					Authorization: `Bearer ${apiKey}`,
 					"Content-Type": `multipart/form-data; boundary=${boundary}`
 				},
-				body: buildMultipartBody(boundary, parts)
+				body: buildMultipartFormDataBody(boundary, parts)
 			});
 		} catch (error) {
 			throw createNetworkTranscriptionError(this.name, error);
@@ -110,62 +114,6 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 			raw: data
 		};
 	}
-}
-
-type MultipartPart =
-	| {
-			name: string;
-			value: string;
-	  }
-	| {
-			name: string;
-			fileName: string;
-			contentType: string;
-			value: ArrayBuffer;
-	  };
-
-function buildMultipartBody(boundary: string, parts: MultipartPart[]): ArrayBuffer {
-	const encoder = new TextEncoder();
-	const chunks: Uint8Array[] = [];
-
-	for (const part of parts) {
-		if (!("fileName" in part)) {
-			chunks.push(
-				encoder.encode(
-					`--${boundary}\r\n` +
-						`Content-Disposition: form-data; name="${escapeHeaderValue(part.name)}"\r\n\r\n` +
-						`${part.value}\r\n`
-				)
-			);
-			continue;
-		}
-
-		chunks.push(
-			encoder.encode(
-				`--${boundary}\r\n` +
-					`Content-Disposition: form-data; name="${escapeHeaderValue(part.name)}"; filename="${escapeHeaderValue(part.fileName)}"; filename*=UTF-8''${encodeURIComponent(part.fileName)}\r\n` +
-					`Content-Type: ${part.contentType}\r\n\r\n`
-			)
-		);
-		chunks.push(new Uint8Array(part.value));
-		chunks.push(encoder.encode("\r\n"));
-	}
-
-	chunks.push(encoder.encode(`--${boundary}--\r\n`));
-
-	const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-	const combined = new Uint8Array(length);
-	let offset = 0;
-	for (const chunk of chunks) {
-		combined.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-
-	return combined.buffer;
-}
-
-function escapeHeaderValue(value: string): string {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function readTraceId(headers: Record<string, string>): string | undefined {

@@ -2,6 +2,7 @@ import { App, requestUrl } from "obsidian";
 import { runAdaptiveAudioChunkPipeline } from "../audio/audio-chunk-pipeline";
 import { probeAudioDurationSeconds } from "../audio/audio-duration";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
+import { buildMultipartFormDataBody } from "../network/multipart-form-data";
 import {
 	createWavAudioSegments,
 	formatSegmentTimeRange,
@@ -269,7 +270,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 	): Promise<SiliconFlowSegmentResult> {
 		const apiKey = this.apiKey.trim();
 		const boundary = `----EchoNotesBoundary${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
-		const body = buildMultipartBody(boundary, [
+		const body = buildMultipartFormDataBody(boundary, [
 			{
 				name: "model",
 				value: this.settings.model
@@ -326,62 +327,6 @@ function buildSegmentFileName(sourceFileName: string, chunk: WavAudioSegment): s
 	const extensionIndex = sourceFileName.lastIndexOf(".");
 	const basename = extensionIndex > 0 ? sourceFileName.slice(0, extensionIndex) : sourceFileName;
 	return `${basename}.segment-${chunk.index.toString().padStart(2, "0")}.wav`;
-}
-
-type MultipartPart =
-	| {
-			name: string;
-			value: string;
-	  }
-	| {
-			name: string;
-			fileName: string;
-			contentType: string;
-			value: ArrayBuffer;
-	  };
-
-function buildMultipartBody(boundary: string, parts: MultipartPart[]): ArrayBuffer {
-	const encoder = new TextEncoder();
-	const chunks: Uint8Array[] = [];
-
-	for (const part of parts) {
-		if (!("fileName" in part)) {
-			chunks.push(
-				encoder.encode(
-					`--${boundary}\r\n` +
-						`Content-Disposition: form-data; name="${escapeHeaderValue(part.name)}"\r\n\r\n` +
-						`${part.value}\r\n`
-				)
-			);
-			continue;
-		}
-
-		chunks.push(
-			encoder.encode(
-				`--${boundary}\r\n` +
-					`Content-Disposition: form-data; name="${escapeHeaderValue(part.name)}"; filename="${escapeHeaderValue(part.fileName)}"; filename*=UTF-8''${encodeURIComponent(part.fileName)}\r\n` +
-					`Content-Type: ${part.contentType}\r\n\r\n`
-			)
-		);
-		chunks.push(new Uint8Array(part.value));
-		chunks.push(encoder.encode("\r\n"));
-	}
-
-	chunks.push(encoder.encode(`--${boundary}--\r\n`));
-
-	const length = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-	const combined = new Uint8Array(length);
-	let offset = 0;
-	for (const chunk of chunks) {
-		combined.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-
-	return combined.buffer;
-}
-
-function escapeHeaderValue(value: string): string {
-	return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function readTraceId(headers: Record<string, string>): string | undefined {
