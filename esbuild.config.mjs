@@ -35,6 +35,9 @@ const context = await esbuild.context({
 	platform: "node",
 	mainFields: ["main", "module"],
 	target: "es2018",
+	supported: {
+		"dynamic-import": false
+	},
 	logLevel: "info",
 	sourcemap: production ? false : "inline",
 	treeShaking: true,
