@@ -80,17 +80,21 @@ body .setting-item.echo-notes-settings-definition-row {
 	overflow-wrap: anywhere;
 }
 
-.echo-notes-settings-intro-link {
+.echo-notes-settings-intro-inline-action {
 	display: inline-flex;
 	align-items: center;
 	gap: 3px;
 	max-width: 100%;
-	color: var(--link-color);
 	font-size: var(--font-ui-small);
 	font-weight: 600;
-	line-height: 1.5;
+	line-height: inherit;
+	vertical-align: middle;
+	white-space: nowrap;
+}
+
+.echo-notes-settings-intro-link {
+	color: var(--link-color);
 	text-decoration: none;
-	vertical-align: baseline;
 }
 
 .echo-notes-settings-intro-link:hover {
@@ -111,6 +115,7 @@ body .setting-item.echo-notes-settings-definition-row {
 	flex: 0 0 auto;
 	width: 14px;
 	height: 14px;
+	line-height: 0;
 }
 
 .echo-notes-settings-intro-link-icon svg {
@@ -125,9 +130,6 @@ body .setting-item.echo-notes-settings-definition-row {
 }
 
 button.echo-notes-settings-intro-guide-link {
-	display: inline-flex;
-	align-items: center;
-	gap: 3px;
 	width: auto;
 	height: auto;
 	margin: 0;
@@ -137,11 +139,7 @@ button.echo-notes-settings-intro-guide-link {
 	background: transparent;
 	color: var(--link-color);
 	font: inherit;
-	font-size: var(--font-ui-small);
-	font-weight: 600;
-	line-height: 1.5;
 	text-decoration: none;
-	vertical-align: baseline;
 }
 
 .echo-notes-settings-intro-guide-link-icon {
@@ -151,6 +149,7 @@ button.echo-notes-settings-intro-guide-link {
 	flex: 0 0 auto;
 	width: 13px;
 	height: 13px;
+	line-height: 0;
 }
 
 .echo-notes-settings-intro-guide-link-icon svg {

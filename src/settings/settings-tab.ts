@@ -295,7 +295,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
 		});
 		const readmeLinkEl = conceptEl.createEl("a", {
-			cls: "echo-notes-settings-intro-link",
+			cls: "echo-notes-settings-intro-link echo-notes-settings-intro-inline-action",
 			text: "查看完整设计理念",
 			attr: {
 				href: ECHO_NOTES_README_URL,
@@ -312,15 +312,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			attr: { "aria-hidden": "true" }
 		});
 		const gettingStartedButtonEl = conceptEl.createEl("button", {
-			cls: "echo-notes-settings-intro-guide-link",
+			cls: "echo-notes-settings-intro-guide-link echo-notes-settings-intro-inline-action",
 			attr: { type: "button" }
+		});
+		gettingStartedButtonEl.createSpan({
+			cls: "echo-notes-settings-intro-guide-link-label",
+			text: "新人指引"
 		});
 		const gettingStartedIconEl = gettingStartedButtonEl.createSpan({
 			cls: "echo-notes-settings-intro-guide-link-icon"
 		});
 		gettingStartedIconEl.setAttribute("aria-hidden", "true");
 		setIcon(gettingStartedIconEl, "compass");
-		gettingStartedButtonEl.createSpan({ text: "新人指引" });
 		gettingStartedButtonEl.addEventListener("click", () => void this.plugin.openGettingStarted());
 		containerEl.createEl("p", {
 			cls: "echo-notes-settings-intro-guide",

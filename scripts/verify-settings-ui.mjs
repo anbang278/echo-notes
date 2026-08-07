@@ -1350,8 +1350,12 @@ async function verifyIntroduction(page) {
 		const icon = link?.querySelector(".echo-notes-settings-intro-link-icon");
 		const gettingStartedAction = intro?.querySelector(".echo-notes-settings-intro-guide-link");
 		const gettingStartedSeparator = intro?.querySelector(".echo-notes-settings-intro-link-separator");
+		const gettingStartedLabel = gettingStartedAction?.querySelector(".echo-notes-settings-intro-guide-link-label");
 		const gettingStartedIcon = gettingStartedAction?.querySelector(".echo-notes-settings-intro-guide-link-icon");
 		const separatorStyle = gettingStartedSeparator ? getComputedStyle(gettingStartedSeparator) : null;
+		const inlineActionStyle = gettingStartedAction ? getComputedStyle(gettingStartedAction) : null;
+		const gettingStartedLabelRect = gettingStartedLabel?.getBoundingClientRect();
+		const gettingStartedIconRect = gettingStartedIcon?.getBoundingClientRect();
 		const workflow = document.querySelector(".echo-notes-settings-workflow");
 		return {
 			count: document.querySelectorAll(".echo-notes-settings-intro").length,
@@ -1375,6 +1379,20 @@ async function verifyIntroduction(page) {
 			),
 			gettingStartedAction: gettingStartedAction?.textContent?.trim(),
 			gettingStartedInConcept: gettingStartedAction?.parentElement === copy,
+			gettingStartedLabelFirst:
+				gettingStartedLabel === gettingStartedAction?.firstElementChild,
+			gettingStartedIconLast:
+				gettingStartedIcon === gettingStartedAction?.lastElementChild,
+			gettingStartedWhiteSpace: inlineActionStyle?.whiteSpace,
+			gettingStartedVerticalAlign: inlineActionStyle?.verticalAlign,
+			gettingStartedLabelIconAligned: Boolean(
+				gettingStartedLabelRect &&
+				gettingStartedIconRect &&
+				Math.abs(
+					(gettingStartedLabelRect.top + gettingStartedLabelRect.height / 2) -
+					(gettingStartedIconRect.top + gettingStartedIconRect.height / 2)
+				) <= 2
+			),
 			gettingStartedAfterReadme:
 				gettingStartedSeparator?.previousElementSibling === link &&
 				gettingStartedSeparator?.nextElementSibling === gettingStartedAction,
@@ -1406,6 +1424,11 @@ async function verifyIntroduction(page) {
 	assert(result.standardHeading, "引导区标题必须使用 Obsidian Setting heading 结构");
 	assert(result.gettingStartedAction === "新人指引", "设置页缺少内联新人指引入口");
 	assert(result.gettingStartedInConcept, "新人指引入口必须位于理念说明内");
+	assert(result.gettingStartedLabelFirst, "新人指引文字必须位于图标之前");
+	assert(result.gettingStartedIconLast, "新人指引图标必须位于文字之后");
+	assert(result.gettingStartedWhiteSpace === "nowrap", "新人指引文字与图标不得在控件内部拆行");
+	assert(result.gettingStartedVerticalAlign === "middle", "新人指引内联控件必须使用居中对齐");
+	assert(result.gettingStartedLabelIconAligned, "新人指引文字与图标未处于同一水平线");
 	assert(result.gettingStartedAfterReadme, "新人指引入口必须紧跟完整设计理念链接");
 	assert(
 		result.gettingStartedIconHidden === "true" && result.gettingStartedIconHasSvg,
