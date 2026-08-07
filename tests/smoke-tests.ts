@@ -43,6 +43,14 @@ import { SequentialBlobWriteQueue } from "../src/audio/realtime-blob-write-queue
 import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/audio/audio-link-fingerprint";
 import { LinkService } from "../src/obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "../src/obsidian/realtime-link-insertion";
+import {
+	dismissGettingStarted,
+	getGettingStartedProgress,
+	markGettingStartedShown,
+	normalizeGettingStartedState,
+	recordGettingStartedMilestone,
+	startGettingStarted
+} from "../src/getting-started/getting-started-state";
 import { buildMultipartFormDataBody } from "../src/network/multipart-form-data";
 import { shouldSkipAutomationForPrivateNote } from "../src/privacy/note-privacy";
 import {
@@ -3988,6 +3996,68 @@ assert.equal(siliconFlowAnalysisSettings.analysisProvider, "siliconflow");
 assert.equal(siliconFlowAnalysisSettings.analysisBaseUrl, "https://api.siliconflow.cn/v1");
 assert.equal(siliconFlowAnalysisSettings.analysisModel, "Qwen/Qwen3.5-4B");
 assert.equal(normalizeEchoNotesSettings({ redactTranscriptBeforeAnalysis: true }).redactTranscriptBeforeAnalysis, true);
+assert.equal(DEFAULT_SETTINGS.gettingStartedState.status, "not-started");
+assert.equal(normalizeEchoNotesSettings(undefined).gettingStartedState.status, "not-started");
+assert.equal(normalizeEchoNotesSettings({}).gettingStartedState.status, "dismissed");
+const shownGettingStarted = markGettingStartedShown(
+	normalizeGettingStartedState(undefined),
+	1_000
+);
+assert.deepEqual(shownGettingStarted, {
+	schemaVersion: 1,
+	status: "in-progress",
+	firstShownAt: 1_000
+});
+assert.equal(dismissGettingStarted(shownGettingStarted, 2_000).status, "dismissed");
+const restartedGettingStarted = startGettingStarted(
+	dismissGettingStarted(shownGettingStarted, 2_000),
+	3_000
+);
+assert.equal(restartedGettingStarted.status, "in-progress");
+assert.equal(restartedGettingStarted.firstShownAt, 1_000);
+const analysisBeforeTranscription = recordGettingStartedMilestone(
+	restartedGettingStarted,
+	"analysis",
+	4_000
+);
+const transcriptionAfterAnalysis = recordGettingStartedMilestone(
+	analysisBeforeTranscription,
+	"transcription",
+	5_000
+);
+assert.equal(transcriptionAfterAnalysis.status, "in-progress");
+assert.equal(transcriptionAfterAnalysis.firstSuccessfulAnalysisAt, 4_000);
+assert.equal(transcriptionAfterAnalysis.firstSuccessfulTranscriptionAt, 5_000);
+assert.equal(
+	getGettingStartedProgress(transcriptionAfterAnalysis, true, true).firstProcessingCompleted,
+	false
+);
+const completedGettingStarted = recordGettingStartedMilestone(
+	transcriptionAfterAnalysis,
+	"analysis",
+	6_000
+);
+assert.equal(completedGettingStarted.status, "completed");
+assert.equal(completedGettingStarted.completedAt, 6_000);
+assert.deepEqual(getGettingStartedProgress(completedGettingStarted, true, false), {
+	transcriptionReady: true,
+	analysisReady: false,
+	firstProcessingCompleted: true,
+	completedSteps: 2
+});
+assert.equal(
+	normalizeGettingStartedState({ schemaVersion: 1, status: "completed", completedAt: 7_000 }).status,
+	"in-progress"
+);
+const normalizedGettingStartedSettings = normalizeEchoNotesSettings({
+	gettingStartedState: completedGettingStarted,
+	apiKey: "legacy-key-must-not-enter-getting-started"
+});
+assert.deepEqual(normalizedGettingStartedSettings.gettingStartedState, completedGettingStarted);
+assert.equal(
+	JSON.stringify(normalizedGettingStartedSettings.gettingStartedState).includes("legacy-key"),
+	false
+);
 const normalizedTaskCenterSettings = normalizeEchoNotesSettings({ taskCenterState: persistedTaskCenter });
 assert.deepEqual(normalizedTaskCenterSettings.taskCenterState, persistedTaskCenter);
 assert.deepEqual(normalizeEchoNotesSettings({ taskCenterState: { schemaVersion: 1, tasks: "invalid" } }).taskCenterState, {

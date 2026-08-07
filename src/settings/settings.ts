@@ -4,6 +4,11 @@ import {
 	normalizeTaskCenterState,
 	type TaskCenterState
 } from "../task-center/task-center-store";
+import {
+	createGettingStartedState,
+	normalizeGettingStartedState,
+	type GettingStartedState
+} from "../getting-started/getting-started-state";
 
 export type OfflineTranscriptionProviderId =
 	| "aliyun-bailian"
@@ -194,6 +199,7 @@ export interface EchoNotesSettings {
 	officialRecorderStopHotkey: EchoNotesHotkeySetting;
 	transcribeAllAudioHotkey: EchoNotesHotkeySetting;
 	taskCenterState: TaskCenterState;
+	gettingStartedState: GettingStartedState;
 	verboseLog: boolean;
 }
 
@@ -961,6 +967,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	officialRecorderStopHotkey: null,
 	transcribeAllAudioHotkey: null,
 	taskCenterState: EMPTY_TASK_CENTER_STATE,
+	gettingStartedState: createGettingStartedState(),
 	verboseLog: false
 };
 
@@ -1277,6 +1284,10 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		DEFAULT_SETTINGS.transcribeAllAudioHotkey
 	);
 	settings.taskCenterState = normalizeTaskCenterState(raw.taskCenterState);
+	settings.gettingStartedState = normalizeGettingStartedState(
+		raw.gettingStartedState,
+		isRecord(rawData) ? "dismissed" : "not-started"
+	);
 
 	const mutableSettings = settings as EchoNotesSettings & Record<string, unknown>;
 	delete mutableSettings.provider;

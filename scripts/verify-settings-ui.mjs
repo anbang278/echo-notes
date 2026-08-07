@@ -189,7 +189,7 @@ async function prepareOutputDirectory() {
 			.filter(
 				(entry) =>
 					entry.isFile() &&
-					(entry.name === "summary.json" || /^(?:settings|memory-review|memory-relation|memory-context)-[a-z0-9-]+\.png$/.test(entry.name))
+					(entry.name === "summary.json" || /^(?:settings|getting-started|task-center|memory-review|memory-relation|memory-context)-[a-z0-9-]+\.png$/.test(entry.name))
 			)
 			.map((entry) => rm(path.join(OUTPUT_DIR, entry.name), { force: true }))
 	);
@@ -386,7 +386,7 @@ async function waitForObsidianPage(port, child) {
 	throw new Error(`等待 Obsidian CDP renderer 超时（${STARTUP_TIMEOUT_MS} ms）`);
 }
 
-async function reloadPluginAndOpenSettings(page) {
+async function reloadPlugin(page) {
 	await page.waitForFunction(
 		() => Boolean(window.app?.plugins && window.app?.setting),
 		undefined,
@@ -399,13 +399,10 @@ async function reloadPluginAndOpenSettings(page) {
 	);
 	const result = await page.evaluate(async (pluginId) => {
 		const obsidianApp = window.app;
-		await obsidianApp.plugins.setEnable(true);
-		if (obsidianApp.plugins.plugins[pluginId]) {
-			await obsidianApp.plugins.disablePlugin(pluginId);
+		if (!obsidianApp.plugins.plugins[pluginId]) {
+			await obsidianApp.plugins.setEnable(true);
+			await obsidianApp.plugins.enablePluginAndSave(pluginId);
 		}
-		await obsidianApp.plugins.enablePluginAndSave(pluginId);
-		obsidianApp.setting.open();
-		await obsidianApp.setting.openTabById(pluginId);
 		return {
 			manifest: Boolean(obsidianApp.plugins.manifests[pluginId]),
 			loaded: Boolean(obsidianApp.plugins.plugins[pluginId]),
@@ -416,7 +413,321 @@ async function reloadPluginAndOpenSettings(page) {
 		result.manifest && result.loaded && result.enabled,
 		`Echo Notes 重载后未处于启用状态：${JSON.stringify(result)}`
 	);
+}
+
+async function openSettings(page) {
+	await page.evaluate(async (pluginId) => {
+		window.app.setting.open();
+		await window.app.setting.openTabById(pluginId);
+	}, PLUGIN_ID);
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+}
+
+async function captureGettingStartedWelcomeLayouts(page) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			const metrics = await page.evaluate((requireStackedTags) => {
+				const shell = document.querySelector(".echo-notes-getting-started-modal-shell");
+				const content = document.querySelector(".echo-notes-getting-started-modal");
+				const tags = [...(content?.querySelectorAll(".echo-notes-getting-started-tag") ?? [])];
+				const firstTagRect = tags[0]?.getBoundingClientRect();
+				const secondTagRect = tags[1]?.getBoundingClientRect();
+				return {
+					innerWidth: window.innerWidth,
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+					shellFits: Boolean(shell) && shell.getBoundingClientRect().width <= window.innerWidth - 8,
+					tagCount: tags.length,
+					tagsFit: tags.every((tag) => tag.scrollWidth <= tag.clientWidth + 1),
+					tagsStacked: Boolean(
+						firstTagRect && secondTagRect && secondTagRect.top >= firstTagRect.bottom - 1
+					),
+					requireStackedTags
+				};
+			}, viewport.mobileShell);
+			const context = `getting-started/${viewport.name}/${theme}`;
+			assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
+			assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+			assert(metrics.contentOverflow <= 1, `${context} 欢迎内容出现横向溢出`);
+			assert(metrics.shellFits, `${context} 欢迎弹窗超出 viewport`);
+			assert(metrics.tagCount === 3 && metrics.tagsFit, `${context} 三个引导标签布局不完整`);
+			assert(metrics.tagsStacked === metrics.requireStackedTags, `${context} 引导标签响应式布局不正确`);
+			const fileName = `getting-started-welcome-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.locator(".echo-notes-getting-started-modal-shell").screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 5_000, `${fileName} 截图可能为空白`);
+			results.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+	return results;
+}
+
+async function captureGettingStartedTaskCenterLayouts(page) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			const taskCenter = page.locator(".echo-notes-task-center");
+			await taskCenter.waitFor({ state: "visible" });
+			const metrics = await page.evaluate(() => {
+				const content = document.querySelector(".echo-notes-task-center");
+				const checklist = content?.querySelector(".echo-notes-getting-started-checklist");
+				const steps = [...(checklist?.querySelectorAll(".echo-notes-getting-started-step") ?? [])];
+				const buttons = [...(checklist?.querySelectorAll("button") ?? [])];
+				const checklistRect = checklist?.getBoundingClientRect();
+				return {
+					innerWidth: window.innerWidth,
+					contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+					checklistOverflow: checklist ? checklist.scrollWidth - checklist.clientWidth : Number.POSITIVE_INFINITY,
+					stepCount: steps.length,
+					stepsFit: steps.every((step) => step.scrollWidth <= step.clientWidth + 1),
+					buttonsFit: buttons.every((button) => {
+						const rect = button.getBoundingClientRect();
+						return Boolean(checklistRect && rect.left >= checklistRect.left - 1 && rect.right <= checklistRect.right + 1);
+					})
+				};
+			});
+			const context = `task-center/${viewport.name}/${theme}`;
+			assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
+			assert(metrics.contentOverflow <= 1, `${context} 任务中心出现横向溢出`);
+			assert(metrics.checklistOverflow <= 1, `${context} 新人清单出现横向溢出`);
+			assert(metrics.stepCount === 3 && metrics.stepsFit, `${context} 新人步骤布局不完整`);
+			assert(metrics.buttonsFit, `${context} 新人清单按钮超出边界`);
+			const fileName = `task-center-getting-started-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await taskCenter.screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 5_000, `${fileName} 截图可能为空白`);
+			results.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+	return results;
+}
+
+async function verifyGettingStarted(page) {
+	const modal = page.locator(".echo-notes-getting-started-modal-shell");
+	await modal.waitFor({ state: "visible" });
+	const semantics = await page.evaluate((pluginId) => {
+		const shell = document.querySelector(".echo-notes-getting-started-modal-shell");
+		const title = shell?.querySelector(".modal-title");
+		const closeButton = shell?.querySelector(".modal-close-button");
+		const plugin = window.app.plugins.plugins[pluginId];
+		return {
+			modalCount: document.querySelectorAll(".echo-notes-getting-started-modal-shell").length,
+			title: title?.textContent?.trim(),
+			labelledBy: shell?.getAttribute("aria-labelledby"),
+			titleId: title?.id,
+			copy: shell?.querySelector(".echo-notes-getting-started-copy")?.textContent?.trim(),
+			tags: [...(shell?.querySelectorAll(".echo-notes-getting-started-tag") ?? [])]
+				.map((tag) => tag.textContent?.trim()),
+			closeVisible: Boolean(closeButton && closeButton.getBoundingClientRect().width > 0),
+			status: plugin.settings.gettingStartedState.status,
+			firstShownAt: plugin.settings.gettingStartedState.firstShownAt ?? null
+		};
+	}, PLUGIN_ID);
+	assert(semantics.modalCount === 1, "首次启用只能显示一个欢迎 Modal");
+	assert(semantics.title === "把一段录音变成一份 AI 笔记", "欢迎 Modal 标题不正确");
+	assert(semantics.labelledBy === semantics.titleId && Boolean(semantics.titleId), "欢迎 Modal 的 ARIA 标题关系无效");
+	assert(semantics.copy?.includes("Obsidian SecretStorage"), "欢迎 Modal 缺少隐私与密钥说明");
+	assert(
+		JSON.stringify(semantics.tags) === JSON.stringify(["配置转写", "配置分析", "处理录音"]),
+		"欢迎 Modal 的三步标签不正确"
+	);
+	assert(semantics.closeVisible, "欢迎 Modal 缺少可见关闭按钮");
+	assert(semantics.status === "in-progress" && semantics.firstShownAt, "首次展示状态未在打开 Modal 时持久化");
+
+	for (let index = 0; index < 6; index += 1) {
+		await page.keyboard.press("Tab");
+		const focusInside = await page.evaluate(() => {
+			const shell = document.querySelector(".echo-notes-getting-started-modal-shell");
+			return Boolean(shell && shell.contains(document.activeElement));
+		});
+		assert(focusInside, "欢迎 Modal 的 Tab 焦点逃离弹窗");
+	}
+
+	const welcomeLayouts = await captureGettingStartedWelcomeLayouts(page);
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await modal.getByRole("button", { name: "开始设置", exact: true }).click();
+	await modal.waitFor({ state: "detached" });
+	const taskCenter = page.locator(".echo-notes-task-center");
+	await taskCenter.waitFor({ state: "visible" });
+	let checklistState = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const snapshot = plugin.getGettingStartedChecklistSnapshot();
+		return {
+			status: plugin.settings.gettingStartedState.status,
+			progress: snapshot.progress,
+			guideExpanded: snapshot.guideExpanded,
+			action: snapshot.processingAction,
+			actionLabel: snapshot.processingActionLabel,
+			stateJson: JSON.stringify(plugin.settings.gettingStartedState)
+		};
+	}, PLUGIN_ID);
+	assert(checklistState.status === "in-progress" && checklistState.guideExpanded, "开始设置后新人清单未展开");
+	assert(checklistState.progress.completedSteps === 0, "缺少配置的新安装不应提前完成步骤");
+	assert(
+		checklistState.action === "open-recording-settings" && checklistState.actionLabel === "打开录音控制",
+		"离线模式无音频时第三步操作不正确"
+	);
+	assert(!/api.?key|secret|sk-/i.test(checklistState.stateJson), "新人状态包含密钥或 Secret 字段");
+	const trustModal = page.locator(".modal-container.mod-confirmation").filter({ hasText: "你是否信任这个仓库的作者" });
+	if (await trustModal.count()) {
+		await trustModal.getByRole("button", { name: "信任仓库作者并启用插件", exact: true }).click();
+		await trustModal.waitFor({ state: "detached" });
+	}
+	if (await page.locator(".modal.mod-settings").count()) {
+		await page.evaluate(() => window.app.setting.close());
+		await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	}
+	const blockingModals = await page.evaluate(() => [...document.querySelectorAll(".modal-container")]
+		.filter((container) => container.getBoundingClientRect().width > 0)
+		.map((container) => ({
+			classes: container.className,
+			text: container.textContent?.trim().slice(0, 500)
+		})));
+	assert(blockingModals.length === 0, `开始设置后仍有阻塞 Modal：${JSON.stringify(blockingModals)}`);
+
+	await taskCenter.locator(".echo-notes-getting-started-step").filter({ hasText: "转写服务可用" })
+		.getByRole("button").click();
+	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+	assert(
+		(await page.locator('[data-settings-stage="transcription"]').getAttribute("aria-selected")) === "true",
+		"转写配置跳转未定位到录音转写阶段"
+	);
+	assert(
+		(await getActivePanel(page).getByRole("tab", { name: "转写服务", exact: true }).getAttribute("aria-selected")) === "true",
+		"转写配置跳转未定位到转写服务分类"
+	);
+	await page.locator(".echo-notes-settings-intro-action").getByRole("button", { name: "打开新人指引", exact: true }).click();
+	await taskCenter.waitFor({ state: "visible" });
+
+	checklistState = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.analysisEnabled = true;
+		const enabledTemplate = plugin.settings.analysisTemplates.find((template) => template.enabled) ?? plugin.settings.analysisTemplates[0];
+		enabledTemplate.enabled = true;
+		await plugin.saveApiKey(plugin.settings.offlineTranscription.provider, "ui-test-transcription-key");
+		await plugin.saveAnalysisApiKey("ui-test-analysis-key");
+		await plugin.saveSettings();
+		const snapshot = plugin.getGettingStartedChecklistSnapshot();
+		return {
+			progress: snapshot.progress,
+			stateJson: JSON.stringify(plugin.settings.gettingStartedState),
+			plainApiKey: plugin.settings.apiKey ?? null,
+			plainAnalysisApiKey: plugin.settings.analysisApiKey ?? null
+		};
+	}, PLUGIN_ID);
+	assert(checklistState.progress.completedSteps === 2, "转写与分析配置可用后应完成前两步");
+	assert(checklistState.plainApiKey === null && checklistState.plainAnalysisApiKey === null, "API Key 进入普通设置");
+	assert(!checklistState.stateJson.includes("ui-test"), "API Key 进入新人状态");
+	await taskCenter.getByText("2/3", { exact: true }).waitFor({ state: "visible" });
+	const taskCenterLayouts = await captureGettingStartedTaskCenterLayouts(page);
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		await plugin.recordGettingStartedSuccess("transcription");
+	}, PLUGIN_ID);
+	let milestoneState = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		return { ...plugin.settings.gettingStartedState };
+	}, PLUGIN_ID);
+	assert(milestoneState.status === "in-progress", "成功转写后不应提前完成新人流程");
+	assert(Boolean(milestoneState.firstSuccessfulTranscriptionAt), "成功转写里程碑未保存");
+	assert(!milestoneState.firstSuccessfulAnalysisAt, "成功转写后不应伪造分析里程碑");
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		await plugin.recordGettingStartedSuccess("analysis");
+	}, PLUGIN_ID);
+	await taskCenter.getByRole("status").getByText("首次转写与 AI 分析已完成", { exact: true })
+		.waitFor({ state: "visible" });
+	milestoneState = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.taskCenter.upsertTask({
+			id: "transcription:getting-started-test",
+			kind: "transcription",
+			title: "getting-started-test.m4a",
+			status: "success",
+			stage: "转写完成",
+			targetPath: "getting-started-test.m4a",
+			completedAt: Date.now()
+		});
+		plugin.clearFinishedTaskCenterTasks();
+		return {
+			state: { ...plugin.settings.gettingStartedState },
+			taskCount: plugin.getTaskCenterTasks().length
+		};
+	}, PLUGIN_ID);
+	assert(milestoneState.state.status === "completed", "AI 分析成功写入后新人流程未完成");
+	assert(Boolean(milestoneState.state.firstSuccessfulAnalysisAt && milestoneState.state.completedAt), "分析成功时间未保存");
+	assert(milestoneState.taskCount === 0, "测试任务未清理");
+	assert(milestoneState.state.status === "completed", "清除已结束任务导致新人进度倒退");
+	await page.waitForFunction((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		return plugin.getGettingStartedChecklistSnapshot().guideExpanded === false;
+	}, PLUGIN_ID, { timeout: 6_000 });
+	assert(
+		(await taskCenter.locator(".echo-notes-getting-started-steps").count()) === 0,
+		"完成状态未自动收起"
+	);
+
+	await page.evaluate(async (pluginId) => {
+		await window.app.commands.executeCommandById(`${pluginId}:open-getting-started`);
+	}, PLUGIN_ID);
+	await taskCenter.locator(".echo-notes-getting-started-steps").waitFor({ state: "visible" });
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.gettingStartedState = { schemaVersion: 1, status: "not-started" };
+		await plugin.saveSettings();
+		await plugin.maybeShowGettingStartedWelcome();
+	}, PLUGIN_ID);
+	await modal.waitFor({ state: "visible" });
+	await page.keyboard.press("Escape");
+	await modal.waitFor({ state: "detached" });
+	const dismissedState = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		await plugin.recordGettingStartedSuccess("transcription");
+		return { ...plugin.settings.gettingStartedState };
+	}, PLUGIN_ID);
+	assert(dismissedState.status === "dismissed", "Escape 未持久抑制欢迎 Modal");
+	assert(!dismissedState.firstSuccessfulTranscriptionAt, "已暂缓的新人流程仍记录后台里程碑");
+
+	await page.evaluate(async (pluginId) => {
+		await window.app.plugins.disablePlugin(pluginId);
+		await window.app.plugins.enablePluginAndSave(pluginId);
+	}, PLUGIN_ID);
+	await page.waitForFunction((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		return plugin?.settings?.gettingStartedState?.status === "dismissed";
+	}, PLUGIN_ID);
+	assert((await modal.count()) === 0, "已暂缓用户在插件重载后再次自动看到欢迎 Modal");
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const legacySettings = { ...plugin.settings };
+		delete legacySettings.gettingStartedState;
+		await plugin.saveData(legacySettings);
+		await window.app.plugins.disablePlugin(pluginId);
+		await window.app.plugins.enablePluginAndSave(pluginId);
+	}, PLUGIN_ID);
+	await page.waitForFunction((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		return plugin?.settings?.gettingStartedState?.status === "dismissed";
+	}, PLUGIN_ID);
+	assert((await modal.count()) === 0, "已有安装迁移后不应自动显示欢迎 Modal");
+
+	await page.evaluate(async (pluginId) => {
+		await window.app.commands.executeCommandById(`${pluginId}:open-getting-started`);
+	}, PLUGIN_ID);
+	await taskCenter.locator(".echo-notes-getting-started-steps").waitFor({ state: "visible" });
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.analysisEnabled = false;
+		await plugin.saveSettings();
+	}, PLUGIN_ID);
+	return { welcomeLayouts, taskCenterLayouts };
 }
 
 async function verifyDeclarativeSettingsCompatibility(page) {
@@ -608,6 +919,7 @@ async function verifyIntroduction(page) {
 		const titleMark = heading?.querySelector(".echo-notes-settings-intro-title-mark");
 		const link = intro?.querySelector(".echo-notes-settings-intro-link");
 		const icon = link?.querySelector(".echo-notes-settings-intro-link-icon");
+		const gettingStartedAction = intro?.querySelector(".echo-notes-settings-intro-action button");
 		const workflow = document.querySelector(".echo-notes-settings-workflow");
 		return {
 			count: document.querySelectorAll(".echo-notes-settings-intro").length,
@@ -629,6 +941,7 @@ async function verifyIntroduction(page) {
 				headingSetting?.classList.contains("echo-notes-settings-intro-heading") &&
 				heading?.classList.contains("setting-item-name")
 			),
+			gettingStartedAction: gettingStartedAction?.textContent?.trim(),
 			headingRelation: intro?.getAttribute("aria-labelledby") === heading?.id,
 			correctOrder:
 				intro?.nextElementSibling === guide && guide?.nextElementSibling === workflow
@@ -648,6 +961,7 @@ async function verifyIntroduction(page) {
 	assert(result.iconHidden === "true" && result.hasSvg, "外链图标或辅助技术属性不完整");
 	assert(result.titleIconHidden === "true" && result.titleHasSvg, "标题图标或辅助技术属性不完整");
 	assert(result.standardHeading, "引导区标题必须使用 Obsidian Setting heading 结构");
+	assert(result.gettingStartedAction === "打开新人指引", "设置页缺少打开新人指引入口");
 	assert(result.headingRelation, "引导区 aria-labelledby 关系无效");
 	assert(result.correctOrder, "操作指引必须位于理念分割线与工作流步骤轴之间");
 }
@@ -848,7 +1162,11 @@ async function verifyTabs(page) {
 	const outputTab = sectionTabs.filter({ hasText: "输出规则" });
 	const automationTab = sectionTabs.filter({ hasText: "自动化与日志" });
 	await outputTab.click();
-	assert(await outputTab.getAttribute("aria-selected") === "true", "点击后应选中输出规则");
+	const outputSelected = await outputTab.getAttribute("aria-selected");
+	assert(
+		outputSelected === "true",
+		`点击后应选中输出规则：${JSON.stringify(await sectionTabs.evaluateAll((tabs) => tabs.map((tab) => ({ text: tab.textContent, selected: tab.getAttribute("aria-selected"), connected: tab.isConnected }))))}`
+	);
 	await outputTab.press("End");
 	assert(await automationTab.getAttribute("aria-selected") === "true", "二级 End 应切到末项");
 	await automationTab.press("Home");
@@ -2147,7 +2465,7 @@ try {
 	const pageErrors = [];
 	page.on("pageerror", (error) => pageErrors.push(error.message));
 
-	await reloadPluginAndOpenSettings(page);
+	await reloadPlugin(page);
 	const runtimeState = await page.evaluate(async (pluginId) => {
 		const AudioContextConstructor = window.AudioContext;
 		const audioWorkletNodeAvailable = typeof window.AudioWorkletNode !== "undefined";
@@ -2171,6 +2489,9 @@ try {
 	assert(runtimeState.pluginVersion === manifest.version, `宿主插件版本不匹配：${runtimeState.pluginVersion ?? "未找到"}`);
 	assert(runtimeState.audioWorkletAvailable, "Obsidian 宿主的 AudioContext.audioWorklet 不可用");
 	assert(runtimeState.audioWorkletNodeAvailable, "Obsidian 宿主的 AudioWorkletNode 不可用");
+	const gettingStartedLayouts = await verifyGettingStarted(page);
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await openSettings(page);
 	await verifyDeclarativeSettingsCompatibility(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
@@ -2206,8 +2527,13 @@ try {
 			memoryRelations: true,
 			memoryAggregations: true,
 			memoryContextPackages: true,
+			gettingStartedWelcome: true,
+			gettingStartedChecklist: true,
+			gettingStartedMigration: true,
 			runtimeErrors: pageErrors.length
 		},
+		gettingStartedWelcomeLayouts: gettingStartedLayouts.welcomeLayouts,
+		gettingStartedTaskCenterLayouts: gettingStartedLayouts.taskCenterLayouts,
 		screenshots,
 		templateLayouts,
 		memoryReviewLayouts,
@@ -2221,7 +2547,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；新人欢迎截图：${gettingStartedLayouts.welcomeLayouts.length} 张；新人侧栏截图：${gettingStartedLayouts.taskCenterLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);

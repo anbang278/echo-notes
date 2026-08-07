@@ -47,6 +47,17 @@ import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
+import { GettingStartedModal } from "./getting-started/getting-started-modal";
+import {
+	dismissGettingStarted,
+	getGettingStartedProgress,
+	markGettingStartedShown,
+	recordGettingStartedMilestone,
+	startGettingStarted,
+	type GettingStartedMilestone,
+	type GettingStartedProgress,
+	type GettingStartedState
+} from "./getting-started/getting-started-state";
 import { MemoryInitializationModal } from "./memory/memory-initialization-modal";
 import { MemoryContextModal } from "./memory/memory-context-modal";
 import { MemoryRelationModal } from "./memory/memory-relation-modal";
@@ -93,7 +104,10 @@ import {
 	buildTranscriptionUploadPreview,
 	type UploadPreviewAudioFile
 } from "./security/upload-preview";
-import { EchoNotesSettingTab } from "./settings/settings-tab";
+import {
+	EchoNotesSettingTab,
+	type EchoNotesSettingsDestination
+} from "./settings/settings-tab";
 import {
 	createTaskCenterState,
 	createTaskId,
@@ -122,6 +136,7 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"start-official-audio-recorder",
 	"stop-official-audio-recorder",
 	"open-task-center",
+	"open-getting-started",
 	"transcribe-selected-audio",
 	"transcribe-all-audio-files-in-current-note",
 	"start-realtime-transcription",
@@ -175,6 +190,28 @@ interface ObsidianHotkeyManager {
 interface AppWithInternals {
 	internalPlugins?: InternalPlugins;
 	hotkeyManager?: ObsidianHotkeyManager;
+	setting?: {
+		open?: () => void;
+		close?: () => void;
+		openTabById?: (id: string) => Promise<void> | void;
+	};
+}
+
+export type GettingStartedProcessingAction =
+	| "transcribe-current-note"
+	| "start-realtime-transcription"
+	| "open-recording-settings"
+	| "retry-task";
+
+export interface GettingStartedChecklistSnapshot {
+	state: GettingStartedState;
+	progress: GettingStartedProgress;
+	guideExpanded: boolean;
+	completionVisible: boolean;
+	processingStatus: string;
+	processingAction: GettingStartedProcessingAction | null;
+	processingActionLabel: string | null;
+	retryTaskId?: string;
 }
 
 interface ActiveRealtimeRecording {
@@ -223,6 +260,12 @@ export default class EchoNotesPlugin extends Plugin {
 	private realtimeStatusTimer: number | null = null;
 	private taskCenterPersistenceTimer: number | null = null;
 	private unsubscribeTaskCenterPersistence: (() => void) | null = null;
+	private settingTab: EchoNotesSettingTab | null = null;
+	private settingsListeners = new Set<() => void>();
+	private gettingStartedWelcomeModal: GettingStartedModal | null = null;
+	private gettingStartedGuideExpanded = false;
+	private gettingStartedCompletionVisible = false;
+	private gettingStartedCompletionTimer: number | null = null;
 	private loadedAt = Date.now();
 
 	async onload(): Promise<void> {
@@ -232,7 +275,8 @@ export default class EchoNotesPlugin extends Plugin {
 			this.scheduleTaskCenterPersistence();
 		});
 		this.restoreTaskCenter();
-		this.addSettingTab(new EchoNotesSettingTab(this.app, this));
+		this.settingTab = new EchoNotesSettingTab(this.app, this);
+		this.addSettingTab(this.settingTab);
 		this.registerView(ECHO_NOTES_TASK_CENTER_VIEW_TYPE, (leaf) => new EchoNotesTaskCenterView(leaf, this));
 		this.realtimeRibbonEl = this.addRibbonIcon("audio-lines", "开始 Echo Notes 实时转写", () => {
 			if (this.activeRealtimeRecording) {
@@ -255,6 +299,9 @@ export default class EchoNotesPlugin extends Plugin {
 		this.updateRealtimeUi();
 		this.registerCommands();
 		this.registerAutomation();
+		this.app.workspace.onLayoutReady(() => {
+			void this.maybeShowGettingStartedWelcome();
+		});
 	}
 
 	onunload(): void {
@@ -267,6 +314,13 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 		this.unsubscribeTaskCenterPersistence?.();
 		this.unsubscribeTaskCenterPersistence = null;
+		this.gettingStartedWelcomeModal?.close();
+		this.gettingStartedWelcomeModal = null;
+		if (this.gettingStartedCompletionTimer !== null) {
+			window.clearTimeout(this.gettingStartedCompletionTimer);
+			this.gettingStartedCompletionTimer = null;
+		}
+		this.settingsListeners.clear();
 		for (const timer of this.markdownDebounceTimers.values()) {
 			window.clearTimeout(timer);
 		}
@@ -307,6 +361,7 @@ export default class EchoNotesPlugin extends Plugin {
 		await this.saveData(this.settings);
 		this.refreshServices();
 		this.updateRealtimeUi();
+		this.notifySettingsChanged();
 	}
 
 	refreshRegisteredCommands(): void {
@@ -333,12 +388,195 @@ export default class EchoNotesPlugin extends Plugin {
 		return this.taskCenter.subscribe(listener);
 	}
 
+	subscribeSettings(listener: () => void): () => void {
+		this.settingsListeners.add(listener);
+		return () => {
+			this.settingsListeners.delete(listener);
+		};
+	}
+
+	getGettingStartedChecklistSnapshot(): GettingStartedChecklistSnapshot {
+		const state = this.settings.gettingStartedState;
+		const transcriptionConfig = getSelectedTranscriptionConfig(this.settings);
+		const transcriptionDiagnostics = diagnoseTranscriptionProviderSettings(
+			transcriptionConfig,
+			this.getApiKey(transcriptionConfig.provider),
+			{
+				isMobile: Platform.isMobile,
+				isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter,
+				usage: this.settings.transcriptionMode
+			}
+		);
+		const analysisDiagnostics = diagnoseAnalysisProviderSettings(
+			this.settings,
+			this.getAnalysisApiKey()
+		);
+		const analysisReady =
+			this.settings.analysisEnabled &&
+			getEnabledAnalysisTemplates(this.settings).length > 0 &&
+			analysisDiagnostics.canAttemptAnalysis;
+		const progress = getGettingStartedProgress(
+			state,
+			transcriptionDiagnostics.canAttemptTranscription,
+			analysisReady
+		);
+		const relevantTasks = this.taskCenter.getTasks().filter(
+			(task) => !state.firstShownAt || task.createdAt >= state.firstShownAt
+		);
+		const runningAnalysis = relevantTasks.find(
+			(task) => task.kind === "analysis" && task.status === "running"
+		);
+		const runningTranscription = relevantTasks.find(
+			(task) => task.kind === "transcription" && task.status === "running"
+		);
+		const failedAnalysis = relevantTasks.find(
+			(task) => task.kind === "analysis" && task.status === "failed" && task.retry
+		);
+		const failedTranscription = relevantTasks.find(
+			(task) => task.kind === "transcription" && task.status === "failed" && task.retry
+		);
+
+		if (progress.firstProcessingCompleted) {
+			return {
+				state,
+				progress,
+				guideExpanded: this.gettingStartedGuideExpanded,
+				completionVisible: this.gettingStartedCompletionVisible,
+				processingStatus: "首次转写与 AI 分析已完成",
+				processingAction: null,
+				processingActionLabel: null
+			};
+		}
+		if (runningAnalysis) {
+			return this.createGettingStartedSnapshot(progress, runningAnalysis.stage, null, null);
+		}
+		if (runningTranscription) {
+			return this.createGettingStartedSnapshot(progress, runningTranscription.stage, null, null);
+		}
+		if (failedAnalysis) {
+			return this.createGettingStartedSnapshot(
+				progress,
+				failedAnalysis.stage,
+				"retry-task",
+				failedAnalysis.retry?.label ?? "重试分析",
+				failedAnalysis.id
+			);
+		}
+		if (failedTranscription) {
+			return this.createGettingStartedSnapshot(
+				progress,
+				failedTranscription.stage,
+				"retry-task",
+				failedTranscription.retry?.label ?? "重试转写",
+				failedTranscription.id
+			);
+		}
+		if (this.settings.transcriptionMode === "realtime") {
+			return this.createGettingStartedSnapshot(
+				progress,
+				state.firstSuccessfulTranscriptionAt ? "转写已完成，等待 AI 分析" : "准备开始实时转写",
+				"start-realtime-transcription",
+				"开始实时转写"
+			);
+		}
+		if (this.currentNoteHasAudio()) {
+			return this.createGettingStartedSnapshot(
+				progress,
+				state.firstSuccessfulTranscriptionAt ? "转写已完成，等待 AI 分析" : "准备处理当前笔记音频",
+				"transcribe-current-note",
+				"转写当前笔记音频"
+			);
+		}
+		return this.createGettingStartedSnapshot(
+			progress,
+			state.firstSuccessfulTranscriptionAt ? "转写已完成，等待 AI 分析" : "当前笔记没有可处理的音频",
+			"open-recording-settings",
+			"打开录音控制"
+		);
+	}
+
+	async openGettingStarted(): Promise<void> {
+		this.settings.gettingStartedState = startGettingStarted(this.settings.gettingStartedState);
+		this.gettingStartedGuideExpanded = true;
+		await this.saveSettings();
+		if (document.querySelector(".modal.mod-settings")) {
+			(this.app as App & AppWithInternals).setting?.close?.();
+		}
+		await this.activateTaskCenterView();
+	}
+
+	setGettingStartedGuideExpanded(expanded: boolean): void {
+		this.gettingStartedGuideExpanded = expanded;
+		this.notifySettingsChanged();
+	}
+
+	async openSettingsDestination(destination: EchoNotesSettingsDestination): Promise<boolean> {
+		const settingsManager = (this.app as App & AppWithInternals).setting;
+		const label = getSettingsDestinationLabel(destination);
+		if (!settingsManager?.open || !settingsManager.openTabById || !this.settingTab) {
+			new Notice(`无法自动定位设置，请手动打开「设置 → Echo Notes → ${label}」。`);
+			return false;
+		}
+
+		this.settingTab.showDestination(destination);
+		settingsManager.open();
+		await settingsManager.openTabById(this.manifest.id);
+		this.settingTab.showDestination(destination);
+		return true;
+	}
+
+	async runGettingStartedProcessingAction(snapshot: GettingStartedChecklistSnapshot): Promise<void> {
+		switch (snapshot.processingAction) {
+			case "transcribe-current-note": {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view?.file) {
+					new Notice("请先打开一篇包含音频链接的 Markdown 笔记。");
+					return;
+				}
+				await this.handleTranscribeAllAudioInCurrentNote(view.editor, view);
+				return;
+			}
+			case "start-realtime-transcription":
+				await this.startRealtimeTranscription();
+				return;
+			case "open-recording-settings":
+				await this.openSettingsDestination("transcription-recording");
+				return;
+			case "retry-task":
+				if (!snapshot.retryTaskId || !await this.retryTaskCenterTask(snapshot.retryTaskId)) {
+					new Notice("当前任务无法重试。");
+				}
+				return;
+			case null:
+				return;
+		}
+	}
+
 	async retryTaskCenterTask(taskId: string): Promise<boolean> {
 		return this.taskCenter.retryTask(taskId);
 	}
 
 	clearFinishedTaskCenterTasks(): void {
 		this.taskCenter.clearFinishedTasks();
+	}
+
+	private createGettingStartedSnapshot(
+		progress: GettingStartedProgress,
+		processingStatus: string,
+		processingAction: GettingStartedProcessingAction | null,
+		processingActionLabel: string | null,
+		retryTaskId?: string
+	): GettingStartedChecklistSnapshot {
+		return {
+			state: this.settings.gettingStartedState,
+			progress,
+			guideExpanded: this.gettingStartedGuideExpanded,
+			completionVisible: this.gettingStartedCompletionVisible,
+			processingStatus,
+			processingAction,
+			processingActionLabel,
+			retryTaskId
+		};
 	}
 
 	private restoreTaskCenter(): void {
@@ -393,6 +631,75 @@ export default class EchoNotesPlugin extends Plugin {
 	private async persistTaskCenter(): Promise<void> {
 		this.settings.taskCenterState = createTaskCenterState(this.taskCenter.getTasks());
 		await this.saveData(this.settings);
+	}
+
+	private async maybeShowGettingStartedWelcome(): Promise<void> {
+		if (
+			this.settings.gettingStartedState.status !== "not-started" ||
+			this.gettingStartedWelcomeModal
+		) {
+			return;
+		}
+
+		this.settings.gettingStartedState = markGettingStartedShown(
+			this.settings.gettingStartedState
+		);
+		await this.saveSettings();
+		const modal = new GettingStartedModal(this.app, async (start) => {
+			this.gettingStartedWelcomeModal = null;
+			if (start) {
+				await this.openGettingStarted();
+				return;
+			}
+			this.settings.gettingStartedState = dismissGettingStarted(
+				this.settings.gettingStartedState
+			);
+			this.gettingStartedGuideExpanded = false;
+			await this.saveSettings();
+		});
+		this.gettingStartedWelcomeModal = modal;
+		modal.open();
+	}
+
+	private async recordGettingStartedSuccess(milestone: GettingStartedMilestone): Promise<void> {
+		if (this.settings.gettingStartedState.status !== "in-progress") {
+			return;
+		}
+		this.settings.gettingStartedState = recordGettingStartedMilestone(
+			this.settings.gettingStartedState,
+			milestone
+		);
+		if (this.settings.gettingStartedState.status === "completed") {
+			this.gettingStartedGuideExpanded = true;
+			this.gettingStartedCompletionVisible = true;
+			if (this.gettingStartedCompletionTimer !== null) {
+				window.clearTimeout(this.gettingStartedCompletionTimer);
+			}
+			this.gettingStartedCompletionTimer = window.setTimeout(() => {
+				this.gettingStartedCompletionTimer = null;
+				this.gettingStartedCompletionVisible = false;
+				this.gettingStartedGuideExpanded = false;
+				this.notifySettingsChanged();
+			}, 3000);
+		}
+		await this.saveSettings();
+	}
+
+	private currentNoteHasAudio(): boolean {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const sourceNote = view?.file;
+		if (!view || !sourceNote) {
+			return false;
+		}
+		return parseAudioLinks(view.editor.getValue()).some((match) =>
+			Boolean(this.audioFileService.resolveAudioFile(match.linkPath, sourceNote))
+		);
+	}
+
+	private notifySettingsChanged(): void {
+		for (const listener of this.settingsListeners) {
+			listener();
+		}
 	}
 
 	async openTaskCenterTask(task: EchoNotesTask): Promise<void> {
@@ -517,6 +824,8 @@ export default class EchoNotesPlugin extends Plugin {
 		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
 			await this.saveSettings();
+		} else {
+			this.notifySettingsChanged();
 		}
 	}
 
@@ -549,6 +858,8 @@ export default class EchoNotesPlugin extends Plugin {
 		if (this.settings.analysisApiKey !== undefined) {
 			delete this.settings.analysisApiKey;
 			await this.saveSettings();
+		} else {
+			this.notifySettingsChanged();
 		}
 	}
 
@@ -766,6 +1077,14 @@ export default class EchoNotesPlugin extends Plugin {
 			name: "Open Task Center",
 			callback: () => {
 				void this.activateTaskCenterView();
+			}
+		});
+
+		this.addCommand({
+			id: "open-getting-started",
+			name: "Open getting started",
+			callback: () => {
+				void this.openGettingStarted();
 			}
 		});
 
@@ -1540,10 +1859,11 @@ export default class EchoNotesPlugin extends Plugin {
 				currentSegment: result.segments?.length,
 				totalSegments: result.segments?.length,
 				error: undefined,
-				completedAt: Date.now()
-			});
-			new Notice(`转写完成：${audioFile.name}`);
-			return { transcriptFile, analysisEligible: true };
+					completedAt: Date.now()
+				});
+				await this.recordGettingStartedSuccess("transcription");
+				new Notice(`转写完成：${audioFile.name}`);
+				return { transcriptFile, analysisEligible: true };
 		} catch (error) {
 			const message = getErrorMessage(error);
 			const traceId = error instanceof TranscriptionError ? error.traceId ?? streamingState?.traceId : streamingState?.traceId;
@@ -1921,6 +2241,7 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
+			await this.recordGettingStartedSuccess("analysis");
 			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
 			return true;
 		} catch (error) {
@@ -2354,6 +2675,7 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
+			await this.recordGettingStartedSuccess("transcription");
 			new Notice(`实时转写完成：${recording.audioFile.name}`);
 			this.startAnalysisTasks(
 				transcriptFile,
@@ -2703,6 +3025,17 @@ function getPathBasename(path: string): string {
 
 function formatMegabytes(bytes: number): string {
 	return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination): string {
+	switch (destination) {
+		case "transcription-service":
+			return "录音转写 → 转写服务";
+		case "analysis-model":
+			return "AI 分析 → 模型配置";
+		case "transcription-recording":
+			return "录音转写 → 录音控制";
+	}
 }
 
 class TranscriptionUploadConfirmModal extends Modal {

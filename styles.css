@@ -118,6 +118,73 @@ body .setting-item.echo-notes-settings-definition-row {
 	height: 14px;
 }
 
+.echo-notes-settings-intro-action {
+	margin-top: 14px;
+	padding-top: 12px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.echo-notes-getting-started-modal-shell {
+	width: min(560px, calc(100vw - 32px));
+	max-width: 560px;
+}
+
+.echo-notes-getting-started-modal {
+	min-width: 0;
+}
+
+.echo-notes-getting-started-copy {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	line-height: 1.65;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-getting-started-tags {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 8px;
+	margin-top: 18px;
+}
+
+.echo-notes-getting-started-tag {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 7px;
+	min-width: 0;
+	padding: 10px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	text-align: center;
+}
+
+.echo-notes-getting-started-tag-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: var(--interactive-accent);
+}
+
+.echo-notes-getting-started-tag-icon svg {
+	width: 17px;
+	height: 17px;
+}
+
+.echo-notes-getting-started-actions {
+	margin-top: 18px;
+	padding-top: 14px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.echo-notes-getting-started-actions .setting-item-control {
+	justify-content: flex-end;
+	flex-wrap: wrap;
+}
+
 .echo-notes-settings-workflow {
 	position: relative;
 	isolation: isolate;
@@ -828,6 +895,141 @@ body.echo-notes-verify-mobile-shell .echo-notes-template-category-tabs {
 	overflow-y: auto;
 }
 
+.echo-notes-getting-started-checklist {
+	margin-bottom: 16px;
+	padding: 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	background: var(--background-secondary);
+}
+
+.echo-notes-getting-started-checklist.is-completed {
+	border-color: var(--color-green);
+}
+
+.echo-notes-getting-started-checklist-header,
+.echo-notes-getting-started-checklist-heading {
+	display: flex;
+	align-items: center;
+}
+
+.echo-notes-getting-started-checklist-header {
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.echo-notes-getting-started-checklist-heading {
+	min-width: 0;
+	gap: 8px;
+}
+
+.echo-notes-getting-started-checklist-title {
+	color: var(--text-normal);
+	font-size: var(--font-ui-medium);
+	font-weight: 700;
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-getting-started-checklist-progress {
+	flex: 0 0 auto;
+	padding: 2px 7px;
+	border-radius: 999px;
+	background: var(--background-primary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
+}
+
+.echo-notes-getting-started-toggle {
+	width: 30px;
+	height: 30px;
+	flex: 0 0 auto;
+	justify-content: center;
+}
+
+.echo-notes-getting-started-success {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	margin-top: 10px;
+	padding: 8px 10px;
+	border-radius: var(--radius-s);
+	background: var(--background-primary);
+	color: var(--color-green);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+}
+
+.echo-notes-getting-started-success-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.echo-notes-getting-started-success-icon svg {
+	width: 17px;
+	height: 17px;
+}
+
+.echo-notes-getting-started-steps {
+	display: grid;
+	gap: 3px;
+	margin-top: 10px;
+}
+
+.echo-notes-getting-started-step {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+	padding: 8px 0;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.echo-notes-getting-started-step:first-child {
+	border-top: 0;
+}
+
+.echo-notes-getting-started-step-icon {
+	display: inline-flex;
+	color: var(--text-faint);
+}
+
+.echo-notes-getting-started-step.is-completed .echo-notes-getting-started-step-icon {
+	color: var(--color-green);
+}
+
+.echo-notes-getting-started-step-icon svg {
+	width: 18px;
+	height: 18px;
+}
+
+.echo-notes-getting-started-step-text {
+	min-width: 0;
+}
+
+.echo-notes-getting-started-step-label {
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-getting-started-step-status {
+	margin-top: 2px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.4;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-getting-started-step-action {
+	min-height: 30px;
+	white-space: nowrap;
+}
+
 .echo-notes-task-center-header {
 	display: flex;
 	align-items: flex-start;
@@ -1296,6 +1498,26 @@ body.echo-notes-verify-mobile-shell .echo-notes-template-category-tabs {
 }
 
 @media (max-width: 720px) {
+	.echo-notes-getting-started-modal-shell {
+		width: calc(100vw - 24px);
+	}
+
+	.echo-notes-getting-started-tags {
+		grid-template-columns: 1fr;
+	}
+
+	.echo-notes-getting-started-tag {
+		justify-content: flex-start;
+		min-height: 44px;
+		padding-right: 12px;
+		padding-left: 12px;
+	}
+
+	.echo-notes-getting-started-actions button,
+	.echo-notes-settings-intro-action button {
+		min-height: 44px;
+	}
+
 	.echo-notes-settings-intro {
 		margin-bottom: 8px;
 		padding-top: 0;
@@ -1382,6 +1604,18 @@ body.echo-notes-verify-mobile-shell .echo-notes-template-category-tabs {
 	.echo-notes-task-center-header,
 	.echo-notes-task-card {
 		flex-direction: column;
+	}
+
+	.echo-notes-getting-started-step {
+		grid-template-columns: 20px minmax(0, 1fr);
+		align-items: start;
+	}
+
+	.echo-notes-getting-started-step-action {
+		grid-column: 2;
+		justify-self: start;
+		min-height: 44px;
+		white-space: normal;
 	}
 
 	.echo-notes-task-card-actions {

@@ -68,6 +68,11 @@ type TranscriptionSettingsSection = "service" | "recording" | "output" | "automa
 type AnalysisSettingsSection = "model" | "processing" | "templates";
 type MemorySettingsSection = "workspace" | "model" | "processing";
 
+export type EchoNotesSettingsDestination =
+	| "transcription-service"
+	| "analysis-model"
+	| "transcription-recording";
+
 type SettingsSectionDefinition<T extends string> = {
 	id: T;
 	label: string;
@@ -152,6 +157,26 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	display(): void {
 		this.renderSettings(this.containerEl);
+	}
+
+	showDestination(destination: EchoNotesSettingsDestination): void {
+		switch (destination) {
+			case "transcription-service":
+				this.activeSettingsStage = "transcription";
+				this.activeTranscriptionSettingsSection = "service";
+				break;
+			case "analysis-model":
+				this.activeSettingsStage = "analysis";
+				this.activeAnalysisSettingsSection = "model";
+				break;
+			case "transcription-recording":
+				this.activeSettingsStage = "transcription";
+				this.activeTranscriptionSettingsSection = "recording";
+				break;
+		}
+		if (this.settingsContainerEl?.isConnected) {
+			this.refreshSettings();
+		}
 	}
 
 	private renderSettings(containerEl: HTMLElement): void {
@@ -239,6 +264,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			cls: "echo-notes-settings-intro-guide",
 			text: "操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。"
 		});
+		new Setting(introEl)
+			.setClass("echo-notes-settings-intro-action")
+			.setName("新人指引")
+			.setDesc("重新打开三步清单，继续完成首次转写与 AI 分析。")
+			.addButton((button) => button
+				.setButtonText("打开新人指引")
+				.onClick(() => void this.plugin.openGettingStarted()));
 	}
 
 	private renderSettingsWorkflow(containerEl: HTMLElement, renderId: number): HTMLElement {

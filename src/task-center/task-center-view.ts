@@ -1,5 +1,6 @@
 import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type EchoNotesPlugin from "../main";
+import type { GettingStartedChecklistSnapshot } from "../main";
 import {
 	formatTaskBytes,
 	formatTaskElapsedTime,
@@ -12,7 +13,7 @@ export const ECHO_NOTES_TASK_CENTER_VIEW_TYPE = "echo-notes-task-center";
 
 export class EchoNotesTaskCenterView extends ItemView {
 	private plugin: EchoNotesPlugin;
-	private unsubscribe: (() => void) | null = null;
+	private unsubscribers: Array<() => void> = [];
 
 	constructor(leaf: WorkspaceLeaf, plugin: EchoNotesPlugin) {
 		super(leaf);
@@ -32,13 +33,18 @@ export class EchoNotesTaskCenterView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
-		this.unsubscribe = this.plugin.subscribeTaskCenter(() => this.render());
+		this.unsubscribers = [
+			this.plugin.subscribeTaskCenter(() => this.render()),
+			this.plugin.subscribeSettings(() => this.render())
+		];
 		this.render();
 	}
 
 	async onClose(): Promise<void> {
-		this.unsubscribe?.();
-		this.unsubscribe = null;
+		for (const unsubscribe of this.unsubscribers) {
+			unsubscribe();
+		}
+		this.unsubscribers = [];
 		this.contentEl.empty();
 	}
 
@@ -48,6 +54,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 
 		this.contentEl.empty();
 		this.contentEl.addClass("echo-notes-task-center");
+		this.renderGettingStarted(this.plugin.getGettingStartedChecklistSnapshot());
 
 		const headerEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-header" });
 		const titleWrapEl = headerEl.createDiv({ cls: "echo-notes-task-center-title-wrap" });
@@ -71,6 +78,109 @@ export class EchoNotesTaskCenterView extends ItemView {
 		const listEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-list" });
 		for (const task of tasks) {
 			this.renderTask(listEl, task);
+		}
+	}
+
+	private renderGettingStarted(snapshot: GettingStartedChecklistSnapshot): void {
+		if (snapshot.state.status === "dismissed") {
+			return;
+		}
+
+		const sectionEl = this.contentEl.createEl("section", {
+			cls: `echo-notes-getting-started-checklist${snapshot.completionVisible ? " is-completed" : ""}`,
+			attr: { "aria-labelledby": "echo-notes-getting-started-checklist-title" }
+		});
+		const headerEl = sectionEl.createDiv({ cls: "echo-notes-getting-started-checklist-header" });
+		const headingEl = headerEl.createDiv({ cls: "echo-notes-getting-started-checklist-heading" });
+		headingEl.createDiv({
+			cls: "echo-notes-getting-started-checklist-title",
+			text: "开始使用 Echo Notes",
+			attr: { id: "echo-notes-getting-started-checklist-title" }
+		});
+		headingEl.createDiv({
+			cls: "echo-notes-getting-started-checklist-progress",
+			text: `${snapshot.progress.completedSteps}/3`,
+			attr: { "aria-label": `已完成 ${snapshot.progress.completedSteps} 个，共 3 个步骤` }
+		});
+
+		const toggleEl = this.createIconButton(
+			headerEl,
+			snapshot.guideExpanded ? "chevron-up" : "chevron-down",
+			snapshot.guideExpanded ? "收起新人指引" : "展开新人指引",
+			() => this.plugin.setGettingStartedGuideExpanded(!snapshot.guideExpanded)
+		);
+		toggleEl.addClass("echo-notes-getting-started-toggle");
+
+		if (!snapshot.guideExpanded && !snapshot.completionVisible) {
+			return;
+		}
+
+		if (snapshot.completionVisible) {
+			const successEl = sectionEl.createDiv({
+				cls: "echo-notes-getting-started-success",
+				attr: { role: "status", "aria-live": "polite" }
+			});
+			const iconEl = successEl.createSpan({ cls: "echo-notes-getting-started-success-icon" });
+			iconEl.setAttribute("aria-hidden", "true");
+			setIcon(iconEl, "party-popper");
+			successEl.createSpan({ text: "首次转写与 AI 分析已完成" });
+		}
+
+		const listEl = sectionEl.createDiv({ cls: "echo-notes-getting-started-steps" });
+		this.renderGettingStartedStep(
+			listEl,
+			snapshot.progress.transcriptionReady,
+			"转写服务可用",
+			snapshot.progress.transcriptionReady ? "查看配置" : "去配置",
+			() => this.plugin.openSettingsDestination("transcription-service")
+		);
+		this.renderGettingStartedStep(
+			listEl,
+			snapshot.progress.analysisReady,
+			"AI 分析可用",
+			snapshot.progress.analysisReady ? "查看配置" : "去配置",
+			() => this.plugin.openSettingsDestination("analysis-model")
+		);
+		this.renderGettingStartedStep(
+			listEl,
+			snapshot.progress.firstProcessingCompleted,
+			"完成首次处理",
+			snapshot.processingActionLabel,
+			snapshot.processingAction
+				? () => this.plugin.runGettingStartedProcessingAction(snapshot)
+				: undefined,
+			snapshot.processingStatus
+		);
+	}
+
+	private renderGettingStartedStep(
+		containerEl: HTMLElement,
+		completed: boolean,
+		label: string,
+		actionLabel: string | null,
+		onAction?: () => Promise<unknown> | void,
+		status?: string
+	): void {
+		const rowEl = containerEl.createDiv({
+			cls: `echo-notes-getting-started-step${completed ? " is-completed" : ""}`
+		});
+		const statusIconEl = rowEl.createSpan({ cls: "echo-notes-getting-started-step-icon" });
+		statusIconEl.setAttribute("aria-hidden", "true");
+		setIcon(statusIconEl, completed ? "circle-check" : "circle");
+		const textEl = rowEl.createDiv({ cls: "echo-notes-getting-started-step-text" });
+		textEl.createDiv({ cls: "echo-notes-getting-started-step-label", text: label });
+		if (status) {
+			textEl.createDiv({ cls: "echo-notes-getting-started-step-status", text: status });
+		}
+		if (actionLabel && onAction) {
+			const buttonEl = rowEl.createEl("button", {
+				cls: "echo-notes-getting-started-step-action",
+				text: actionLabel,
+				attr: { type: "button" }
+			});
+			buttonEl.addEventListener("click", () => {
+				void onAction();
+			});
 		}
 	}
 
