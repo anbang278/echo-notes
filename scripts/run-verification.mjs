@@ -62,6 +62,11 @@ const steps = [
 		args: ["scripts/verify-settings-ui.mjs"]
 	},
 	{
+		label: "隔离 Obsidian 编辑器右键菜单回归",
+		command: process.execPath,
+		args: ["scripts/verify-editor-menu.mjs"]
+	},
+	{
 		label: "未暂存 Git 差异格式检查",
 		command: "git",
 		args: ["diff", "--check"]

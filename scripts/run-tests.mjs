@@ -15,3 +15,4 @@ await esbuild.build({
 });
 
 await import(pathToFileURL(`${process.cwd()}/.tmp/smoke-tests.mjs`).href);
+await import(pathToFileURL(`${process.cwd()}/tests/local-audio-dataset-tests.mjs`).href);

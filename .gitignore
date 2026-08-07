@@ -6,3 +6,4 @@ data.json
 .tmp/
 dist/
 output/playwright/
+.local-test-data/

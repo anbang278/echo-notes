@@ -29,7 +29,7 @@ export default [
 		}
 	},
 	{
-		files: ["scripts/**/*.mjs"],
+		files: ["scripts/**/*.mjs", "tests/**/*.mjs"],
 		rules: {
 			"no-console": "off",
 			"no-undef": "off"

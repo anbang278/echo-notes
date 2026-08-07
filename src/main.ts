@@ -299,6 +299,7 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 		this.updateRealtimeUi();
 		this.registerCommands();
+		this.registerEditorContextMenu();
 		this.registerAutomation();
 		this.app.workspace.onLayoutReady(() => {
 			void this.maybeShowGettingStartedWelcome();
@@ -1216,6 +1217,21 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 
 		this.applyConfiguredTranscribeAllAudioHotkey();
+	}
+
+	private registerEditorContextMenu(): void {
+		this.registerEvent(
+			this.app.workspace.on("editor-menu", (menu, editor, info) => {
+				menu.addItem((item) => {
+					item
+						.setTitle("转写当前笔记音频")
+						.setIcon("audio-lines")
+						.onClick(() => {
+							void this.handleTranscribeAllAudioInCurrentNote(editor, info);
+						});
+				});
+			})
+		);
 	}
 
 	private removeRegisteredCommands(): void {
