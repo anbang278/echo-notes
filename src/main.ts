@@ -106,7 +106,8 @@ import {
 } from "./security/upload-preview";
 import {
 	EchoNotesSettingTab,
-	type EchoNotesSettingsDestination
+	type EchoNotesSettingsDestination,
+	type EchoNotesSettingsNavigationOptions
 } from "./settings/settings-tab";
 import {
 	createTaskCenterState,
@@ -314,6 +315,7 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 		this.unsubscribeTaskCenterPersistence?.();
 		this.unsubscribeTaskCenterPersistence = null;
+		this.settingTab?.closeSettingsGuide();
 		this.gettingStartedWelcomeModal?.close();
 		this.gettingStartedWelcomeModal = null;
 		if (this.gettingStartedCompletionTimer !== null) {
@@ -510,7 +512,10 @@ export default class EchoNotesPlugin extends Plugin {
 		this.notifySettingsChanged();
 	}
 
-	async openSettingsDestination(destination: EchoNotesSettingsDestination): Promise<boolean> {
+	async openSettingsDestination(
+		destination: EchoNotesSettingsDestination,
+		options: EchoNotesSettingsNavigationOptions = {}
+	): Promise<boolean> {
 		const settingsManager = (this.app as App & AppWithInternals).setting;
 		const label = getSettingsDestinationLabel(destination);
 		if (!settingsManager?.open || !settingsManager.openTabById || !this.settingTab) {
@@ -521,7 +526,7 @@ export default class EchoNotesPlugin extends Plugin {
 		this.settingTab.showDestination(destination);
 		settingsManager.open();
 		await settingsManager.openTabById(this.manifest.id);
-		this.settingTab.showDestination(destination);
+		this.settingTab.showDestination(destination, options);
 		return true;
 	}
 

@@ -23,6 +23,7 @@ import {
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
 import { diagnoseMemoryProviderSettings } from "../memory/memory-provider";
 import { getSanitizedErrorMessage } from "../security/redaction";
+import { SettingsSpotlight, type SettingsSpotlightStep } from "./settings-spotlight";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
@@ -73,6 +74,19 @@ export type EchoNotesSettingsDestination =
 	| "analysis-model"
 	| "transcription-recording";
 
+export type EchoNotesSettingsGuide = "provider-api-key";
+
+export interface EchoNotesSettingsNavigationOptions {
+	guide?: EchoNotesSettingsGuide;
+}
+
+type SettingsGuideStep = "analysis-enable" | "provider" | "api-key";
+
+type ActiveSettingsGuide = {
+	destination: Extract<EchoNotesSettingsDestination, "transcription-service" | "analysis-model">;
+	step: SettingsGuideStep;
+};
+
 type SettingsSectionDefinition<T extends string> = {
 	id: T;
 	label: string;
@@ -122,6 +136,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private activeMemorySettingsSection: MemorySettingsSection = "workspace";
 	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
 	private settingsRenderSequence = 0;
+	private readonly settingsSpotlight = new SettingsSpotlight();
+	private activeSettingsGuide: ActiveSettingsGuide | null = null;
+	private settingsGuideSyncTimer: number | null = null;
 
 	constructor(app: App, plugin: EchoNotesPlugin) {
 		super(app, plugin);
@@ -143,6 +160,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					this.renderSettings(hostEl);
 					return () => {
 						if (this.settingsContainerEl === hostEl) {
+							this.closeSettingsGuide();
 							this.settingsContainerEl = null;
 						}
 						hostEl.remove();
@@ -159,7 +177,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderSettings(this.containerEl);
 	}
 
-	showDestination(destination: EchoNotesSettingsDestination): void {
+	hide(): void {
+		this.closeSettingsGuide();
+		super.hide();
+	}
+
+	showDestination(
+		destination: EchoNotesSettingsDestination,
+		options: EchoNotesSettingsNavigationOptions = {}
+	): void {
 		switch (destination) {
 			case "transcription-service":
 				this.activeSettingsStage = "transcription";
@@ -174,9 +200,28 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				this.activeTranscriptionSettingsSection = "recording";
 				break;
 		}
+		if (options.guide === "provider-api-key" && destination !== "transcription-recording") {
+			this.activeSettingsGuide = {
+				destination,
+				step: destination === "analysis-model" && !this.plugin.settings.analysisEnabled
+					? "analysis-enable"
+					: "provider"
+			};
+		} else {
+			this.closeSettingsGuide();
+		}
 		if (this.settingsContainerEl?.isConnected) {
 			this.refreshSettings();
 		}
+	}
+
+	closeSettingsGuide(): void {
+		if (this.settingsGuideSyncTimer !== null) {
+			window.clearTimeout(this.settingsGuideSyncTimer);
+			this.settingsGuideSyncTimer = null;
+		}
+		this.activeSettingsGuide = null;
+		this.settingsSpotlight.close();
 	}
 
 	private renderSettings(containerEl: HTMLElement): void {
@@ -224,6 +269,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.activeSettingsStage,
 			false
 		);
+		this.scheduleSettingsGuideSync();
 	}
 
 	private renderSettingsIntroduction(containerEl: HTMLElement, renderId: number): void {
@@ -260,17 +306,26 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const iconEl = readmeLinkEl.createSpan({ cls: "echo-notes-settings-intro-link-icon" });
 		iconEl.setAttribute("aria-hidden", "true");
 		setIcon(iconEl, "external-link");
+		conceptEl.createSpan({
+			cls: "echo-notes-settings-intro-link-separator",
+			text: "·",
+			attr: { "aria-hidden": "true" }
+		});
+		const gettingStartedButtonEl = conceptEl.createEl("button", {
+			cls: "echo-notes-settings-intro-guide-link",
+			attr: { type: "button" }
+		});
+		const gettingStartedIconEl = gettingStartedButtonEl.createSpan({
+			cls: "echo-notes-settings-intro-guide-link-icon"
+		});
+		gettingStartedIconEl.setAttribute("aria-hidden", "true");
+		setIcon(gettingStartedIconEl, "compass");
+		gettingStartedButtonEl.createSpan({ text: "新人指引" });
+		gettingStartedButtonEl.addEventListener("click", () => void this.plugin.openGettingStarted());
 		containerEl.createEl("p", {
 			cls: "echo-notes-settings-intro-guide",
 			text: "操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。"
 		});
-		new Setting(introEl)
-			.setClass("echo-notes-settings-intro-action")
-			.setName("新人指引")
-			.setDesc("重新打开三步清单，继续完成首次转写与 AI 分析。")
-			.addButton((button) => button
-				.setButtonText("打开新人指引")
-				.onClick(() => void this.plugin.openGettingStarted()));
 	}
 
 	private renderSettingsWorkflow(containerEl: HTMLElement, renderId: number): HTMLElement {
@@ -309,6 +364,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				`echo-notes-settings-panel-${renderId}-${step.id}`
 			);
 			buttonEl.addEventListener("click", () => {
+				this.closeSettingsGuide();
 				this.activateSettingsStageFromWorkflow(workflowEl, step.id);
 			});
 			buttonEl.addEventListener("keydown", (event) => {
@@ -397,6 +453,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 
 		event.preventDefault();
+		this.closeSettingsGuide();
 		this.activateSettingsStageFromWorkflow(workflowEl, ENABLED_SETTINGS_STAGES[targetIndex]);
 	}
 
@@ -452,7 +509,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				}
 			});
 			buttonEls.set(section.id, buttonEl);
-			buttonEl.addEventListener("click", () => activate(section.id));
+			buttonEl.addEventListener("click", () => {
+				this.closeSettingsGuide();
+				activate(section.id);
+			});
 			buttonEl.addEventListener("keydown", (event) => {
 				let targetIndex: number;
 				switch (event.key) {
@@ -472,6 +532,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						return;
 				}
 				event.preventDefault();
+				this.closeSettingsGuide();
 				activate(sections[targetIndex].id);
 			});
 
@@ -661,7 +722,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.plugin.settings.transcriptionMode
 		);
 
-		new Setting(containerEl)
+		const providerSetting = new Setting(containerEl)
 			.setName("Provider")
 			.setDesc(
 				isRealtime
@@ -691,6 +752,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.refreshSettings();
 					});
 			});
+		providerSetting.settingEl.dataset.echoNotesGuideTarget = "transcription-provider";
 
 		this.renderProviderSignup(containerEl);
 		this.renderProviderCapability(containerEl);
@@ -699,6 +761,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const apiKeySetting = new Setting(containerEl)
 			.setName(isAgentPlan ? "AgentPlan 专属 API key" : "API key")
 			.setDesc("密钥按 provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+		apiKeySetting.settingEl.dataset.echoNotesGuideTarget = "transcription-api-key";
 		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
 		apiKeySetting.addText((text) => {
 			text.inputEl.type = "password";
@@ -1023,7 +1086,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderAnalysisSettings(containerEl: HTMLElement, renderId: number): void {
-		new Setting(containerEl)
+		const analysisEnabledSetting = new Setting(containerEl)
 			.setName("启用 AI 纪要分析")
 			.setDesc("开启后显示分析模型配置和分析模板设置，并允许对转写稿生成 AI 纪要。")
 			.addToggle((toggle) =>
@@ -1035,6 +1098,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.refreshSettings();
 					})
 			);
+		analysisEnabledSetting.settingEl.dataset.echoNotesGuideTarget = "analysis-enabled";
 
 		if (!this.plugin.settings.analysisEnabled) {
 			return;
@@ -1067,7 +1131,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderAnalysisModelSettings(containerEl: HTMLElement): void {
-		new Setting(containerEl)
+		const analysisProviderSetting = new Setting(containerEl)
 			.setName("分析 provider")
 			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
 			.addDropdown((dropdown) =>
@@ -1084,6 +1148,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.refreshSettings();
 					})
 			);
+		analysisProviderSetting.settingEl.dataset.echoNotesGuideTarget = "analysis-provider";
 
 		const isAgentPlanAnalysis = this.plugin.settings.analysisProvider === "volcengine-agentplan";
 		if (isAgentPlanAnalysis) {
@@ -1097,6 +1162,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					? "必须使用 AgentPlan 控制台创建的专属 API key；与实时转写密钥按用途隔离保存在 Obsidian SecretStorage。"
 					: "用于调用当前分析 provider 的 API key，会按 provider 隔离保存到 Obsidian SecretStorage。"
 			);
+		analysisApiKeySetting.settingEl.dataset.echoNotesGuideTarget = "analysis-api-key";
 		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
 			analysisApiKeySetting,
 			this.plugin.getAnalysisApiKey()
@@ -1756,6 +1822,126 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		);
 		await this.plugin.saveSettings();
 		this.refreshSettings();
+	}
+
+	private scheduleSettingsGuideSync(): void {
+		if (this.settingsGuideSyncTimer !== null) {
+			window.clearTimeout(this.settingsGuideSyncTimer);
+		}
+		this.settingsGuideSyncTimer = window.setTimeout(() => {
+			this.settingsGuideSyncTimer = null;
+			this.syncSettingsGuide();
+		}, 0);
+	}
+
+	private syncSettingsGuide(): void {
+		const session = this.activeSettingsGuide;
+		const rootEl = this.settingsContainerEl ?? this.containerEl;
+		if (!session || !rootEl.isConnected) {
+			this.settingsSpotlight.close();
+			return;
+		}
+
+		if (
+			session.destination === "analysis-model" &&
+			session.step === "analysis-enable" &&
+			this.plugin.settings.analysisEnabled
+		) {
+			session.step = "provider";
+		}
+
+		const step = this.createSettingsSpotlightStep(rootEl, session);
+		if (!step) {
+			this.settingsSpotlight.close();
+			return;
+		}
+		this.settingsSpotlight.present(
+			step,
+			() => this.advanceSettingsGuide(),
+			() => this.closeSettingsGuide()
+		);
+	}
+
+	private createSettingsSpotlightStep(
+		rootEl: HTMLElement,
+		session: ActiveSettingsGuide
+	): SettingsSpotlightStep | null {
+		const isAnalysis = session.destination === "analysis-model";
+		let targetName: string;
+		let focusSelector: string;
+		let stepLabel: string;
+		let title: string;
+		let description: string;
+		let actionLabel: string;
+		let actionDisabled = false;
+
+		switch (session.step) {
+			case "analysis-enable":
+				targetName = "analysis-enabled";
+				focusSelector = ".checkbox-container";
+				stepLabel = "准备步骤";
+				title = "先开启 AI 分析";
+				description = "开启后将显示 Provider 和 API key 配置，本指引会自动继续下一步。";
+				actionLabel = "开启后继续";
+				actionDisabled = true;
+				break;
+			case "provider":
+				targetName = isAnalysis ? "analysis-provider" : "transcription-provider";
+				focusSelector = "select";
+				stepLabel = "1/2";
+				if (isAnalysis) {
+					title = "选择 AI 分析 Provider";
+					description = "选择用于把转写稿生成 AI 笔记的服务商。不同 Provider 使用独立 API key。";
+				} else if (this.plugin.settings.transcriptionMode === "realtime") {
+					title = "确认实时转写 Provider";
+					description = "实时转写目前固定使用火山引擎 AgentPlan，无需修改；下一步填写专属 API key。";
+				} else {
+					title = "选择转写 Provider";
+					description = "选择用于处理音频文件的转写服务商。不同 Provider 使用独立 API key。";
+				}
+				actionLabel = "下一步";
+				break;
+			case "api-key":
+				targetName = isAnalysis ? "analysis-api-key" : "transcription-api-key";
+				focusSelector = 'input[type="password"]';
+				stepLabel = "2/2";
+				title = isAnalysis ? "填写分析 API key" : "填写转写 API key";
+				description = "在所选服务商后台创建并粘贴密钥。密钥只保存在 Obsidian SecretStorage，不会写入插件设置文件。";
+				actionLabel = "完成";
+				break;
+		}
+
+		const targetEl = rootEl.querySelector<HTMLElement>(
+			`[data-echo-notes-guide-target="${targetName}"]`
+		);
+		if (!targetEl || targetEl.closest<HTMLElement>("[hidden]")) {
+			return null;
+		}
+
+		return {
+			targetEl,
+			focusEl: targetEl.querySelector<HTMLElement>(focusSelector),
+			stepLabel,
+			title,
+			description,
+			actionLabel,
+			actionDisabled
+		};
+	}
+
+	private advanceSettingsGuide(): void {
+		const session = this.activeSettingsGuide;
+		if (!session) {
+			return;
+		}
+		if (session.step === "provider") {
+			session.step = "api-key";
+			this.syncSettingsGuide();
+			return;
+		}
+		if (session.step === "api-key") {
+			this.closeSettingsGuide();
+		}
 	}
 
 	private refreshSettings(): void {

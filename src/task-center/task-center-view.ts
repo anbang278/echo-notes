@@ -132,14 +132,20 @@ export class EchoNotesTaskCenterView extends ItemView {
 			snapshot.progress.transcriptionReady,
 			"转写服务可用",
 			snapshot.progress.transcriptionReady ? "查看配置" : "去配置",
-			() => this.plugin.openSettingsDestination("transcription-service")
+			() => this.plugin.openSettingsDestination(
+				"transcription-service",
+				{ guide: "provider-api-key" }
+			)
 		);
 		this.renderGettingStartedStep(
 			listEl,
 			snapshot.progress.analysisReady,
 			"AI 分析可用",
 			snapshot.progress.analysisReady ? "查看配置" : "去配置",
-			() => this.plugin.openSettingsDestination("analysis-model")
+			() => this.plugin.openSettingsDestination(
+				"analysis-model",
+				{ guide: "provider-api-key" }
+			)
 		);
 		this.renderGettingStartedStep(
 			listEl,

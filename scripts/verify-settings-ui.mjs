@@ -505,6 +505,180 @@ async function captureGettingStartedTaskCenterLayouts(page) {
 	return results;
 }
 
+async function inspectSettingsSpotlight(
+	page,
+	{ targetName, stepLabel, actionLabel, actionDisabled = false, expectFocus = true }
+) {
+	const layer = page.locator(".echo-notes-settings-spotlight-layer");
+	await layer.waitFor({ state: "visible" });
+	if (expectFocus) {
+		await page.waitForFunction((expectedTargetName) => {
+			const target = document.querySelector(`[data-echo-notes-guide-target="${expectedTargetName}"]`);
+			const popover = document.querySelector(".echo-notes-settings-spotlight-popover");
+			return Boolean(
+				document.activeElement &&
+				((target?.contains(document.activeElement) ?? false) || (popover?.contains(document.activeElement) ?? false))
+			);
+		}, targetName);
+	}
+	await page.waitForFunction((expectedTargetName) => {
+		const target = document.querySelector(`[data-echo-notes-guide-target="${expectedTargetName}"]`);
+		const popover = document.querySelector(".echo-notes-settings-spotlight-popover");
+		const targetRect = target?.getBoundingClientRect();
+		const popoverRect = popover?.getBoundingClientRect();
+		if (!target || !targetRect || !popoverRect) {
+			return false;
+		}
+		const targetCenterElement = document.elementFromPoint(
+			targetRect.left + targetRect.width / 2,
+			targetRect.top + targetRect.height / 2
+		);
+		return Boolean(
+			targetRect.width > 0 &&
+			targetRect.height > 0 &&
+			targetRect.bottom > 0 &&
+			targetRect.top < window.innerHeight &&
+			targetCenterElement &&
+			(target.contains(targetCenterElement) || targetCenterElement.contains(target)) &&
+			popoverRect.left >= -1 &&
+			popoverRect.right <= window.innerWidth + 1 &&
+			popoverRect.top >= -1 &&
+			popoverRect.bottom <= window.innerHeight + 1
+		);
+	}, targetName);
+	const metrics = await page.evaluate(
+		({ expectedTargetName, expectedStepLabel }) => {
+			const spotlightLayers = [...document.querySelectorAll(".echo-notes-settings-spotlight-layer")];
+			const spotlightLayer = spotlightLayers[0];
+			const popover = spotlightLayer?.querySelector(".echo-notes-settings-spotlight-popover");
+			const target = document.querySelector(`[data-echo-notes-guide-target="${expectedTargetName}"]`);
+			const action = popover?.querySelector(".echo-notes-settings-spotlight-action");
+			const close = popover?.querySelector(".echo-notes-settings-spotlight-close");
+			const description = popover?.querySelector(".echo-notes-settings-spotlight-description");
+			const describedElement = description?.id
+				? document.querySelector(`[aria-describedby~="${description.id}"]`)
+				: null;
+			const targetRect = target?.getBoundingClientRect();
+			const popoverRect = popover?.getBoundingClientRect();
+			const targetCenterElement = targetRect
+				? document.elementFromPoint(
+					targetRect.left + targetRect.width / 2,
+					targetRect.top + targetRect.height / 2
+				)
+				: null;
+			const overlapWidth = targetRect && popoverRect
+				? Math.max(0, Math.min(targetRect.right, popoverRect.right) - Math.max(targetRect.left, popoverRect.left))
+				: Number.POSITIVE_INFINITY;
+			const overlapHeight = targetRect && popoverRect
+				? Math.max(0, Math.min(targetRect.bottom, popoverRect.bottom) - Math.max(targetRect.top, popoverRect.top))
+				: Number.POSITIVE_INFINITY;
+			return {
+				layerCount: spotlightLayers.length,
+				maskCount: spotlightLayer?.querySelectorAll(".echo-notes-settings-spotlight-mask").length ?? 0,
+				step: spotlightLayer?.getAttribute("data-spotlight-step"),
+				stepLabel: popover?.querySelector(".echo-notes-settings-spotlight-step")?.textContent?.trim(),
+				targetFound: Boolean(target),
+				targetHighlighted: target?.classList.contains("is-echo-notes-spotlight-target") ?? false,
+				targetVisible: Boolean(
+					targetRect &&
+					targetRect.width > 0 &&
+					targetRect.height > 0 &&
+					targetRect.bottom > 0 &&
+					targetRect.top < window.innerHeight
+				),
+				targetCenterInteractive: Boolean(
+					target && targetCenterElement &&
+					(target.contains(targetCenterElement) || targetCenterElement.contains(target))
+				),
+				popoverVisible: Boolean(
+					popoverRect &&
+					popoverRect.width > 0 &&
+					popoverRect.height > 0 &&
+					popoverRect.left >= -1 &&
+					popoverRect.right <= window.innerWidth + 1 &&
+					popoverRect.top >= -1 &&
+					popoverRect.bottom <= window.innerHeight + 1
+				),
+				popoverOverflow: popover ? popover.scrollWidth - popover.clientWidth : Number.POSITIVE_INFINITY,
+				targetPopoverOverlap: overlapWidth * overlapHeight,
+				targetRect: targetRect ? {
+					left: targetRect.left,
+					top: targetRect.top,
+					right: targetRect.right,
+					bottom: targetRect.bottom,
+					width: targetRect.width,
+					height: targetRect.height
+				} : null,
+				popoverRect: popoverRect ? {
+					left: popoverRect.left,
+					top: popoverRect.top,
+					right: popoverRect.right,
+					bottom: popoverRect.bottom,
+					width: popoverRect.width,
+					height: popoverRect.height
+				} : null,
+				viewport: { width: window.innerWidth, height: window.innerHeight },
+				actionLabel: action?.textContent?.trim(),
+				actionDisabled: action?.hasAttribute("disabled") ?? false,
+				closeVisible: Boolean(close && close.getBoundingClientRect().width > 0),
+				descriptionLinked: Boolean(describedElement && description && describedElement.getAttribute("aria-describedby")?.split(/\s+/).includes(description.id)),
+				focusInside: Boolean(
+					document.activeElement &&
+					((target?.contains(document.activeElement) ?? false) || (popover?.contains(document.activeElement) ?? false))
+				),
+				documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				expectedStepLabel
+			};
+		},
+		{ expectedTargetName: targetName, expectedStepLabel: stepLabel }
+	);
+	const context = `Spotlight/${targetName}/${stepLabel}`;
+	assert(metrics.layerCount === 1, `${context} 应只有一个引导层`);
+	assert(metrics.maskCount === 4, `${context} 应使用四块遮罩留出可交互目标`);
+	assert(metrics.stepLabel === stepLabel, `${context} 步骤标签不正确：${metrics.stepLabel ?? "缺失"}`);
+	assert(metrics.targetFound && metrics.targetHighlighted, `${context} 未解析到稳定引导锚点`);
+	assert(metrics.targetVisible && metrics.targetCenterInteractive, `${context} 目标未保持可见、可交互`);
+	assert(metrics.popoverVisible && metrics.popoverOverflow <= 1, `${context} 提示卡溢出或不可见`);
+	assert(
+		metrics.targetPopoverOverlap <= 1,
+		`${context} 提示卡遮挡目标控件：${JSON.stringify({
+			targetRect: metrics.targetRect,
+			popoverRect: metrics.popoverRect,
+			viewport: metrics.viewport,
+			overlap: metrics.targetPopoverOverlap
+		})}`
+	);
+	assert(metrics.actionLabel === actionLabel, `${context} 操作标签不正确`);
+	assert(metrics.actionDisabled === actionDisabled, `${context} 操作可用状态不正确`);
+	assert(metrics.closeVisible, `${context} 缺少可见关闭按钮`);
+	assert(metrics.descriptionLinked, `${context} aria-describedby 关系无效`);
+	if (expectFocus) {
+		assert(metrics.focusInside, `${context} 初始焦点未落在目标或提示卡中`);
+	}
+	assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+	return metrics;
+}
+
+async function captureSettingsSpotlightLayouts(page, phase, expectation) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			await page.locator(`[data-echo-notes-guide-target="${expectation.targetName}"]`).evaluate((target) => {
+				target.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+			});
+			await page.waitForTimeout(200);
+			const metrics = await inspectSettingsSpotlight(page, { ...expectation, expectFocus: false });
+			const fileName = `settings-spotlight-${phase}-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 10_000, `${fileName} 截图可能为空白`);
+			results.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+	return results;
+}
+
 async function verifyGettingStarted(page) {
 	const modal = page.locator(".echo-notes-getting-started-modal-shell");
 	await modal.waitFor({ state: "visible" });
@@ -599,7 +773,152 @@ async function verifyGettingStarted(page) {
 		(await getActivePanel(page).getByRole("tab", { name: "转写服务", exact: true }).getAttribute("aria-selected")) === "true",
 		"转写配置跳转未定位到转写服务分类"
 	);
-	await page.locator(".echo-notes-settings-intro-action").getByRole("button", { name: "打开新人指引", exact: true }).click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	const previousProviderTarget = await page
+		.locator('[data-echo-notes-guide-target="transcription-provider"]')
+		.elementHandle();
+	assert(previousProviderTarget, "转写 Provider 重绘前缺少引导锚点");
+	const transcriptionProvider = page.locator('[data-echo-notes-guide-target="transcription-provider"] select');
+	const nextProvider = await transcriptionProvider.evaluate((select) => {
+		if (!(select instanceof HTMLSelectElement)) {
+			return null;
+		}
+		return [...select.options].find((option) => option.value !== select.value)?.value ?? null;
+	});
+	assert(nextProvider, "转写 Provider 缺少可用于重绘验证的候选项");
+	await transcriptionProvider.selectOption(nextProvider);
+	await page.waitForFunction((previousTarget) => {
+		const layers = document.querySelectorAll(".echo-notes-settings-spotlight-layer");
+		const target = document.querySelector('[data-echo-notes-guide-target="transcription-provider"]');
+		return Boolean(
+			previousTarget &&
+			!previousTarget.isConnected &&
+			target &&
+			target !== previousTarget &&
+			layers.length === 1 &&
+			target.classList.contains("is-echo-notes-spotlight-target")
+		);
+	}, previousProviderTarget);
+	await previousProviderTarget.dispose();
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	for (let index = 0; index < 5; index += 1) {
+		await page.keyboard.press("Tab");
+		const focusState = await page.evaluate(() => {
+			const target = document.querySelector('[data-echo-notes-guide-target="transcription-provider"]');
+			const popover = document.querySelector(".echo-notes-settings-spotlight-popover");
+			const active = document.activeElement;
+			return {
+				inside: Boolean(
+					active &&
+					((target?.contains(active) ?? false) || (popover?.contains(active) ?? false))
+				),
+				tag: active?.tagName ?? null,
+				classes: active instanceof HTMLElement ? active.className : null,
+				text: active?.textContent?.trim().slice(0, 120) ?? null,
+				connected: active?.isConnected ?? false,
+				layerCount: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
+				targetHighlighted: target?.classList.contains("is-echo-notes-spotlight-target") ?? false
+			};
+		});
+		assert(
+			focusState.inside,
+			`Spotlight 的 Tab 焦点逃离目标与提示卡（第 ${index + 1} 次）：${JSON.stringify(focusState)}`
+		);
+	}
+	const providerSpotlightLayouts = await captureSettingsSpotlightLayouts(page, "provider", {
+		targetName: "transcription-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await page.locator(".echo-notes-settings-spotlight-action").click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-api-key",
+		stepLabel: "2/2",
+		actionLabel: "完成"
+	});
+	const apiKeySpotlightLayouts = await captureSettingsSpotlightLayouts(page, "api-key", {
+		targetName: "transcription-api-key",
+		stepLabel: "2/2",
+		actionLabel: "完成"
+	});
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	const reducedMotionState = await page.evaluate(() => ({
+		maskTransition: getComputedStyle(document.querySelector(".echo-notes-settings-spotlight-mask")).transitionDuration,
+		popoverTransition: getComputedStyle(document.querySelector(".echo-notes-settings-spotlight-popover")).transitionDuration
+	}));
+	assert(reducedMotionState.maskTransition === "0s", "reduced-motion 下遮罩仍有过渡动画");
+	assert(reducedMotionState.popoverTransition === "0s", "reduced-motion 下提示卡仍有过渡动画");
+	await page.emulateMedia({ reducedMotion: "no-preference" });
+	await page.keyboard.press("Escape");
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	const escapeCleanupState = await page.evaluate(() => {
+		const input = document.querySelector('[data-echo-notes-guide-target="transcription-api-key"] input[type="password"]');
+		return {
+			settingsVisible: Boolean(document.querySelector(".modal.mod-settings")),
+			introVisible: Boolean(document.querySelector(".echo-notes-settings-intro")),
+			inputFound: Boolean(input),
+			describedBy: input?.getAttribute("aria-describedby") ?? null
+		};
+	});
+	assert(
+		escapeCleanupState.describedBy === null &&
+		(await page.locator(".is-echo-notes-spotlight-target").count()) === 0,
+		`Escape 退出后未完整清理 Spotlight：${JSON.stringify(escapeCleanupState)}`
+	);
+	if (escapeCleanupState.settingsVisible) {
+		assert(escapeCleanupState.introVisible && escapeCleanupState.inputFound, "Escape 退出后设置页状态不完整");
+		await page.locator(".echo-notes-settings-intro-copy").getByRole("button", { name: "新人指引", exact: true }).click();
+	}
+	await taskCenter.waitFor({ state: "visible" });
+	assert((await page.locator(".echo-notes-settings-spotlight-layer").count()) === 0, "返回任务中心后仍残留 Spotlight");
+
+	await taskCenter.locator(".echo-notes-getting-started-step").filter({ hasText: "AI 分析可用" })
+		.getByRole("button").click();
+	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+	assert(
+		(await page.locator('[data-settings-stage="analysis"]').getAttribute("aria-selected")) === "true",
+		"AI 分析配置跳转未定位到 AI 分析阶段"
+	);
+	await inspectSettingsSpotlight(page, {
+		targetName: "analysis-enabled",
+		stepLabel: "准备步骤",
+		actionLabel: "开启后继续",
+		actionDisabled: true
+	});
+	await page.locator('[data-echo-notes-guide-target="analysis-enabled"] .checkbox-container').click();
+	await page.waitForFunction(() => {
+		const target = document.querySelector('[data-echo-notes-guide-target="analysis-provider"]');
+		return target?.classList.contains("is-echo-notes-spotlight-target");
+	});
+	await inspectSettingsSpotlight(page, {
+		targetName: "analysis-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	await page.locator(".echo-notes-settings-spotlight-action").click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "analysis-api-key",
+		stepLabel: "2/2",
+		actionLabel: "完成"
+	});
+	await page.locator(".echo-notes-settings-spotlight-close").click();
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	assert(
+		await page.locator('[data-echo-notes-guide-target="analysis-api-key"] input[type="password"]')
+			.evaluate((input) => document.activeElement === input),
+		"关闭 Spotlight 后未将焦点恢复到当前配置控件"
+	);
+	await page.locator(".echo-notes-settings-intro-copy").getByRole("button", { name: "新人指引", exact: true }).click();
 	await taskCenter.waitFor({ state: "visible" });
 
 	checklistState = await page.evaluate(async (pluginId) => {
@@ -622,6 +941,112 @@ async function verifyGettingStarted(page) {
 	assert(checklistState.plainApiKey === null && checklistState.plainAnalysisApiKey === null, "API Key 进入普通设置");
 	assert(!checklistState.stateJson.includes("ui-test"), "API Key 进入新人状态");
 	await taskCenter.getByText("2/3", { exact: true }).waitFor({ state: "visible" });
+
+	const completedTranscriptionStep = taskCenter.locator(".echo-notes-getting-started-step")
+		.filter({ hasText: "转写服务可用" });
+	assert(
+		(await completedTranscriptionStep.getByRole("button").textContent())?.trim() === "查看配置",
+		"已完成转写步骤未显示“查看配置”"
+	);
+	await completedTranscriptionStep.getByRole("button").click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	await page.locator(".echo-notes-settings-spotlight-mask.is-top").click({ position: { x: 2, y: 2 } });
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	await page.locator(".echo-notes-settings-intro-copy").getByRole("button", { name: "新人指引", exact: true }).click();
+	await taskCenter.waitFor({ state: "visible" });
+
+	const completedAnalysisStep = taskCenter.locator(".echo-notes-getting-started-step")
+		.filter({ hasText: "AI 分析可用" });
+	assert(
+		(await completedAnalysisStep.getByRole("button").textContent())?.trim() === "查看配置",
+		"已完成分析步骤未显示“查看配置”"
+	);
+	await completedAnalysisStep.getByRole("button").click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "analysis-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await taskCenter.waitFor({ state: "visible" });
+
+	const declarativeCleanupState = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const settingTab = plugin.settingTab;
+		const settingEl = document.createElement("div");
+		document.body.appendChild(settingEl);
+		const definition = settingTab.getSettingDefinitions()[0];
+		const cleanup = definition.render({ settingEl });
+		const hostEl = settingEl.querySelector(".echo-notes-settings-definition-host");
+		settingTab.showDestination("transcription-service", { guide: "provider-api-key" });
+		await new Promise((resolve) => window.setTimeout(resolve, 50));
+		const layerBeforeCleanup = document.querySelectorAll(".echo-notes-settings-spotlight-layer").length;
+		cleanup();
+		const state = {
+			layerBeforeCleanup,
+			layerAfterCleanup: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
+			hostConnected: hostEl?.isConnected ?? false,
+			guideActive: Boolean(settingTab.activeSettingsGuide)
+		};
+		settingEl.remove();
+		settingTab.closeSettingsGuide();
+		return state;
+	}, PLUGIN_ID);
+	assert(
+		declarativeCleanupState.layerBeforeCleanup === 1 &&
+		declarativeCleanupState.layerAfterCleanup === 0 &&
+		!declarativeCleanupState.hostConnected &&
+		!declarativeCleanupState.guideActive,
+		`声明式设置宿主销毁后未清理 Spotlight：${JSON.stringify(declarativeCleanupState)}`
+	);
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.transcriptionMode = "realtime";
+		await plugin.saveApiKey("volcengine-agentplan", "ui-test-realtime-key");
+		await plugin.saveSettings();
+		await plugin.openSettingsDestination("transcription-service", { guide: "provider-api-key" });
+	}, PLUGIN_ID);
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
+	const realtimeGuideState = await page.evaluate(() => {
+		const target = document.querySelector('[data-echo-notes-guide-target="transcription-provider"]');
+		return {
+			providerDisabled: target?.querySelector("select")?.hasAttribute("disabled") ?? false,
+			title: document.querySelector(".echo-notes-settings-spotlight-title")?.textContent?.trim(),
+			description: document.querySelector(".echo-notes-settings-spotlight-description")?.textContent?.trim()
+		};
+	});
+	assert(realtimeGuideState.providerDisabled, "实时转写 Spotlight 未保持固定 Provider 禁用状态");
+	assert(realtimeGuideState.title === "确认实时转写 Provider", "实时转写 Spotlight 标题不正确");
+	assert(
+		realtimeGuideState.description?.includes("固定使用火山引擎 AgentPlan"),
+		"实时转写 Spotlight 未解释固定 AgentPlan Provider"
+	);
+	await page.locator(".echo-notes-settings-spotlight-action").click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-api-key",
+		stepLabel: "2/2",
+		actionLabel: "完成"
+	});
+	await page.locator(".echo-notes-settings-spotlight-close").click();
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.transcriptionMode = "offline";
+		await plugin.saveSettings();
+	}, PLUGIN_ID);
+	await taskCenter.waitFor({ state: "visible" });
 	const taskCenterLayouts = await captureGettingStartedTaskCenterLayouts(page);
 
 	await page.evaluate(async (pluginId) => {
@@ -727,7 +1152,11 @@ async function verifyGettingStarted(page) {
 		plugin.settings.analysisEnabled = false;
 		await plugin.saveSettings();
 	}, PLUGIN_ID);
-	return { welcomeLayouts, taskCenterLayouts };
+	return {
+		welcomeLayouts,
+		taskCenterLayouts,
+		spotlightLayouts: [...providerSpotlightLayouts, ...apiKeySpotlightLayouts]
+	};
 }
 
 async function verifyDeclarativeSettingsCompatibility(page) {
@@ -919,7 +1348,10 @@ async function verifyIntroduction(page) {
 		const titleMark = heading?.querySelector(".echo-notes-settings-intro-title-mark");
 		const link = intro?.querySelector(".echo-notes-settings-intro-link");
 		const icon = link?.querySelector(".echo-notes-settings-intro-link-icon");
-		const gettingStartedAction = intro?.querySelector(".echo-notes-settings-intro-action button");
+		const gettingStartedAction = intro?.querySelector(".echo-notes-settings-intro-guide-link");
+		const gettingStartedSeparator = intro?.querySelector(".echo-notes-settings-intro-link-separator");
+		const gettingStartedIcon = gettingStartedAction?.querySelector(".echo-notes-settings-intro-guide-link-icon");
+		const separatorStyle = gettingStartedSeparator ? getComputedStyle(gettingStartedSeparator) : null;
 		const workflow = document.querySelector(".echo-notes-settings-workflow");
 		return {
 			count: document.querySelectorAll(".echo-notes-settings-intro").length,
@@ -942,6 +1374,17 @@ async function verifyIntroduction(page) {
 				heading?.classList.contains("setting-item-name")
 			),
 			gettingStartedAction: gettingStartedAction?.textContent?.trim(),
+			gettingStartedInConcept: gettingStartedAction?.parentElement === copy,
+			gettingStartedAfterReadme:
+				gettingStartedSeparator?.previousElementSibling === link &&
+				gettingStartedSeparator?.nextElementSibling === gettingStartedAction,
+			gettingStartedIconHidden: gettingStartedIcon?.getAttribute("aria-hidden"),
+			gettingStartedIconHasSvg: Boolean(gettingStartedIcon?.querySelector("svg")),
+			gettingStartedSpacing:
+				Number.parseFloat(separatorStyle?.marginInlineStart ?? "0") >= 6 &&
+				Number.parseFloat(separatorStyle?.marginInlineEnd ?? "0") >= 4,
+			legacyGettingStartedActionCount: document.querySelectorAll(".echo-notes-settings-intro-action").length,
+			spotlightLayerCount: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
 			headingRelation: intro?.getAttribute("aria-labelledby") === heading?.id,
 			correctOrder:
 				intro?.nextElementSibling === guide && guide?.nextElementSibling === workflow
@@ -961,7 +1404,16 @@ async function verifyIntroduction(page) {
 	assert(result.iconHidden === "true" && result.hasSvg, "外链图标或辅助技术属性不完整");
 	assert(result.titleIconHidden === "true" && result.titleHasSvg, "标题图标或辅助技术属性不完整");
 	assert(result.standardHeading, "引导区标题必须使用 Obsidian Setting heading 结构");
-	assert(result.gettingStartedAction === "打开新人指引", "设置页缺少打开新人指引入口");
+	assert(result.gettingStartedAction === "新人指引", "设置页缺少内联新人指引入口");
+	assert(result.gettingStartedInConcept, "新人指引入口必须位于理念说明内");
+	assert(result.gettingStartedAfterReadme, "新人指引入口必须紧跟完整设计理念链接");
+	assert(
+		result.gettingStartedIconHidden === "true" && result.gettingStartedIconHasSvg,
+		"新人指引入口缺少小图标或辅助技术属性"
+	);
+	assert(result.gettingStartedSpacing, "新人指引与前方链接的间距不足");
+	assert(result.legacyGettingStartedActionCount === 0, "设置页仍存在占空间的旧新人指引卡片");
+	assert(result.spotlightLayerCount === 0, "普通打开设置页不应自动启动 Spotlight");
 	assert(result.headingRelation, "引导区 aria-labelledby 关系无效");
 	assert(result.correctOrder, "操作指引必须位于理念分割线与工作流步骤轴之间");
 }
@@ -2245,7 +2697,6 @@ async function inspectLayout(page, providerSettingName) {
 }
 
 async function captureViewports(page) {
-	await page.addStyleTag({ content: MOBILE_SHELL_CSS });
 	const results = [];
 	for (const viewport of VIEWPORTS) {
 		for (const theme of THEMES) {
@@ -2462,6 +2913,7 @@ try {
 	const page = pages.find((candidate) => candidate.url() === "app://obsidian.md/index.html");
 	assert(page, "CDP 中未找到 Obsidian renderer 页面");
 	page.setDefaultTimeout(10_000);
+	await page.addStyleTag({ content: MOBILE_SHELL_CSS });
 	const pageErrors = [];
 	page.on("pageerror", (error) => pageErrors.push(error.message));
 
@@ -2529,11 +2981,13 @@ try {
 			memoryContextPackages: true,
 			gettingStartedWelcome: true,
 			gettingStartedChecklist: true,
+			gettingStartedSettingsSpotlight: true,
 			gettingStartedMigration: true,
 			runtimeErrors: pageErrors.length
 		},
 		gettingStartedWelcomeLayouts: gettingStartedLayouts.welcomeLayouts,
 		gettingStartedTaskCenterLayouts: gettingStartedLayouts.taskCenterLayouts,
+		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
 		screenshots,
 		templateLayouts,
 		memoryReviewLayouts,
@@ -2547,7 +3001,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；新人欢迎截图：${gettingStartedLayouts.welcomeLayouts.length} 张；新人侧栏截图：${gettingStartedLayouts.taskCenterLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；新人欢迎截图：${gettingStartedLayouts.welcomeLayouts.length} 张；新人侧栏截图：${gettingStartedLayouts.taskCenterLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);

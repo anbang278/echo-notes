@@ -460,6 +460,24 @@ npm run build
 
 Development requires Node.js 22 or newer.
 
+For routine local regression, use the single complete verification entry point:
+
+```bash
+npm run verify
+```
+
+It checks version consistency across `package.json`, `package-lock.json`, `manifest.json`,
+and `versions.json`; then runs all historical automated tests, lint,
+typecheck, the production build, the isolated real-Obsidian settings/onboarding UI
+regression, staged and unstaged `git diff --check`, and the production dependency
+audit. The UI step currently requires macOS with Obsidian Desktop installed. The test
+vault must enable `echo-notes` and its `.obsidian/plugins/echo-notes` directory must be
+a symlink resolving to this project, rather than a copied build. Override discovery
+with `ECHO_NOTES_TEST_VAULT`, `OBSIDIAN_BINARY_PATH`, `OBSIDIAN_DATA_DIR`, or
+`OBSIDIAN_ASAR_PATH`; screenshots can be redirected with `ECHO_NOTES_UI_OUTPUT_DIR`.
+`npm run package` runs this complete verification automatically before creating release
+files, so packaging has the same local UI-environment requirement.
+
 ### Release validation
 
 The isolated real-chain gate uses non-private fixtures in the dedicated test vault and removes its temporary Obsidian profile after the run. It validates SiliconFlow `FunAudioLLM/SenseVoiceSmall` transcription followed by Volcengine AgentPlan `doubao-seed-2.0-lite` analysis and Echo Memory extraction. Provide the two keys only through the process environment; the script writes the AgentPlan key into separate analysis and memory `SecretStorage` entries and never prints either value.
@@ -476,7 +494,7 @@ unset SILICONFLOW_API_KEY AGENTPLAN_API_KEY
 ## Install for Local Testing
 
 1. Use a dedicated test vault.
-2. Copy or symlink this folder to `.obsidian/plugins/echo-notes/`.
+2. Copy or symlink this folder to `.obsidian/plugins/echo-notes/`. The automated UI verifier requires a symlink to the project root.
 3. Run `npm install` and `npm run build`.
 4. Enable community plugins in Obsidian.
 5. Enable Echo Notes.

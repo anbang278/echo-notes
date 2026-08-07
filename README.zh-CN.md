@@ -417,6 +417,22 @@ npm run build
 
 开发环境要求 Node.js 22 或更高版本。
 
+后续版本迭代的本地常规回归统一执行：
+
+```bash
+npm run verify
+```
+
+该入口会依次检查 `package.json`、`package-lock.json`、`manifest.json` 与
+`versions.json` 的版本一致性、历史自动化测试、Lint、类型检查、生产构建、
+隔离真实 Obsidian 设置页/新人指引 UI 回归、已暂存与未暂存 `git diff --check`
+以及生产依赖审计。UI 验证目前要求 macOS 已安装 Obsidian Desktop；专用测试
+Vault 必须启用 `echo-notes`，且 `.obsidian/plugins/echo-notes` 必须是解析到当前
+工程根目录的软链接，不能使用复制安装。可通过 `ECHO_NOTES_TEST_VAULT`、
+`OBSIDIAN_BINARY_PATH`、`OBSIDIAN_DATA_DIR`、`OBSIDIAN_ASAR_PATH` 覆盖自动发现路径，
+通过 `ECHO_NOTES_UI_OUTPUT_DIR` 修改截图输出目录。`npm run package` 在生成发布文件前
+会自动执行这套完整验证，因此打包同样需要上述本地 UI 环境。
+
 ### 发布验收
 
 隔离真实链路门禁使用专用测试 Vault 中的无隐私素材，运行结束后删除临时 Obsidian Profile。它验证“硅基流动 `FunAudioLLM/SenseVoiceSmall` 转写 → 火山引擎 AgentPlan `doubao-seed-2.0-lite` AI 分析 → AgentPlan Echo Memory 提取”。两把密钥只通过进程环境传入；脚本会把 AgentPlan Key 写入分析与记忆两个独立 `SecretStorage` 条目，不打印任何密钥值。
@@ -433,7 +449,7 @@ unset SILICONFLOW_API_KEY AGENTPLAN_API_KEY
 ## 本地测试安装
 
 1. 使用独立测试 Vault。
-2. 将本目录复制或软链接到 `.obsidian/plugins/echo-notes/`。
+2. 将本目录复制或软链接到 `.obsidian/plugins/echo-notes/`；自动 UI 验证必须使用指向工程根目录的软链接。
 3. 执行 `npm install` 和 `npm run build`。
 4. 在 Obsidian 中启用第三方插件。
 5. 启用 Echo Notes。
