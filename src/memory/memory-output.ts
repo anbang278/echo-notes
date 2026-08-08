@@ -110,6 +110,7 @@ export function renderMemoryCandidate(candidate: MemoryCandidatePackage, reviewP
 			? [`证据校验拒绝：${candidate.rejectedAssertionCount} 条`]
 			: []),
 		...(reviewPath ? [`审核：[[${reviewPath}]]`] : []),
+		...(reviewPath ? ["审核命令：Echo Notes：审核当前记忆候选（也可在任务中心点击“立即审核”）"] : []),
 		"",
 		"| 类型 | 主体 | 关系/属性 | 内容 | 置信度 | 原文证据 |",
 		"| --- | --- | --- | --- | ---: | --- |",

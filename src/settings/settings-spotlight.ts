@@ -1,4 +1,4 @@
-import { setIcon } from "obsidian";
+import { Scope, setIcon, type App } from "obsidian";
 
 export interface SettingsSpotlightStep {
 	targetEl: HTMLElement;
@@ -8,12 +8,22 @@ export interface SettingsSpotlightStep {
 	description: string;
 	actionLabel: string;
 	actionDisabled?: boolean;
+	secondaryActionLabel?: string;
+	secondaryActionDisabled?: boolean;
+}
+
+export interface SettingsSpotlightActions {
+	onAction: () => void;
+	onClose: () => void;
+	onSecondaryAction?: () => void;
 }
 
 export class SettingsSpotlight {
+	private readonly app: App;
 	private layerEl: HTMLElement | null = null;
 	private popoverEl: HTMLElement | null = null;
 	private actionButtonEl: HTMLButtonElement | null = null;
+	private secondaryActionButtonEl: HTMLButtonElement | null = null;
 	private closeButtonEl: HTMLButtonElement | null = null;
 	private targetEl: HTMLElement | null = null;
 	private focusEl: HTMLElement | null = null;
@@ -26,15 +36,22 @@ export class SettingsSpotlight {
 	private moveFocusOnNextLayout = false;
 	private sequence = 0;
 	private onAction: (() => void) | null = null;
+	private onSecondaryAction: (() => void) | null = null;
 	private onClose: (() => void) | null = null;
+	private keymapScope: Scope | null = null;
 
-	present(step: SettingsSpotlightStep, onAction: () => void, onClose: () => void): void {
+	constructor(app: App) {
+		this.app = app;
+	}
+
+	present(step: SettingsSpotlightStep, actions: SettingsSpotlightActions): void {
 		this.clearStep();
 		this.targetEl = step.targetEl;
 		this.focusEl = this.resolveFocusableElement(step);
 		this.focusGuardEl = this.focusEl;
-		this.onAction = onAction;
-		this.onClose = onClose;
+		this.onAction = actions.onAction;
+		this.onSecondaryAction = actions.onSecondaryAction ?? null;
+		this.onClose = actions.onClose;
 
 		const ownerDocument = step.targetEl.ownerDocument;
 		const ownerWindow = ownerDocument.defaultView;
@@ -95,6 +112,16 @@ export class SettingsSpotlight {
 			attr: { id: contentId }
 		});
 		const footerEl = popoverEl.createDiv({ cls: "echo-notes-settings-spotlight-footer" });
+		if (step.secondaryActionLabel) {
+			const secondaryActionButtonEl = footerEl.createEl("button", {
+				cls: "echo-notes-settings-spotlight-secondary-action",
+				text: step.secondaryActionLabel,
+				attr: { type: "button" }
+			});
+			secondaryActionButtonEl.disabled = step.secondaryActionDisabled === true;
+			secondaryActionButtonEl.addEventListener("click", this.handleSecondaryAction);
+			this.secondaryActionButtonEl = secondaryActionButtonEl;
+		}
 		const actionButtonEl = footerEl.createEl("button", {
 			cls: "mod-cta echo-notes-settings-spotlight-action",
 			text: step.actionLabel,
@@ -123,6 +150,13 @@ export class SettingsSpotlight {
 		this.resizeObserver = new ownerWindow.ResizeObserver(this.handleViewportChange);
 		this.resizeObserver.observe(step.targetEl);
 		this.resizeObserver.observe(popoverEl);
+		const keymapScope = new Scope(this.app.scope);
+		keymapScope.register([], "Escape", () => {
+			this.onClose?.();
+			return false;
+		});
+		this.app.keymap.pushScope(keymapScope);
+		this.keymapScope = keymapScope;
 		this.scheduleLayout(true);
 	}
 
@@ -146,6 +180,10 @@ export class SettingsSpotlight {
 		this.onAction?.();
 	};
 
+	private readonly handleSecondaryAction = (): void => {
+		this.onSecondaryAction?.();
+	};
+
 	private readonly handleClose = (): void => {
 		this.onClose?.();
 	};
@@ -155,17 +193,16 @@ export class SettingsSpotlight {
 	};
 
 	private readonly handleKeydown = (event: KeyboardEvent): void => {
-		if (event.key === "Escape") {
-			event.preventDefault();
-			event.stopImmediatePropagation();
-			this.onClose?.();
-			return;
-		}
 		if (event.key !== "Tab") {
 			return;
 		}
 
-		const focusable = [this.focusEl, this.actionButtonEl, this.closeButtonEl]
+		const focusable = [
+			this.focusEl,
+			this.secondaryActionButtonEl,
+			this.actionButtonEl,
+			this.closeButtonEl
+		]
 			.filter((element): element is HTMLElement => Boolean(
 				element && element.isConnected && !this.isDisabled(element)
 			));
@@ -313,6 +350,10 @@ export class SettingsSpotlight {
 		this.moveFocusOnNextLayout = false;
 		this.resizeObserver?.disconnect();
 		this.resizeObserver = null;
+		if (this.keymapScope) {
+			this.app.keymap.popScope(this.keymapScope);
+			this.keymapScope = null;
+		}
 
 		this.targetEl?.removeClass("is-echo-notes-spotlight-target");
 		if (this.describedElement?.isConnected) {
@@ -332,6 +373,7 @@ export class SettingsSpotlight {
 		this.layerEl = null;
 		this.popoverEl = null;
 		this.actionButtonEl = null;
+		this.secondaryActionButtonEl = null;
 		this.closeButtonEl = null;
 		this.targetEl = null;
 		this.focusEl = null;
@@ -340,6 +382,7 @@ export class SettingsSpotlight {
 		this.describedElement = null;
 		this.previousDescribedBy = null;
 		this.onAction = null;
+		this.onSecondaryAction = null;
 		this.onClose = null;
 	}
 }

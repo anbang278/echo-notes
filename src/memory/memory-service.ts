@@ -99,6 +99,7 @@ import {
 	renderMemoryRelationStore,
 	resolveMemoryRelations,
 	revokeMemoryRelation as revokeMemoryRelationInStore,
+	stripMemoryRelationEvidence,
 	type MemoryRelationAnnotation,
 	type MemoryRelationEndpoint,
 	type MemoryRelationRecord,
@@ -945,7 +946,20 @@ export class MemoryService {
 		if (!(existing instanceof TFile)) {
 			throw new Error(`Echo Memory 关系存储路径已被文件夹占用：${path}`);
 		}
-		return this.parseMemoryRelationStore(await this.app.vault.read(existing), path);
+		const store = this.parseMemoryRelationStore(await this.app.vault.read(existing), path);
+		if (stripMemoryRelationEvidence(store) === store) {
+			return store;
+		}
+
+		// 旧版关系文件可能把原文证据重复写入每个端点和历史事件。以 process
+		// 的当前内容为准清理，避免读取期间的其他关系更新被旧快照覆盖。
+		let sanitizedStore = stripMemoryRelationEvidence(store);
+		await this.app.vault.process(existing, (content) => {
+			const currentStore = this.parseMemoryRelationStore(content, path);
+			sanitizedStore = stripMemoryRelationEvidence(currentStore);
+			return sanitizedStore === currentStore ? content : renderMemoryRelationStore(sanitizedStore);
+		});
+		return sanitizedStore;
 	}
 
 	private async ensureMemoryRelationStore(path: string): Promise<TFile> {

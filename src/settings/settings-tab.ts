@@ -27,7 +27,6 @@ import { SettingsSpotlight, type SettingsSpotlightStep } from "./settings-spotli
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
-	AGENTPLAN_ANALYSIS_BASE_URL,
 	AGENTPLAN_ANALYSIS_MODELS,
 	ANALYSIS_TEMPLATE_CATEGORIES,
 	COPY_LANGUAGE_LABELS,
@@ -72,18 +71,20 @@ type MemorySettingsSection = "workspace" | "model" | "processing";
 export type EchoNotesSettingsDestination =
 	| "transcription-service"
 	| "analysis-model"
+	| "memory-model"
 	| "transcription-recording";
 
 export type EchoNotesSettingsGuide = "provider-api-key";
 
 export interface EchoNotesSettingsNavigationOptions {
 	guide?: EchoNotesSettingsGuide;
+	onGuideFinished?: () => void;
 }
 
 type SettingsGuideStep = "analysis-enable" | "provider" | "api-key";
 
 type ActiveSettingsGuide = {
-	destination: Extract<EchoNotesSettingsDestination, "transcription-service" | "analysis-model">;
+	destination: Extract<EchoNotesSettingsDestination, "transcription-service" | "analysis-model" | "memory-model">;
 	step: SettingsGuideStep;
 };
 
@@ -136,13 +137,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private activeMemorySettingsSection: MemorySettingsSection = "workspace";
 	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
 	private settingsRenderSequence = 0;
-	private readonly settingsSpotlight = new SettingsSpotlight();
+	private readonly settingsSpotlight: SettingsSpotlight;
 	private activeSettingsGuide: ActiveSettingsGuide | null = null;
 	private settingsGuideSyncTimer: number | null = null;
+	private settingsGuideFinished: (() => void) | null = null;
+	private deferredSaveTimers = new Map<string, number>();
+	private customTranscriptionModelProvider: OfflineTranscriptionProviderId | null = null;
 
 	constructor(app: App, plugin: EchoNotesPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+		this.settingsSpotlight = new SettingsSpotlight(app);
 	}
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
@@ -150,7 +155,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			{
 				name: "Echo Notes settings",
 				searchable: false,
-				render: (setting) => {
+					render: (setting) => {
 					const settingEl = setting.settingEl;
 					settingEl.empty();
 					settingEl.addClass("echo-notes-settings-definition-row");
@@ -160,7 +165,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					this.renderSettings(hostEl);
 					return () => {
 						if (this.settingsContainerEl === hostEl) {
-							this.closeSettingsGuide();
+							this.closeSettingsGuide(true);
 							this.settingsContainerEl = null;
 						}
 						hostEl.remove();
@@ -178,7 +183,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
-		this.closeSettingsGuide();
+		this.closeSettingsGuide(true);
+		this.clearDeferredSaveTimers();
+		this.customTranscriptionModelProvider = null;
 		super.hide();
 	}
 
@@ -195,6 +202,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				this.activeSettingsStage = "analysis";
 				this.activeAnalysisSettingsSection = "model";
 				break;
+			case "memory-model":
+				this.activeSettingsStage = "memory";
+				this.activeMemorySettingsSection = "model";
+				break;
 			case "transcription-recording":
 				this.activeSettingsStage = "transcription";
 				this.activeTranscriptionSettingsSection = "recording";
@@ -207,6 +218,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					? "analysis-enable"
 					: "provider"
 			};
+			this.settingsGuideFinished = options.onGuideFinished ?? null;
 		} else {
 			this.closeSettingsGuide();
 		}
@@ -215,13 +227,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 	}
 
-	closeSettingsGuide(): void {
+	closeSettingsGuide(notifyFinished = false): void {
 		if (this.settingsGuideSyncTimer !== null) {
 			window.clearTimeout(this.settingsGuideSyncTimer);
 			this.settingsGuideSyncTimer = null;
 		}
 		this.activeSettingsGuide = null;
 		this.settingsSpotlight.close();
+		const onFinished = this.settingsGuideFinished;
+		this.settingsGuideFinished = null;
+		if (notifyFinished) {
+			onFinished?.();
+		}
 	}
 
 	private renderSettings(containerEl: HTMLElement): void {
@@ -545,9 +562,21 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			panelEl.setAttribute("aria-labelledby", tabId);
 			panelEls.set(section.id, panelEl);
 			renderSection(section.id, panelEl);
+			this.markUniformSettingsFields(panelEl);
 		}
 
 		activate(activeSection, false);
+	}
+
+	private markUniformSettingsFields(containerEl: HTMLElement): void {
+		containerEl.querySelectorAll<HTMLInputElement | HTMLSelectElement>(
+			'.setting-item-control > input[type="text"], ' +
+			'.setting-item-control > input[type="password"], ' +
+			'.setting-item-control > input[type="number"], ' +
+			'.setting-item-control > input[type="url"], ' +
+			'.setting-item-control > input[type="search"], ' +
+			'.setting-item-control > select'
+		).forEach((fieldEl) => fieldEl.addClass("echo-notes-settings-field"));
 	}
 
 	private renderTranscriptionOutputSettings(containerEl: HTMLElement): void {
@@ -673,7 +702,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderTranscriptionSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("转写模式")
-			.setDesc("实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 vault 中已有的音频文件。")
+			.setDesc(
+				this.isGettingStartedOfflineTranscriptionGuide()
+					? "新人体验固定检查离线转写配置，不会自动更改你当前选择的转写模式。"
+					: "实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 vault 中已有的音频文件。"
+			)
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOption("realtime", "实时转写")
@@ -717,13 +750,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderTranscriptionServiceSettings(containerEl: HTMLElement): void {
 		const config = this.getSelectedTranscriptionConfig();
-		const isRealtime = this.plugin.settings.transcriptionMode === "realtime";
+		const isRealtime = this.getSelectedTranscriptionMode() === "realtime";
 		const isMosi = !isRealtime && config.provider === "mosi";
 		const isAgentPlan = config.provider === "volcengine-agentplan";
+		if (config.provider !== "siliconflow") {
+			this.customTranscriptionModelProvider = null;
+		}
 		const providerCapability = getTranscriptionProviderCapability(
 			config.provider,
-			this.plugin.settings.transcriptionMode
+			this.getSelectedTranscriptionMode()
 		);
+		this.renderBasicHeading(containerEl, "连接配置");
 
 		const providerSetting = new Setting(containerEl)
 			.setName("Provider")
@@ -749,6 +786,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						if (!isOfflineTranscriptionProviderId(value)) {
 							return;
 						}
+						this.customTranscriptionModelProvider = null;
 						this.plugin.settings.offlineTranscription.provider = value;
 						this.applyOfflineProviderDefaults(value);
 						await this.plugin.saveSettings();
@@ -757,31 +795,27 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			});
 		providerSetting.settingEl.dataset.echoNotesGuideTarget = "transcription-provider";
 
-		this.renderProviderSignup(containerEl);
-		this.renderProviderCapability(containerEl);
-
 		const apiKey = this.plugin.getApiKey(config.provider);
+		const apiKeyDescription = createFragment();
+		apiKeyDescription.appendText("按 provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+		this.appendProviderSignupLink(apiKeyDescription, config.provider);
 		const apiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlan ? "AgentPlan 专属 API key" : "API key")
-			.setDesc("密钥按 provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+			.setName(isAgentPlan ? "AgentPlan 专属 API key" : "API 密钥（API key）")
+			.setDesc(apiKeyDescription);
 		apiKeySetting.settingEl.dataset.echoNotesGuideTarget = "transcription-api-key";
 		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
 		apiKeySetting.addText((text) => {
 			text.inputEl.type = "password";
 			text
 				.setPlaceholder("sk-...")
-				.setValue(apiKey)
-				.onChange(async (value) => {
-					try {
-						const nextApiKey = value.trim();
-						await this.plugin.saveApiKey(config.provider, nextApiKey);
-						this.setSecretSaveStatus(apiKeyStatusEl, nextApiKey ? "saved" : "cleared");
-					} catch (error) {
-						this.setSecretSaveStatus(apiKeyStatusEl, "failed");
-						new Notice(`API key 保存失败：${getSanitizedErrorMessage(error)}`);
-					}
-				});
+				.setValue(apiKey);
+			this.bindDeferredTextSave(apiKeySetting, `transcription-api-key:${config.provider}`, text.inputEl, async (value) => {
+				await this.plugin.saveApiKey(config.provider, value);
+				this.setSecretSaveStatus(apiKeyStatusEl, value ? "saved" : "cleared");
+			}, (value) => value && value.length < 8 ? "API Key 少于 8 个字符，请确认是否完整。" : undefined, apiKeyStatusEl);
+			return text;
 		});
+		apiKeySetting.controlEl.append(apiKeyStatusEl);
 
 		if (isMosi) {
 			new Setting(containerEl)
@@ -802,27 +836,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				);
 		}
 
-		new Setting(containerEl)
-			.setName("Base URL")
-			.setDesc(this.getBaseUrlDescription())
-			.addText((text) => {
-				text
-					.setPlaceholder(this.getProviderDefaults().baseUrl)
-					.setValue(config.baseUrl)
-					.setDisabled(isRealtime || isMosi || isAgentPlan);
-				if (!isRealtime && !isMosi && !isAgentPlan) {
-					text.onChange(async (value) => {
-						this.plugin.settings.offlineTranscription.baseUrl = value.trim();
-						await this.plugin.saveSettings();
-					});
-				}
-				return text;
-			});
-
 		if (!isRealtime && config.provider === "siliconflow") {
 			const isOfficialModel = SILICONFLOW_TRANSCRIPTION_MODELS.some((model) => model === config.model);
+			const isChoosingCustomModel = !isOfficialModel || this.customTranscriptionModelProvider === config.provider;
 			new Setting(containerEl)
-				.setName("Model")
+				.setName("转写模型")
 				.setDesc("可选择硅基流动官方转写模型，或在下方填写未来新增的自定义模型 ID。")
 				.addDropdown((dropdown) => {
 					for (const model of SILICONFLOW_TRANSCRIPTION_MODELS) {
@@ -830,37 +848,39 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					}
 					dropdown.addOption("__custom__", "自定义模型");
 					return dropdown
-						.setValue(isOfficialModel ? config.model : "__custom__")
+						.setValue(isChoosingCustomModel ? "__custom__" : config.model)
 						.onChange(async (value) => {
 							if (value === "__custom__") {
+								this.customTranscriptionModelProvider = "siliconflow";
 								this.refreshSettings();
 								return;
 							}
+							this.customTranscriptionModelProvider = null;
 							this.plugin.settings.offlineTranscription.model = value;
 							await this.plugin.saveSettings();
 							this.refreshSettings();
 						});
 				});
 
-			new Setting(containerEl)
-				.setName("自定义转写模型")
-				.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的 provider API key。")
-				.addText((text) =>
+			if (isChoosingCustomModel) {
+				const customModelSetting = new Setting(containerEl)
+					.setName("自定义转写模型")
+					.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的 provider API key。");
+				customModelSetting.addText((text) => {
 					text
 						.setPlaceholder("例如未来新增的 organization/model-ID")
-						.setValue(isOfficialModel ? "" : config.model)
-						.onChange(async (value) => {
-							const nextModel = value.trim();
-							if (!nextModel) {
-								return;
-							}
-							this.plugin.settings.offlineTranscription.model = nextModel;
-							await this.plugin.saveSettings();
-						})
-				);
+						.setValue(isOfficialModel ? "" : config.model);
+					this.bindDeferredTextSave(customModelSetting, "transcription-custom-model", text.inputEl, async (value) => {
+						this.customTranscriptionModelProvider = "siliconflow";
+						this.plugin.settings.offlineTranscription.model = value;
+						await this.plugin.saveSettings();
+					}, (value) => value ? undefined : "模型 ID 不能为空。");
+					return text;
+				});
+			}
 		} else {
-			new Setting(containerEl)
-				.setName("Model")
+			const modelSetting = new Setting(containerEl)
+				.setName("转写模型")
 				.setDesc(
 					isRealtime
 						? "AgentPlan 实时转写固定使用 doubao-seed-asr-2.0。"
@@ -869,23 +889,83 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 								? "已开启说话人分离，固定使用 moss-transcribe-diarize。"
 								: "已关闭说话人分离，固定使用普通转写模型 moss-transcribe。"
 							: "离线转写模型名称。"
-				)
-				.addText((text) => {
-					text
-						.setPlaceholder(this.getProviderDefaults().model)
-						.setValue(config.model)
-						.setDisabled(isRealtime || isMosi || isAgentPlan);
-					if (!isRealtime && !isMosi && !isAgentPlan) {
-						text.onChange(async (value) => {
-							this.plugin.settings.offlineTranscription.model = value.trim();
+				);
+			modelSetting.addText((text) => {
+				text
+					.setPlaceholder(this.getProviderDefaults().model)
+					.setValue(config.model)
+					.setDisabled(isRealtime || isMosi || isAgentPlan);
+				if (!isRealtime && !isMosi && !isAgentPlan) {
+					this.bindDeferredTextSave(
+						modelSetting,
+						"transcription-model",
+						text.inputEl,
+						async (value) => {
+							this.plugin.settings.offlineTranscription.model = value;
 							await this.plugin.saveSettings();
-						});
-					}
-					return text;
-				});
+						},
+						(value) => value ? undefined : "模型 ID 不能为空。"
+					);
+				}
+				return text;
+			});
 		}
 
-		new Setting(containerEl)
+		if (
+			providerCapability.supportsSpeakerDiarization &&
+			(!isMosi || this.plugin.settings.mosiSpeakerDiarizationEnabled)
+		) {
+			new Setting(containerEl)
+				.setName("说话人标签样式")
+				.setDesc(
+					isMosi
+						? "MOSI 服务端说话人编号会按首次出现顺序显示；长音频的编号仅在当前分段内有效。"
+						: "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
+				)
+				.addDropdown((dropdown) =>
+						dropdown
+							.addOption("speaker", "仅说话人")
+							.addOption("speaker-with-time", "说话人＋时间")
+							.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle)
+							.onChange(async (value) => {
+								this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
+								await this.plugin.saveSettings();
+							})
+					);
+		}
+
+		this.renderProviderDiagnostics(containerEl);
+		this.renderProviderCapability(containerEl);
+
+		const advancedEl = this.renderAdvancedSection(
+			containerEl,
+			"高级配置（Base URL、语言与自检）",
+			() => undefined
+		);
+		const baseUrlSetting = new Setting(advancedEl)
+			.setName("Base URL")
+			.setDesc(this.getBaseUrlDescription());
+		baseUrlSetting.addText((text) => {
+			text
+				.setPlaceholder(this.getProviderDefaults().baseUrl)
+				.setValue(config.baseUrl)
+				.setDisabled(isRealtime || isMosi || isAgentPlan);
+			if (!isRealtime && !isMosi && !isAgentPlan) {
+				this.bindDeferredTextSave(
+					baseUrlSetting,
+					"transcription-base-url",
+					text.inputEl,
+					async (value) => {
+						this.plugin.settings.offlineTranscription.baseUrl = value;
+						await this.plugin.saveSettings();
+					},
+					(value) => validateBaseUrl(value)
+				);
+			}
+			return text;
+		});
+
+		new Setting(advancedEl)
 			.setName("默认转写语言")
 			.setDesc(
 				isAgentPlan
@@ -912,7 +992,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			});
 
 		if (!isRealtime && !isAgentPlan) {
-			new Setting(containerEl)
+			new Setting(advancedEl)
 				.setName("自定义语言代码")
 				.setDesc("填写当前离线 provider 支持的语言代码；清空不会改变当前语言。")
 				.addText((text) => {
@@ -937,36 +1017,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				});
 		}
 
-		if (
-			providerCapability.supportsSpeakerDiarization &&
-			(!isMosi || this.plugin.settings.mosiSpeakerDiarizationEnabled)
-		) {
-			new Setting(containerEl)
-				.setName("说话人标签样式")
-				.setDesc(
-					isMosi
-						? "MOSI 服务端说话人编号会按首次出现顺序显示；长音频的编号仅在当前分段内有效。"
-						: "AgentPlan 始终启用说话人聚类；单人录音也会显示“说话人 1”。"
-				)
-				.addDropdown((dropdown) =>
-					dropdown
-						.addOption("speaker", "仅说话人")
-						.addOption("speaker-with-time", "说话人＋时间")
-						.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle)
-						.onChange(async (value) => {
-							this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
-							await this.plugin.saveSettings();
-						})
-				);
-		}
-
-		this.renderProviderDiagnostics(containerEl);
 	}
 
 	private renderTranscriptionRecordingSettings(containerEl: HTMLElement): void {
 		if (this.plugin.settings.transcriptionMode === "realtime") {
 			const devices = this.plugin.getCachedAudioInputDevices();
-			new Setting(containerEl)
+			const microphoneSetting = new Setting(containerEl)
 				.setName("麦克风")
 				.setDesc("默认使用系统输入设备。刷新设备时会申请麦克风权限；已选设备失效时自动回退系统默认。")
 				.addDropdown((dropdown) => {
@@ -991,6 +1047,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						}
 					})
 				);
+			microphoneSetting.controlEl.addClass("echo-notes-settings-control-composite");
 		} else {
 			this.renderOfficialRecorderSettings(containerEl);
 		}
@@ -1024,6 +1081,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			"Obsidian 核心插件录音机开启快捷键",
 			"直接修改 Obsidian 核心命令 audio-recorder:start 的快捷键。Echo Notes 不预设快捷键，避免覆盖已有操作。",
 			"例如 Ctrl+L",
+			"audio-recorder:start",
 			this.plugin.getOfficialAudioRecorderStartHotkey(),
 			(hotkey) => this.plugin.setOfficialAudioRecorderStartHotkey(hotkey)
 		);
@@ -1033,6 +1091,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			"Obsidian 核心插件录音机关闭快捷键",
 			"直接修改 Obsidian 核心命令 audio-recorder:stop 的快捷键。Echo Notes 不预设快捷键，避免覆盖已有操作。",
 			"例如 Ctrl+S",
+			"audio-recorder:stop",
 			this.plugin.getOfficialAudioRecorderStopHotkey(),
 			(hotkey) => this.plugin.setOfficialAudioRecorderStopHotkey(hotkey)
 		);
@@ -1040,8 +1099,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderHotkeySetting(
 			containerEl,
 			"转写当前笔记全部音频快捷键",
-			"触发 Echo Notes: Transcribe all audio files in current note。默认留空，请选择不与撤销等系统操作冲突的组合。",
+			"触发“转写当前笔记全部音频”。默认留空，请选择不与撤销等系统操作冲突的组合。",
 			"例如 Mod+Shift+T",
+			`${this.plugin.manifest.id}:transcribe-all-audio-files-in-current-note`,
 			this.plugin.settings.transcribeAllAudioHotkey,
 			(hotkey) => this.plugin.setTranscribeAllAudioHotkey(hotkey)
 		);
@@ -1052,28 +1112,54 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		name: string,
 		description: string,
 		placeholder: string,
+		commandId: string,
 		currentHotkey: EchoNotesHotkeySetting,
 		applyHotkey: (hotkey: EchoNotesHotkeySetting) => Promise<boolean | void>
 	): void {
 		let draftValue = formatHotkey(currentHotkey);
-		new Setting(containerEl)
+		let setSaveDisabled = (_disabled: boolean): void => undefined;
+		const hotkeySetting = new Setting(containerEl)
 			.setName(name)
-			.setDesc(`${description} 支持 Ctrl+L、Control + L、Cmd+Shift+P 等写法；无效输入不会保存。`)
+			.setDesc(`${description} 支持 Ctrl+L、Control + L、Cmd+Shift+P 等写法；无效输入不会保存。`);
+		const validationEl = hotkeySetting.descEl.createDiv({
+			cls: "echo-notes-hotkey-validation",
+			attr: { role: "status", "aria-live": "polite" }
+		});
+		const validateDraft = (): EchoNotesHotkeySetting | undefined => {
+			const hotkey = parseHotkeyInput(draftValue);
+			let error = "";
+			if (hotkey === undefined) {
+				error = `快捷键格式无效：${draftValue}`;
+			} else {
+				const conflicts = this.plugin.getHotkeyConflicts(commandId, hotkey);
+				if (conflicts.length > 0) {
+					error = `快捷键冲突：已被 ${conflicts.join("、")} 使用，请更换组合键。`;
+				}
+			}
+			validationEl.setText(error);
+			validationEl.toggleClass("is-error", Boolean(error));
+			setSaveDisabled(Boolean(error));
+			return error ? undefined : hotkey;
+		};
+		hotkeySetting
 			.addText((text) =>
 				text
 					.setPlaceholder(placeholder)
 					.setValue(draftValue)
 					.onChange((value) => {
 						draftValue = value;
+						validateDraft();
 					})
 			)
-			.addButton((button) =>
+			.addButton((button) => {
+				setSaveDisabled = (disabled) => {
+					button.setDisabled(disabled);
+				};
 				button
 					.setButtonText("保存")
 					.onClick(async () => {
-						const hotkey = parseHotkeyInput(draftValue);
+						const hotkey = validateDraft();
 						if (hotkey === undefined) {
-							new Notice(`快捷键格式无效：${draftValue}`);
 							return;
 						}
 
@@ -1084,8 +1170,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 						this.plugin.refreshRegisteredCommands();
 						this.refreshSettings();
-					})
-			);
+					});
+			});
+		validateDraft();
+		hotkeySetting.controlEl.addClass("echo-notes-settings-control-composite");
 	}
 
 	private renderAnalysisSettings(containerEl: HTMLElement, renderId: number): void {
@@ -1134,6 +1222,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderAnalysisModelSettings(containerEl: HTMLElement): void {
+		this.renderBasicHeading(containerEl, "模型配置");
 		const analysisProviderSetting = new Setting(containerEl)
 			.setName("分析 provider")
 			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
@@ -1154,60 +1243,33 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		analysisProviderSetting.settingEl.dataset.echoNotesGuideTarget = "analysis-provider";
 
 		const isAgentPlanAnalysis = this.plugin.settings.analysisProvider === "volcengine-agentplan";
-		if (isAgentPlanAnalysis) {
-			this.renderAgentPlanAnalysisSignup(containerEl);
-		}
-
+		const analysisApiKeyDescription = createFragment();
+		analysisApiKeyDescription.appendText(
+			isAgentPlanAnalysis
+				? "必须使用 AgentPlan 控制台创建的专属 API key，并与其他用途的密钥隔离保存。"
+				: "用于调用当前分析 provider，按 provider 隔离保存到 Obsidian SecretStorage。"
+		);
+		this.appendProviderSignupLink(analysisApiKeyDescription, this.plugin.settings.analysisProvider);
 		const analysisApiKeySetting = new Setting(containerEl)
 			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API key" : "分析 API key")
-			.setDesc(
-				isAgentPlanAnalysis
-					? "必须使用 AgentPlan 控制台创建的专属 API key；与实时转写密钥按用途隔离保存在 Obsidian SecretStorage。"
-					: "用于调用当前分析 provider 的 API key，会按 provider 隔离保存到 Obsidian SecretStorage。"
-			);
+			.setDesc(analysisApiKeyDescription);
 		analysisApiKeySetting.settingEl.dataset.echoNotesGuideTarget = "analysis-api-key";
 		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
 			analysisApiKeySetting,
 			this.plugin.getAnalysisApiKey()
 		);
 		analysisApiKeySetting.addText((text) => {
-				text.inputEl.type = "password";
-				text
-					.setPlaceholder("sk-...")
-					.setValue(this.plugin.getAnalysisApiKey())
-					.onChange(async (value) => {
-						try {
-							const apiKey = value.trim();
-							await this.plugin.saveAnalysisApiKey(apiKey);
-							this.setSecretSaveStatus(analysisApiKeyStatusEl, apiKey ? "saved" : "cleared");
-						} catch (error) {
-							this.setSecretSaveStatus(analysisApiKeyStatusEl, "failed");
-							new Notice(`分析 API key 保存失败：${getSanitizedErrorMessage(error)}`);
-						}
-					});
-			});
-
-		new Setting(containerEl)
-			.setName("分析 base URL")
-			.setDesc(
-				isAgentPlanAnalysis
-					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
-					: "OpenAI-compatible chat completions 基础地址。请确认所选 provider 支持 {base URL}/chat/completions。"
-			)
-			.addText((text) => {
-				text
-					.setPlaceholder(this.getAnalysisProviderDefaults().analysisBaseUrl)
-					.setValue(this.plugin.settings.analysisBaseUrl)
-					.setDisabled(isAgentPlanAnalysis);
-				if (!isAgentPlanAnalysis) {
-					text.onChange(async (value) => {
-						this.plugin.settings.analysisBaseUrl = value.trim();
-						await this.plugin.saveSettings();
-					});
-				}
-				return text;
-			});
-
+			text.inputEl.type = "password";
+			text
+				.setPlaceholder("sk-...")
+				.setValue(this.plugin.getAnalysisApiKey());
+			this.bindDeferredTextSave(analysisApiKeySetting, "analysis-api-key", text.inputEl, async (value) => {
+				await this.plugin.saveAnalysisApiKey(value);
+				this.setSecretSaveStatus(analysisApiKeyStatusEl, value ? "saved" : "cleared");
+			}, (value) => value && value.length < 8 ? "API Key 少于 8 个字符，请确认是否完整。" : undefined, analysisApiKeyStatusEl);
+			return text;
+		});
+		analysisApiKeySetting.controlEl.append(analysisApiKeyStatusEl);
 		const analysisModelSetting = new Setting(containerEl)
 			.setName("分析模型")
 			.setDesc(
@@ -1234,18 +1296,42 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					});
 			});
 		} else {
-			analysisModelSetting.addText((text) =>
+			analysisModelSetting.addText((text) => {
 				text
 					.setPlaceholder(this.getAnalysisProviderDefaults().analysisModel)
 					.setValue(this.plugin.settings.analysisModel)
-					.onChange(async (value) => {
-						this.plugin.settings.analysisModel = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
+					.onChange(() => undefined);
+				this.bindDeferredTextSave(analysisModelSetting, "analysis-model", text.inputEl, async (value) => {
+					this.plugin.settings.analysisModel = value;
+					await this.plugin.saveSettings();
+				}, (value) => value ? undefined : "模型不能为空。");
+				return text;
+			});
 		}
 
-		new Setting(containerEl)
+		const advancedEl = this.renderAdvancedSection(containerEl, "高级配置（Base URL 与自检）", () => undefined);
+		const baseUrlSetting = new Setting(advancedEl)
+			.setName("分析 base URL")
+			.setDesc(
+				isAgentPlanAnalysis
+					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
+					: "OpenAI-compatible chat completions 基础地址。请确认所选 provider 支持 {base URL}/chat/completions。"
+			);
+		baseUrlSetting.addText((text) => {
+			text
+				.setPlaceholder(this.getAnalysisProviderDefaults().analysisBaseUrl)
+				.setValue(this.plugin.settings.analysisBaseUrl)
+				.setDisabled(isAgentPlanAnalysis);
+			if (!isAgentPlanAnalysis) {
+				this.bindDeferredTextSave(baseUrlSetting, "analysis-base-url", text.inputEl, async (value) => {
+					this.plugin.settings.analysisBaseUrl = value;
+					await this.plugin.saveSettings();
+				}, (value) => validateBaseUrl(value));
+			}
+			return text;
+		});
+
+		new Setting(advancedEl)
 			.setName("分析配置自检")
 			.setDesc("本地检查分析 API key、base URL、HTTPS 和模型；不会发送转写稿，也不会调用 provider。")
 			.addButton((button) =>
@@ -1258,6 +1344,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderAnalysisProcessingSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
+			.setName("AI 分析前脱敏 transcript")
+			.setDesc("仅在发送给分析模型前遮盖敏感信息，vault 中的原始 transcript 不会被改写。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.redactTranscriptBeforeAnalysis)
+					.onChange(async (value) => {
+					this.plugin.settings.redactTranscriptBeforeAnalysis = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
 			.setName("长文本分块分析")
 			.setDesc("超过分块字符数时，先逐块提取，再汇总为一份去重后的最终纪要；会产生多次模型调用。")
 			.addToggle((toggle) =>
@@ -1269,35 +1367,27 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			);
 
 		if (this.plugin.settings.analysisLongTextEnabled) {
-			new Setting(containerEl)
+			const advancedEl = this.renderAdvancedSection(containerEl, "高级配置（分块参数）", () => undefined);
+			const chunkSetting = new Setting(advancedEl)
 				.setName("分析分块字符数")
-				.setDesc("范围 4,000～100,000。默认 24,000；值越小兼容性越高，但调用次数和成本越高。")
-				.addText((text) =>
-					text
-						.setPlaceholder("24000")
-						.setValue(String(this.plugin.settings.analysisChunkCharacters))
-						.onChange(async (value) => {
-							const parsed = Number(value);
-							if (!Number.isFinite(parsed)) {
-								return;
-							}
-							this.plugin.settings.analysisChunkCharacters = Math.min(100000, Math.max(4000, Math.round(parsed)));
-							await this.plugin.saveSettings();
-						})
-				);
-		}
-
-		new Setting(containerEl)
-			.setName("AI 分析前脱敏 transcript")
-			.setDesc("开启后，仅在发送给分析模型前遮盖邮箱、电话、身份证号、金额、地址以及带标签的人名/公司名字段；vault 中的原始 transcript 不会被改写。")
-			.addToggle((toggle) =>
-				toggle
-					.setValue(this.plugin.settings.redactTranscriptBeforeAnalysis)
-					.onChange(async (value) => {
-						this.plugin.settings.redactTranscriptBeforeAnalysis = value;
+				.setDesc("范围 4,000～100,000。默认 24,000；值越小兼容性越高，但调用次数和成本越高。");
+			chunkSetting.addText((text) => {
+				text
+					.setPlaceholder("24000")
+					.setValue(String(this.plugin.settings.analysisChunkCharacters))
+					.onChange(() => undefined);
+					this.bindDeferredTextSave(chunkSetting, "analysis-chunk-characters", text.inputEl, async (value) => {
+						const parsed = Number(value);
+						this.plugin.settings.analysisChunkCharacters = Math.min(100000, Math.max(4000, Math.round(parsed)));
 						await this.plugin.saveSettings();
-					})
-			);
+					}, (value) => {
+						const parsed = Number(value);
+						return Number.isInteger(parsed) && parsed >= 4000 && parsed <= 100000 ? undefined : "请输入 4,000～100,000 的整数。";
+					});
+				return text;
+			});
+			return;
+		}
 	}
 
 	private renderMemorySettings(containerEl: HTMLElement, renderId: number): void {
@@ -1380,7 +1470,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderMemoryModelSettings(containerEl: HTMLElement): void {
-		new Setting(containerEl)
+		this.renderBasicHeading(containerEl, "模型配置");
+		const providerSetting = new Setting(containerEl)
 			.setName("记忆 provider")
 			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的 provider、API key、base URL 或模型。")
 			.addDropdown((dropdown) => Object.entries(ANALYSIS_PROVIDER_LABELS)
@@ -1395,49 +1486,33 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					this.refreshSettings();
 				}));
+		providerSetting.settingEl.dataset.echoNotesGuideTarget = "memory-provider";
 
+		const apiKeyDescription = createFragment();
+		apiKeyDescription.appendText("按 provider 隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
+		this.appendProviderSignupLink(apiKeyDescription, this.plugin.settings.memoryProvider);
 		const apiKeySetting = new Setting(containerEl)
 			.setName("记忆 API key")
-			.setDesc("按 provider 隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
+			.setDesc(apiKeyDescription);
+		apiKeySetting.settingEl.dataset.echoNotesGuideTarget = "memory-api-key";
 		const statusEl = this.createSecretSaveStatus(apiKeySetting, this.plugin.getMemoryApiKey());
 		apiKeySetting.addText((text) => {
 			text.inputEl.type = "password";
-			return text
+			text
 				.setPlaceholder("sk-...")
-				.setValue(this.plugin.getMemoryApiKey())
-				.onChange(async (value) => {
-					try {
-						const apiKey = value.trim();
-						await this.plugin.saveMemoryApiKey(apiKey);
-						this.setSecretSaveStatus(statusEl, apiKey ? "saved" : "cleared");
-					} catch (error) {
-						this.setSecretSaveStatus(statusEl, "failed");
-						new Notice(`记忆 API key 保存失败：${getSanitizedErrorMessage(error)}`);
-					}
-				});
+				.setValue(this.plugin.getMemoryApiKey());
+			this.bindDeferredTextSave(apiKeySetting, "memory-api-key", text.inputEl, async (value) => {
+				await this.plugin.saveMemoryApiKey(value);
+				this.setSecretSaveStatus(statusEl, value ? "saved" : "cleared");
+			}, (value) => value && value.length < 8 ? "API Key 少于 8 个字符，请确认是否完整。" : undefined, statusEl);
+			return text;
 		});
+		apiKeySetting.controlEl.append(statusEl);
 
 		const isAgentPlan = this.plugin.settings.memoryProvider === "volcengine-agentplan";
-		new Setting(containerEl)
-			.setName("记忆 base URL")
-			.setDesc("OpenAI-compatible chat completions 基础地址。")
-			.addText((text) => {
-				text
-					.setPlaceholder(this.getMemoryProviderDefaults().analysisBaseUrl)
-					.setValue(this.plugin.settings.memoryBaseUrl)
-					.setDisabled(isAgentPlan);
-				if (!isAgentPlan) {
-					text.onChange(async (value) => {
-						this.plugin.settings.memoryBaseUrl = value.trim();
-						await this.plugin.saveSettings();
-					});
-				}
-				return text;
-			});
-
 		const modelSetting = new Setting(containerEl)
 			.setName("记忆模型")
-			.setDesc("模型必须可靠输出 JSON，并能为每条断言保留原文证据。");
+			.setDesc("模型需要可靠输出 JSON，并为每条断言保留原文证据。");
 		if (isAgentPlan) {
 			modelSetting.addDropdown((dropdown) => {
 				for (const option of AGENTPLAN_ANALYSIS_MODELS) {
@@ -1449,16 +1524,38 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				});
 			});
 		} else {
-			modelSetting.addText((text) => text
-				.setPlaceholder(this.getMemoryProviderDefaults().analysisModel)
-				.setValue(this.plugin.settings.memoryModel)
-				.onChange(async (value) => {
-					this.plugin.settings.memoryModel = value.trim();
+			modelSetting.addText((text) => {
+				text
+					.setPlaceholder(this.getMemoryProviderDefaults().analysisModel)
+					.setValue(this.plugin.settings.memoryModel)
+					.onChange(() => undefined);
+				this.bindDeferredTextSave(modelSetting, "memory-model", text.inputEl, async (value) => {
+					this.plugin.settings.memoryModel = value;
 					await this.plugin.saveSettings();
-				}));
+				}, (value) => value ? undefined : "模型不能为空。");
+				return text;
+			});
 		}
 
-		new Setting(containerEl)
+		const advancedEl = this.renderAdvancedSection(containerEl, "高级配置（Base URL 与自检）", () => undefined);
+		const baseUrlSetting = new Setting(advancedEl)
+			.setName("记忆 base URL")
+			.setDesc("OpenAI-compatible chat completions 基础地址。");
+		baseUrlSetting.addText((text) => {
+				text
+					.setPlaceholder(this.getMemoryProviderDefaults().analysisBaseUrl)
+					.setValue(this.plugin.settings.memoryBaseUrl)
+					.setDisabled(isAgentPlan);
+				if (!isAgentPlan) {
+					this.bindDeferredTextSave(baseUrlSetting, "memory-base-url", text.inputEl, async (value) => {
+						this.plugin.settings.memoryBaseUrl = value;
+						await this.plugin.saveSettings();
+					}, (value) => validateBaseUrl(value));
+				}
+				return text;
+		});
+
+		new Setting(advancedEl)
 			.setName("记忆配置自检")
 			.setDesc("本地检查独立 API key、base URL、HTTPS 和模型；不会发送会议内容。")
 			.addButton((button) => button.setButtonText("检查记忆配置").onClick(() => {
@@ -1497,20 +1594,25 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				}));
 
 		if (this.plugin.settings.memoryLongTextEnabled) {
-			new Setting(containerEl)
+			const advancedEl = this.renderAdvancedSection(containerEl, "高级配置（分块参数）", () => undefined);
+			const chunkSetting = new Setting(advancedEl)
 				.setName("记忆分块字符数")
 				.setDesc("范围 4,000～100,000，默认 24,000。相邻分块保留 400 字重叠。")
-				.addText((text) => text
+			chunkSetting.addText((text) => {
+				text
 					.setPlaceholder("24000")
 					.setValue(String(this.plugin.settings.memoryChunkCharacters))
-					.onChange(async (value) => {
-						const parsed = Number(value);
-						if (!Number.isFinite(parsed)) {
-							return;
-						}
-						this.plugin.settings.memoryChunkCharacters = Math.min(100000, Math.max(4000, Math.round(parsed)));
-						await this.plugin.saveSettings();
-					}));
+					.onChange(() => undefined);
+				this.bindDeferredTextSave(chunkSetting, "memory-chunk-characters", text.inputEl, async (value) => {
+					const parsed = Number(value);
+					this.plugin.settings.memoryChunkCharacters = Math.min(100000, Math.max(4000, Math.round(parsed)));
+					await this.plugin.saveSettings();
+				}, (value) => {
+					const parsed = Number(value);
+					return Number.isInteger(parsed) && parsed >= 4000 && parsed <= 100000 ? undefined : "请输入 4,000～100,000 的整数。";
+				});
+				return text;
+			});
 		}
 
 		new Setting(containerEl)
@@ -1685,7 +1787,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const providerId = this.getSelectedTranscriptionConfig().provider;
 		const capability = getTranscriptionProviderCapability(
 			providerId,
-			this.plugin.settings.transcriptionMode
+			this.getSelectedTranscriptionMode()
 		);
 		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
 		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
@@ -1708,8 +1810,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		modelsEl.createSpan({ cls: "echo-notes-provider-capability-note-label", text: "推荐模型：" });
 		modelsEl.createSpan({ text: capability.recommendedModels.join("、") });
 
-		for (const note of capability.notes) {
-			capabilityEl.createDiv({ cls: "echo-notes-provider-capability-note", text: note });
+		if (capability.notes.length > 0) {
+			const detailsEl = capabilityEl.createEl("details", {
+				cls: "echo-notes-provider-capability-details"
+			});
+			detailsEl.createEl("summary", { text: "查看限制与实现说明" });
+			for (const note of capability.notes) {
+				detailsEl.createDiv({ cls: "echo-notes-provider-capability-note", text: note });
+			}
 		}
 	}
 
@@ -1725,7 +1833,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					const result = diagnoseTranscriptionProviderSettings(config, this.plugin.getApiKey(config.provider), {
 						isMobile: Platform.isMobile,
 						isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter,
-						usage: this.plugin.settings.transcriptionMode
+						usage: this.getSelectedTranscriptionMode()
 					});
 					new ProviderDiagnosticsModal(
 						this.app,
@@ -1860,8 +1968,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 		this.settingsSpotlight.present(
 			step,
-			() => this.advanceSettingsGuide(),
-			() => this.closeSettingsGuide()
+			{
+				onAction: () => this.advanceSettingsGuide(),
+				onSecondaryAction: () => this.closeSettingsGuide(),
+				onClose: () => this.closeSettingsGuide()
+			}
 		);
 	}
 
@@ -1870,6 +1981,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		session: ActiveSettingsGuide
 	): SettingsSpotlightStep | null {
 		const isAnalysis = session.destination === "analysis-model";
+		const isMemory = session.destination === "memory-model";
 		let targetName: string;
 		let focusSelector: string;
 		let stepLabel: string;
@@ -1877,6 +1989,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		let description: string;
 		let actionLabel: string;
 		let actionDisabled = false;
+		let secondaryActionLabel: string | undefined;
 
 		switch (session.step) {
 			case "analysis-enable":
@@ -1889,13 +2002,18 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				actionDisabled = true;
 				break;
 			case "provider":
-				targetName = isAnalysis ? "analysis-provider" : "transcription-provider";
+				targetName = isAnalysis
+					? "analysis-provider"
+					: isMemory ? "memory-provider" : "transcription-provider";
 				focusSelector = "select";
 				stepLabel = "1/2";
 				if (isAnalysis) {
 					title = "选择 AI 分析 Provider";
 					description = "选择用于把转写稿生成 AI 笔记的服务商。不同 Provider 使用独立 API key。";
-				} else if (this.plugin.settings.transcriptionMode === "realtime") {
+				} else if (isMemory) {
+					title = "选择记忆提取 Provider";
+					description = "选择用于提取候选记忆的服务商。记忆 API key 与转写、分析配置相互隔离。";
+				} else if (this.getSelectedTranscriptionMode() === "realtime") {
 					title = "确认实时转写 Provider";
 					description = "实时转写目前固定使用火山引擎 AgentPlan，无需修改；下一步填写专属 API key。";
 				} else {
@@ -1905,12 +2023,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				actionLabel = "下一步";
 				break;
 			case "api-key":
-				targetName = isAnalysis ? "analysis-api-key" : "transcription-api-key";
+				targetName = isAnalysis
+					? "analysis-api-key"
+					: isMemory ? "memory-api-key" : "transcription-api-key";
 				focusSelector = 'input[type="password"]';
 				stepLabel = "2/2";
-				title = isAnalysis ? "填写分析 API key" : "填写转写 API key";
+				title = isAnalysis
+					? "填写分析 API key"
+					: isMemory ? "填写记忆 API key" : "填写转写 API key";
 				description = "在所选服务商后台创建并粘贴密钥。密钥只保存在 Obsidian SecretStorage，不会写入插件设置文件。";
-				actionLabel = "完成";
+				actionLabel = "返回新人指引";
+				secondaryActionLabel = "留在设置";
 				break;
 		}
 
@@ -1920,6 +2043,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (!targetEl || targetEl.closest<HTMLElement>("[hidden]")) {
 			return null;
 		}
+		const detailsEl = targetEl.closest<HTMLDetailsElement>("details");
+		if (detailsEl && !detailsEl.open) {
+			detailsEl.open = true;
+		}
 
 		return {
 			targetEl,
@@ -1928,7 +2055,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			title,
 			description,
 			actionLabel,
-			actionDisabled
+			actionDisabled,
+			secondaryActionLabel
 		};
 	}
 
@@ -1943,18 +2071,104 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 		if (session.step === "api-key") {
-			this.closeSettingsGuide();
+			this.closeSettingsGuide(true);
 		}
 	}
 
 	private refreshSettings(): void {
+		this.clearDeferredSaveTimers();
 		this.renderSettings(this.settingsContainerEl ?? this.containerEl);
 	}
 
 	private createSecretSaveStatus(setting: Setting, apiKey: string): HTMLElement {
-		const statusEl = setting.descEl.createDiv({ cls: "echo-notes-secret-save-status" });
+		setting.controlEl.addClass("echo-notes-settings-control-feedback");
+		const statusEl = setting.controlEl.createDiv({
+			cls: "echo-notes-inline-validation echo-notes-secret-save-status"
+		});
+		statusEl.setAttribute("role", "status");
+		statusEl.setAttribute("aria-live", "polite");
 		this.setSecretSaveStatus(statusEl, apiKey ? "saved" : "empty");
 		return statusEl;
+	}
+
+	private bindDeferredTextSave(
+		setting: Setting,
+		key: string,
+		inputEl: HTMLInputElement,
+		save: (value: string) => Promise<void>,
+		validate?: (value: string) => string | undefined,
+		feedbackEl?: HTMLElement
+	): void {
+		setting.controlEl.addClass("echo-notes-settings-control-feedback");
+		const validationEl = feedbackEl ?? setting.controlEl.createDiv({ cls: "echo-notes-inline-validation" });
+		validationEl.addClass("echo-notes-inline-validation");
+		validationEl.setAttribute("role", "status");
+		validationEl.setAttribute("aria-live", "polite");
+		const renderValidation = (value: string): boolean => {
+			const message = validate?.(value);
+			validationEl.removeClass("is-success");
+			validationEl.toggleClass("is-error", Boolean(message));
+			validationEl.setText(message ?? (value.trim() ? "修改将在失焦后保存" : ""));
+			return !message;
+		};
+		const commit = (): void => {
+			const existing = this.deferredSaveTimers.get(key);
+			if (existing !== undefined) {
+				window.clearTimeout(existing);
+			}
+			this.deferredSaveTimers.delete(key);
+			const value = inputEl.value.trim();
+			if (!renderValidation(value)) {
+				return;
+			}
+			void save(value).then(() => {
+				if (feedbackEl) {
+					return;
+				}
+				validationEl.removeClass("is-error");
+				validationEl.setText(value ? "已保存" : "已清除");
+			}).catch((error) => {
+				validationEl.removeClass("is-success");
+				validationEl.addClass("is-error");
+				validationEl.setText(`保存失败：${getSanitizedErrorMessage(error)}`);
+			});
+		};
+		const schedule = (delay: number): void => {
+			const existing = this.deferredSaveTimers.get(key);
+			if (existing !== undefined) {
+				window.clearTimeout(existing);
+			}
+			const timer = window.setTimeout(commit, delay);
+			this.deferredSaveTimers.set(key, timer);
+		};
+		inputEl.addEventListener("input", () => {
+			renderValidation(inputEl.value);
+			schedule(650);
+		});
+		inputEl.addEventListener("blur", () => schedule(80));
+	}
+
+	private clearDeferredSaveTimers(): void {
+		for (const timer of this.deferredSaveTimers.values()) {
+			window.clearTimeout(timer);
+		}
+		this.deferredSaveTimers.clear();
+	}
+
+	private renderAdvancedSection(
+		containerEl: HTMLElement,
+		title: string,
+		render: (contentEl: HTMLElement) => void
+	): HTMLElement {
+		const detailsEl = containerEl.createEl("details", { cls: "echo-notes-settings-advanced" });
+		detailsEl.createEl("summary", { text: title });
+		const contentEl = detailsEl.createDiv({ cls: "echo-notes-settings-advanced-content" });
+		render(contentEl);
+		return contentEl;
+	}
+
+	private renderBasicHeading(containerEl: HTMLElement, text = "基础配置"): void {
+		containerEl.createDiv({ cls: "echo-notes-settings-basic-heading", text });
 	}
 
 	private setSecretSaveStatus(statusEl: HTMLElement, status: "empty" | "saved" | "cleared" | "failed"): void {
@@ -2004,7 +2218,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private getProviderDefaults(): Omit<TranscriptionConfig, "provider"> {
 		const provider = this.getSelectedTranscriptionConfig().provider;
 		if (
-			this.plugin.settings.transcriptionMode === "offline" &&
+			this.getSelectedTranscriptionMode() === "offline" &&
 			isOfflineTranscriptionProviderId(provider)
 		) {
 			return getOfflineTranscriptionProviderDefaults(provider);
@@ -2013,9 +2227,19 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getSelectedTranscriptionConfig(): TranscriptionConfig {
-		return this.plugin.settings.transcriptionMode === "realtime"
+		return this.getSelectedTranscriptionMode() === "realtime"
 			? this.plugin.settings.realtimeTranscription
 			: this.plugin.settings.offlineTranscription;
+	}
+
+	private getSelectedTranscriptionMode(): "realtime" | "offline" {
+		return this.isGettingStartedOfflineTranscriptionGuide()
+			? "offline"
+			: this.plugin.settings.transcriptionMode;
+	}
+
+	private isGettingStartedOfflineTranscriptionGuide(): boolean {
+		return this.activeSettingsGuide?.destination === "transcription-service";
 	}
 
 	private getAnalysisProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
@@ -2054,7 +2278,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private getTranscriptionLanguageDescription(): string {
 		const capability = getTranscriptionProviderCapability(
 			this.getSelectedTranscriptionConfig().provider,
-			this.plugin.settings.transcriptionMode
+			this.getSelectedTranscriptionMode()
 		);
 		if (!capability.supportsLanguage) {
 			return "默认 ASR 转写语言。当前 provider 不支持语言参数，此设置不会传给 provider，仍由模型自动识别。";
@@ -2063,74 +2287,39 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		return "默认 ASR 转写语言。支持语言参数的 provider 会随请求发送该值；auto 表示由 provider 自动识别。";
 	}
 
-	private renderAgentPlanAnalysisSignup(containerEl: HTMLElement): void {
-		const desc = createFragment();
-		desc.appendText(`Echo Notes 将通过 ${AGENTPLAN_ANALYSIS_BASE_URL}/chat/completions 调用纪要分析。请使用`);
-		desc.createEl("a", {
-			text: "AgentPlan 专属 API key",
+	private appendProviderSignupLink(desc: DocumentFragment, provider: string): void {
+		const linkConfig = provider === "volcengine-agentplan"
+			? {
+				text: "获取 AgentPlan API key",
+				href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan"
+			}
+			: provider === "mosi"
+				? {
+					text: "打开 MOSI API key 管理",
+					href: "https://platform.mosi.cn/app/api-keys"
+				}
+				: provider === "siliconflow"
+					? {
+						text: "获取硅基流动 API key",
+						href: "https://cloud.siliconflow.cn/i/uTf2euFF"
+					}
+					: null;
+		if (!linkConfig) {
+			return;
+		}
+		const actionRowEl = desc.createSpan({ cls: "echo-notes-settings-api-key-link-row" });
+		const linkEl = actionRowEl.createEl("a", {
+			cls: "echo-notes-settings-api-key-link",
 			attr: {
-				href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
+				href: linkConfig.href,
 				target: "_blank",
 				rel: "noopener noreferrer"
 			}
 		});
-		desc.appendText("，并遵守 AgentPlan 对 AI 工具使用场景的套餐限制。");
-
-		new Setting(containerEl)
-			.setName("AgentPlan 文本模型接入")
-			.setDesc(desc);
-	}
-
-	private renderProviderSignup(containerEl: HTMLElement): void {
-		const provider = this.getSelectedTranscriptionConfig().provider;
-		if (provider === "volcengine-agentplan") {
-			const desc = createFragment();
-			desc.appendText("请在火山方舟 AgentPlan 控制台创建专属 API key：");
-			desc.createEl("a", {
-				text: "获取 AgentPlan 专属 API key",
-				attr: {
-					href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
-					target: "_blank",
-					rel: "noopener noreferrer"
-				}
-			});
-			new Setting(containerEl).setName("AgentPlan 专属 API key").setDesc(desc);
-			return;
-		}
-
-		if (provider === "mosi") {
-			const desc = createFragment();
-			desc.appendText("请在 MOSI API Platform 创建并管理 API key：");
-			desc.createEl("a", {
-				text: "打开 API key 管理平台",
-				attr: {
-					href: "https://platform.mosi.cn/app/api-keys",
-					target: "_blank",
-					rel: "noopener noreferrer"
-				}
-			});
-			new Setting(containerEl).setName("MOSI API key").setDesc(desc);
-			return;
-		}
-
-		if (provider !== "siliconflow") {
-			return;
-		}
-
-		const desc = createFragment();
-		desc.appendText("硅基流动免费注册链接：");
-		desc.createEl("a", {
-			text: "https://cloud.siliconflow.cn/i/uTf2euFF",
-			attr: {
-				href: "https://cloud.siliconflow.cn/i/uTf2euFF",
-				target: "_blank",
-				rel: "noopener noreferrer"
-			}
-		});
-
-		new Setting(containerEl)
-			.setName("硅基流动注册链接")
-			.setDesc(desc);
+		linkEl.createSpan({ text: linkConfig.text });
+		const iconEl = linkEl.createSpan({ cls: "echo-notes-settings-api-key-link-icon" });
+		iconEl.setAttribute("aria-hidden", "true");
+		setIcon(iconEl, "external-link");
 	}
 }
 
@@ -2385,5 +2574,20 @@ function getDiagnosticSeverityLabel(severity: ProviderDiagnosticSeverity): strin
 		case "info":
 		default:
 			return "提示";
+	}
+}
+
+function validateBaseUrl(value: string): string | undefined {
+	if (!value.trim()) {
+		return "Base URL 不能为空。";
+	}
+	try {
+		const url = new URL(value);
+		if (url.protocol !== "https:" && !["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+			return "远程 Base URL 必须使用 HTTPS。";
+		}
+		return undefined;
+	} catch {
+		return "请输入完整的 URL，例如 https://api.example.com/v1。";
 	}
 }

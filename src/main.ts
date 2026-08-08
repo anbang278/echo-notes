@@ -47,22 +47,75 @@ import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
-import { GettingStartedModal } from "./getting-started/getting-started-modal";
 import {
+	type GettingStartedGuideActions,
+	type GettingStartedGuideSnapshot,
+	type GettingStartedTaskSnapshot,
+} from "./getting-started/getting-started-guide";
+import {
+	cloneGettingStartedHotkeys,
+	findHotkeyAssignmentConflicts,
+	saveHotkeyAssignments,
+	validateGettingStartedHotkeys,
+	type GettingStartedHotkeyId,
+	type GettingStartedHotkeys,
+	type HotkeyCommandAssignment
+} from "./getting-started/getting-started-hotkeys";
+import {
+	getAvailableGettingStartedNotePath,
+	selectNewGettingStartedAudio
+} from "./getting-started/getting-started-files";
+import { selectGettingStartedTranscript } from "./getting-started/getting-started-transcript-picker";
+import { getTaskFailureNotice } from "./task-center/task-center-copy";
+import {
+	acknowledgeFirstGettingStartedChapter,
+	acknowledgeShortcutGettingStartedChapter,
+	beginFirstGettingStartedPractice,
+	beginFirstGettingStartedTranscription,
+	beginShortcutGettingStartedPractice,
+	cancelGettingStartedReview,
+	cancelFirstGettingStartedRecording,
+	cancelFirstGettingStartedTranscription,
+	canSkipGettingStartedChapter,
+	confirmGettingStartedHotkeys,
+	confirmGettingStartedRecorder,
 	dismissGettingStarted,
+	getCurrentGettingStartedChapter,
+	getGettingStartedActiveAudioPath,
+	getGettingStartedActiveTranscriptPath,
+	getGettingStartedExperienceNotePath,
+	getGettingStartedFailureTaskId,
+	getFirstIncompleteGettingStartedStep,
+	getGettingStartedMemorySourcePath,
+	getGettingStartedPracticeStage,
 	getGettingStartedProgress,
+	getGettingStartedTrackedPaths,
 	markGettingStartedShown,
-	recordGettingStartedMilestone,
+	markGettingStartedTaskRunning,
+	recordFirstGettingStartedAudio,
+	recordGettingStartedAnalysis,
+	recordGettingStartedFailure,
+	recordGettingStartedMemory,
+	recordGettingStartedTranscription,
+	recordShortcutGettingStartedAudio,
+	removeGettingStartedPath,
+	selectGettingStartedMemorySource,
+	shouldAutoOpenGettingStarted,
+	shouldStartGettingStartedOnOpen,
+	skipGettingStartedChapter,
+	startGettingStartedReview,
 	startGettingStarted,
-	type GettingStartedMilestone,
-	type GettingStartedProgress,
-	type GettingStartedState
+	updateGettingStartedPath,
+	waitForShortcutGettingStartedTranscription,
+	type GettingStartedFailureKind,
+	type GettingStartedReadiness
 } from "./getting-started/getting-started-state";
 import { MemoryInitializationModal } from "./memory/memory-initialization-modal";
 import { MemoryContextModal } from "./memory/memory-context-modal";
 import { MemoryRelationModal } from "./memory/memory-relation-modal";
 import { MemoryReviewModal } from "./memory/memory-review-modal";
 import { MemoryService } from "./memory/memory-service";
+import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
@@ -81,6 +134,7 @@ import { normalizeAgentPlanError } from "./providers/volcengine-agentplan-client
 import { loadAgentPlanSocketFactory } from "./providers/volcengine-agentplan-socket";
 import {
 	cloneHotkey,
+	formatHotkey,
 	getSelectedTranscriptionConfig,
 	groupAnalysisTemplatesByCategory,
 	isRemovedAnalysisProviderId,
@@ -188,31 +242,31 @@ interface ObsidianHotkeyManager {
 	save?: () => Promise<void> | void;
 }
 
+interface ObsidianCommandDefinition {
+	id?: string;
+	name?: string;
+}
+
+interface ObsidianCommands {
+	commands?: Record<string, ObsidianCommandDefinition>;
+	executeCommandById?: (commandId: string) => boolean;
+}
+
+interface ObsidianSettingsTabDefinition {
+	id?: string;
+	name?: string;
+}
+
 interface AppWithInternals {
 	internalPlugins?: InternalPlugins;
 	hotkeyManager?: ObsidianHotkeyManager;
+	commands?: ObsidianCommands;
 	setting?: {
 		open?: () => void;
 		close?: () => void;
 		openTabById?: (id: string) => Promise<void> | void;
+		tabs?: ObsidianSettingsTabDefinition[];
 	};
-}
-
-export type GettingStartedProcessingAction =
-	| "transcribe-current-note"
-	| "start-realtime-transcription"
-	| "open-recording-settings"
-	| "retry-task";
-
-export interface GettingStartedChecklistSnapshot {
-	state: GettingStartedState;
-	progress: GettingStartedProgress;
-	guideExpanded: boolean;
-	completionVisible: boolean;
-	processingStatus: string;
-	processingAction: GettingStartedProcessingAction | null;
-	processingActionLabel: string | null;
-	retryTaskId?: string;
 }
 
 interface ActiveRealtimeRecording {
@@ -263,10 +317,9 @@ export default class EchoNotesPlugin extends Plugin {
 	private unsubscribeTaskCenterPersistence: (() => void) | null = null;
 	private settingTab: EchoNotesSettingTab | null = null;
 	private settingsListeners = new Set<() => void>();
-	private gettingStartedWelcomeModal: GettingStartedModal | null = null;
-	private gettingStartedGuideExpanded = false;
-	private gettingStartedCompletionVisible = false;
-	private gettingStartedCompletionTimer: number | null = null;
+	private gettingStartedListeners = new Set<() => void>();
+	private gettingStartedNativeSettingsTimer: number | null = null;
+	private gettingStartedKnownAudioPaths = new Set<string>();
 	private loadedAt = Date.now();
 
 	async onload(): Promise<void> {
@@ -302,7 +355,15 @@ export default class EchoNotesPlugin extends Plugin {
 		this.registerEditorContextMenu();
 		this.registerAutomation();
 		this.app.workspace.onLayoutReady(() => {
-			void this.maybeShowGettingStartedWelcome();
+			this.registerGettingStartedFileEvents();
+			void (async () => {
+				try {
+					await this.reconcileGettingStartedFiles();
+				} catch (error) {
+					this.log("恢复新人旅程文件状态失败", error);
+				}
+				await this.maybeOpenGettingStartedGuide();
+			})();
 		});
 	}
 
@@ -317,13 +378,12 @@ export default class EchoNotesPlugin extends Plugin {
 		this.unsubscribeTaskCenterPersistence?.();
 		this.unsubscribeTaskCenterPersistence = null;
 		this.settingTab?.closeSettingsGuide();
-		this.gettingStartedWelcomeModal?.close();
-		this.gettingStartedWelcomeModal = null;
-		if (this.gettingStartedCompletionTimer !== null) {
-			window.clearTimeout(this.gettingStartedCompletionTimer);
-			this.gettingStartedCompletionTimer = null;
+		if (this.gettingStartedNativeSettingsTimer !== null) {
+			window.clearInterval(this.gettingStartedNativeSettingsTimer);
+			this.gettingStartedNativeSettingsTimer = null;
 		}
 		this.settingsListeners.clear();
+		this.gettingStartedListeners.clear();
 		for (const timer of this.markdownDebounceTimers.values()) {
 			window.clearTimeout(timer);
 		}
@@ -365,13 +425,14 @@ export default class EchoNotesPlugin extends Plugin {
 		this.refreshServices();
 		this.updateRealtimeUi();
 		this.notifySettingsChanged();
+		this.notifyGettingStartedChanged();
 	}
 
 	refreshRegisteredCommands(): void {
 		this.registerCommands();
 	}
 
-	async activateTaskCenterView(): Promise<void> {
+	async activateTaskCenterView(options: { revealGettingStarted?: boolean } = {}): Promise<void> {
 		const existingLeaf = this.app.workspace.getLeavesOfType(ECHO_NOTES_TASK_CENTER_VIEW_TYPE)[0];
 		const leaf = existingLeaf ?? this.app.workspace.getRightLeaf(false);
 		if (!leaf) {
@@ -379,8 +440,13 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 
-		await leaf.setViewState({ type: ECHO_NOTES_TASK_CENTER_VIEW_TYPE, active: true });
+		if (!existingLeaf) {
+			await leaf.setViewState({ type: ECHO_NOTES_TASK_CENTER_VIEW_TYPE, active: true });
+		}
 		await this.app.workspace.revealLeaf(leaf);
+		if (options.revealGettingStarted && leaf.view instanceof EchoNotesTaskCenterView) {
+			leaf.view.revealGettingStarted();
+		}
 	}
 
 	getTaskCenterTasks(): EchoNotesTask[] {
@@ -398,16 +464,23 @@ export default class EchoNotesPlugin extends Plugin {
 		};
 	}
 
-	getGettingStartedChecklistSnapshot(): GettingStartedChecklistSnapshot {
+	subscribeGettingStarted(listener: () => void): () => void {
+		this.gettingStartedListeners.add(listener);
+		return () => {
+			this.gettingStartedListeners.delete(listener);
+		};
+	}
+
+	getGettingStartedGuideSnapshot(): GettingStartedGuideSnapshot {
 		const state = this.settings.gettingStartedState;
-		const transcriptionConfig = getSelectedTranscriptionConfig(this.settings);
+		const transcriptionConfig = this.settings.offlineTranscription;
 		const transcriptionDiagnostics = diagnoseTranscriptionProviderSettings(
 			transcriptionConfig,
 			this.getApiKey(transcriptionConfig.provider),
 			{
 				isMobile: Platform.isMobile,
 				isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter,
-				usage: this.settings.transcriptionMode
+				usage: "offline"
 			}
 		);
 		const analysisDiagnostics = diagnoseAnalysisProviderSettings(
@@ -418,99 +491,56 @@ export default class EchoNotesPlugin extends Plugin {
 			this.settings.analysisEnabled &&
 			getEnabledAnalysisTemplates(this.settings).length > 0 &&
 			analysisDiagnostics.canAttemptAnalysis;
-		const progress = getGettingStartedProgress(
+		const recorderEnabled = this.isOfficialAudioRecorderEnabled();
+		const hotkeys = this.getGettingStartedHotkeys();
+		const hotkeyValidation = validateGettingStartedHotkeys(hotkeys);
+		const memoryDiagnostics = diagnoseMemoryProviderSettings({
+			provider: this.settings.memoryProvider,
+			baseUrl: this.settings.memoryBaseUrl,
+			model: this.settings.memoryModel,
+			apiKey: this.getMemoryApiKey()
+		});
+		const readiness: GettingStartedReadiness = {
+			transcriptionReady: transcriptionDiagnostics.canAttemptTranscription,
+			analysisReady,
+			recorderReady: recorderEnabled === true || Boolean(state.recorderManuallyConfirmedAt),
+			hotkeysReady: hotkeyValidation.valid || Boolean(state.hotkeysManuallyConfirmedAt),
+			memoryReady: this.settings.memoryInitialized && memoryDiagnostics.canAttempt
+		};
+		const memorySourcePath = getGettingStartedMemorySourcePath(state);
+		const memorySourceFile = this.getGettingStartedFile(memorySourcePath);
+		return {
 			state,
-			transcriptionDiagnostics.canAttemptTranscription,
-			analysisReady
-		);
-		const relevantTasks = this.taskCenter.getTasks().filter(
-			(task) => !state.firstShownAt || task.createdAt >= state.firstShownAt
-		);
-		const runningAnalysis = relevantTasks.find(
-			(task) => task.kind === "analysis" && task.status === "running"
-		);
-		const runningTranscription = relevantTasks.find(
-			(task) => task.kind === "transcription" && task.status === "running"
-		);
-		const failedAnalysis = relevantTasks.find(
-			(task) => task.kind === "analysis" && task.status === "failed" && task.retry
-		);
-		const failedTranscription = relevantTasks.find(
-			(task) => task.kind === "transcription" && task.status === "failed" && task.retry
-		);
-
-		if (progress.firstProcessingCompleted) {
-			return {
-				state,
-				progress,
-				guideExpanded: this.gettingStartedGuideExpanded,
-				completionVisible: this.gettingStartedCompletionVisible,
-				processingStatus: "首次转写与 AI 分析已完成",
-				processingAction: null,
-				processingActionLabel: null
-			};
-		}
-		if (runningAnalysis) {
-			return this.createGettingStartedSnapshot(progress, runningAnalysis.stage, null, null);
-		}
-		if (runningTranscription) {
-			return this.createGettingStartedSnapshot(progress, runningTranscription.stage, null, null);
-		}
-		if (failedAnalysis) {
-			return this.createGettingStartedSnapshot(
-				progress,
-				failedAnalysis.stage,
-				"retry-task",
-				failedAnalysis.retry?.label ?? "重试分析",
-				failedAnalysis.id
-			);
-		}
-		if (failedTranscription) {
-			return this.createGettingStartedSnapshot(
-				progress,
-				failedTranscription.stage,
-				"retry-task",
-				failedTranscription.retry?.label ?? "重试转写",
-				failedTranscription.id
-			);
-		}
-		if (this.settings.transcriptionMode === "realtime") {
-			return this.createGettingStartedSnapshot(
-				progress,
-				state.firstSuccessfulTranscriptionAt ? "转写已完成，等待 AI 分析" : "准备开始实时转写",
-				"start-realtime-transcription",
-				"开始实时转写"
-			);
-		}
-		if (this.currentNoteHasAudio()) {
-			return this.createGettingStartedSnapshot(
-				progress,
-				state.firstSuccessfulTranscriptionAt ? "转写已完成，等待 AI 分析" : "准备处理当前笔记音频",
-				"transcribe-current-note",
-				"转写当前笔记音频"
-			);
-		}
-		return this.createGettingStartedSnapshot(
-			progress,
-			state.firstSuccessfulTranscriptionAt ? "转写已完成，等待 AI 分析" : "当前笔记没有可处理的音频",
-			"open-recording-settings",
-			"打开录音控制"
-		);
+			step: getFirstIncompleteGettingStartedStep(state, readiness),
+			progress: getGettingStartedProgress(state),
+			readiness,
+			memoryInitialized: this.settings.memoryInitialized,
+			recorderEnabled,
+			hotkeys,
+			hotkeyManagerReadable:
+				typeof this.getHotkeyManager()?.getHotkeys === "function" ||
+				typeof this.getHotkeyManager()?.getDefaultHotkeys === "function",
+			hotkeyManagerWritable:
+				typeof this.getHotkeyManager()?.setHotkeys === "function" &&
+				typeof this.getHotkeyManager()?.save === "function",
+			memorySourcePath,
+			memorySourceAvailable: Boolean(memorySourceFile && this.isTranscriptMarkdownFile(memorySourceFile)),
+			task: this.getGettingStartedTaskSnapshot()
+		};
 	}
 
 	async openGettingStarted(): Promise<void> {
-		this.settings.gettingStartedState = startGettingStarted(this.settings.gettingStartedState);
-		this.gettingStartedGuideExpanded = true;
-		await this.saveSettings();
+		if (shouldStartGettingStartedOnOpen(
+			this.settings.gettingStartedState.status,
+			Platform.isMobile
+		)) {
+			this.settings.gettingStartedState = startGettingStarted(this.settings.gettingStartedState);
+			await this.saveSettings();
+		}
 		if (document.querySelector(".modal.mod-settings")) {
 			(this.app as App & AppWithInternals).setting?.close?.();
 		}
-		await this.activateTaskCenterView();
-	}
-
-	setGettingStartedGuideExpanded(expanded: boolean): void {
-		this.gettingStartedGuideExpanded = expanded;
-		this.notifySettingsChanged();
+		await this.activateTaskCenterView({ revealGettingStarted: true });
 	}
 
 	async openSettingsDestination(
@@ -524,38 +554,10 @@ export default class EchoNotesPlugin extends Plugin {
 			return false;
 		}
 
-		this.settingTab.showDestination(destination);
 		settingsManager.open();
 		await settingsManager.openTabById(this.manifest.id);
 		this.settingTab.showDestination(destination, options);
 		return true;
-	}
-
-	async runGettingStartedProcessingAction(snapshot: GettingStartedChecklistSnapshot): Promise<void> {
-		switch (snapshot.processingAction) {
-			case "transcribe-current-note": {
-				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (!view?.file) {
-					new Notice("请先打开一篇包含音频链接的 Markdown 笔记。");
-					return;
-				}
-				await this.handleTranscribeAllAudioInCurrentNote(view.editor, view);
-				return;
-			}
-			case "start-realtime-transcription":
-				await this.startRealtimeTranscription();
-				return;
-			case "open-recording-settings":
-				await this.openSettingsDestination("transcription-recording");
-				return;
-			case "retry-task":
-				if (!snapshot.retryTaskId || !await this.retryTaskCenterTask(snapshot.retryTaskId)) {
-					new Notice("当前任务无法重试。");
-				}
-				return;
-			case null:
-				return;
-		}
 	}
 
 	async retryTaskCenterTask(taskId: string): Promise<boolean> {
@@ -566,24 +568,295 @@ export default class EchoNotesPlugin extends Plugin {
 		this.taskCenter.clearFinishedTasks();
 	}
 
-	private createGettingStartedSnapshot(
-		progress: GettingStartedProgress,
-		processingStatus: string,
-		processingAction: GettingStartedProcessingAction | null,
-		processingActionLabel: string | null,
-		retryTaskId?: string
-	): GettingStartedChecklistSnapshot {
+	private getGettingStartedHotkeys(): GettingStartedHotkeys {
 		return {
-			state: this.settings.gettingStartedState,
-			progress,
-			guideExpanded: this.gettingStartedGuideExpanded,
-			completionVisible: this.gettingStartedCompletionVisible,
-			processingStatus,
-			processingAction,
-			processingActionLabel,
-			retryTaskId
+			start: this.getOfficialAudioRecorderStartHotkey(),
+			stop: this.getOfficialAudioRecorderStopHotkey(),
+			transcribe: this.getObsidianCommandHotkey(
+				`${this.manifest.id}:transcribe-all-audio-files-in-current-note`,
+				this.settings.transcribeAllAudioHotkey
+			)
 		};
 	}
+
+	private getGettingStartedHotkeyConflicts(
+		hotkeys: GettingStartedHotkeys
+	): Partial<Record<GettingStartedHotkeyId, string[]>> {
+		const hotkeyManager = this.getHotkeyManager();
+		const commands = (this.app as unknown as AppWithInternals).commands?.commands;
+		if (
+			!commands ||
+			(typeof hotkeyManager?.getHotkeys !== "function" &&
+				typeof hotkeyManager?.getDefaultHotkeys !== "function")
+		) {
+			return {};
+		}
+		return findHotkeyAssignmentConflicts(
+			this.getGettingStartedHotkeyAssignments(hotkeys),
+			commands,
+			hotkeyManager
+		);
+	}
+
+	getHotkeyConflicts(commandId: string, hotkey: EchoNotesHotkeySetting): string[] {
+		const hotkeyManager = this.getHotkeyManager();
+		const commands = (this.app as unknown as AppWithInternals).commands?.commands;
+		if (
+			!commands ||
+			(typeof hotkeyManager?.getHotkeys !== "function" &&
+				typeof hotkeyManager?.getDefaultHotkeys !== "function")
+		) {
+			return [];
+		}
+		return findHotkeyAssignmentConflicts(
+			[{ id: "hotkey", commandId, hotkey }],
+			commands,
+			hotkeyManager
+		).hotkey ?? [];
+	}
+
+	private getGettingStartedHotkeyAssignments(
+		hotkeys: GettingStartedHotkeys
+	): HotkeyCommandAssignment<GettingStartedHotkeyId>[] {
+		return [
+			{ id: "start", commandId: AUDIO_RECORDER_START_COMMAND_ID, hotkey: hotkeys.start },
+			{ id: "stop", commandId: AUDIO_RECORDER_STOP_COMMAND_ID, hotkey: hotkeys.stop },
+			{
+				id: "transcribe",
+				commandId: `${this.manifest.id}:transcribe-all-audio-files-in-current-note`,
+				hotkey: hotkeys.transcribe
+			}
+		];
+	}
+
+	private getGettingStartedTaskSnapshot(): GettingStartedTaskSnapshot | undefined {
+		const state = this.settings.gettingStartedState;
+		const failureTaskId = getGettingStartedFailureTaskId(state);
+		const activeAudioPath = getGettingStartedActiveAudioPath(state);
+		const activeTranscriptPath = getGettingStartedActiveTranscriptPath(state);
+		const memorySourcePath = getGettingStartedMemorySourcePath(state);
+		const practiceStage = getGettingStartedPracticeStage(state);
+		const task = failureTaskId
+			? this.taskCenter.getTasks().find((candidate) => candidate.id === failureTaskId)
+			: this.taskCenter.getTasks().find((candidate) => {
+				if (
+					candidate.kind === "transcription" &&
+					(practiceStage === "first-transcribing" || practiceStage === "shortcut-transcribing")
+				) {
+					return candidate.targetPath === activeAudioPath;
+				}
+				if (candidate.kind === "analysis" && practiceStage === "analyzing") {
+					return candidate.targetPath === activeTranscriptPath;
+				}
+				if (candidate.kind === "memory" && practiceStage === "memory-running") {
+					return candidate.targetPath === memorySourcePath;
+				}
+				return false;
+			});
+		if (!task) {
+			return undefined;
+		}
+		return {
+			id: task.id,
+			kind: task.kind,
+			status: task.status === "skipped" ? "success" : task.status,
+			stage: task.stage,
+			error: task.error,
+			canRetry: Boolean(task.retry)
+		};
+	}
+
+	getGettingStartedGuideActions(): GettingStartedGuideActions {
+		return {
+			dismiss: async () => {
+				this.settings.gettingStartedState = dismissGettingStarted(this.settings.gettingStartedState);
+				await this.saveSettings();
+			},
+			skipChapter: async (chapter) => {
+				const state = this.settings.gettingStartedState;
+				if (!canSkipGettingStartedChapter(state, chapter)) {
+					new Notice("当前阶段正在处理，暂时无法跳过。");
+					return;
+				}
+				this.settings.gettingStartedState = skipGettingStartedChapter(state, chapter);
+				await this.saveSettings();
+			},
+			relearnChapter: async (chapter) => {
+				const state = this.settings.gettingStartedState;
+				const nextState = startGettingStartedReview(state, chapter);
+				if (!nextState.activeReview || nextState.activeReview === state.activeReview) {
+					new Notice("当前有正在进行的新人任务，请结束后再学一次。");
+					return;
+				}
+				this.settings.gettingStartedState = nextState;
+				await this.saveSettings();
+			},
+			cancelRelearn: async () => {
+				const state = this.settings.gettingStartedState;
+				const nextState = cancelGettingStartedReview(state);
+				if (nextState.activeReview) {
+					new Notice("当前阶段正在处理，请结束后再退出复习。");
+					return;
+				}
+				this.settings.gettingStartedState = nextState;
+				await this.saveSettings();
+			},
+			openTranscriptionSettings: () => this.openGettingStartedSettings("transcription-service"),
+			openAnalysisSettings: () => this.openGettingStartedSettings("analysis-model"),
+			enableRecorder: async () => {
+				await this.setOfficialAudioRecorderEnabled(true);
+				this.notifyGettingStartedChanged();
+			},
+			confirmRecorder: async () => {
+				this.settings.gettingStartedState = confirmGettingStartedRecorder(this.settings.gettingStartedState);
+				await this.saveSettings();
+			},
+			openCorePluginSettings: () => this.openNativeSettingsForGettingStarted("core"),
+			getHotkeyConflicts: (hotkeys) => this.getGettingStartedHotkeyConflicts(hotkeys),
+			saveHotkeys: (hotkeys) => this.saveGettingStartedHotkeys(hotkeys),
+			confirmHotkeys: async () => {
+				this.settings.gettingStartedState = confirmGettingStartedHotkeys(this.settings.gettingStartedState);
+				await this.saveSettings();
+			},
+			openHotkeySettings: () => this.openNativeSettingsForGettingStarted("hotkeys"),
+			createExperienceNote: () => this.createGettingStartedExperienceNote(),
+			stopFirstRecording: () => this.stopGettingStartedFirstRecording(),
+			transcribeFirstRecording: () => this.transcribeGettingStartedFirstRecording(),
+			acknowledgeFirstChapter: async () => {
+				this.settings.gettingStartedState = acknowledgeFirstGettingStartedChapter(this.settings.gettingStartedState);
+				await this.saveSettings();
+			},
+			startShortcutPractice: () => this.startGettingStartedShortcutPractice(),
+			resumeShortcutPractice: () => this.openGettingStartedExperienceNote(),
+			startShortcutTranscription: () => this.waitForGettingStartedShortcutTranscription(),
+			acknowledgeShortcutChapter: async () => {
+				this.settings.gettingStartedState = acknowledgeShortcutGettingStartedChapter(this.settings.gettingStartedState);
+				await this.saveSettings();
+			},
+			initializeMemory: () => this.initializeGettingStartedMemory(),
+			openMemorySettings: () => this.openGettingStartedSettings("memory-model"),
+			selectMemoryTranscript: () => this.selectGettingStartedMemoryTranscript(),
+			startMemory: () => this.startGettingStartedMemory(),
+			retryTask: async (taskId) => {
+				if (!await this.retryTaskCenterTask(taskId)) {
+					new Notice("当前任务无法重试。");
+				}
+			},
+			openExperienceNote: () => this.openGettingStartedExperienceNote(),
+			openFirstTranscript: () => this.openGettingStartedTranscript("first"),
+			openShortcutTranscript: () => this.openGettingStartedTranscript("shortcut"),
+			openMemoryCandidate: () => this.openGettingStartedMemoryCandidate()
+		};
+	}
+
+	private async openGettingStartedSettings(destination: EchoNotesSettingsDestination): Promise<void> {
+		const opened = await this.openSettingsDestination(destination, {
+			guide: "provider-api-key",
+			onGuideFinished: () => {
+				(this.app as unknown as AppWithInternals).setting?.close?.();
+				window.setTimeout(() => {
+					void this.activateTaskCenterView({ revealGettingStarted: true });
+				}, 0);
+			}
+		});
+		if (!opened) {
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+		}
+	}
+
+	private async openNativeSettingsForGettingStarted(kind: "core" | "hotkeys"): Promise<void> {
+		const settingsManager = (this.app as unknown as AppWithInternals).setting;
+		if (!settingsManager?.open || !settingsManager.openTabById) {
+			new Notice("无法自动打开 Obsidian 设置，请手动完成后重新打开新人指引。");
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+			return;
+		}
+		settingsManager.open();
+		const tabs = settingsManager.tabs ?? [];
+		const tab = tabs.find((candidate) => {
+			const haystack = `${candidate.id ?? ""} ${candidate.name ?? ""}`.toLowerCase();
+			return kind === "hotkeys"
+				? haystack.includes("hotkey") || haystack.includes("快捷键")
+				: haystack.includes("core") || haystack.includes("核心插件");
+		});
+		await settingsManager.openTabById(tab?.id ?? (kind === "hotkeys" ? "hotkeys" : "core"));
+		this.watchNativeSettingsClose();
+	}
+
+	private watchNativeSettingsClose(): void {
+		if (this.gettingStartedNativeSettingsTimer !== null) {
+			window.clearInterval(this.gettingStartedNativeSettingsTimer);
+		}
+		this.gettingStartedNativeSettingsTimer = window.setInterval(() => {
+			if (document.querySelector(".modal.mod-settings")) {
+				return;
+			}
+			if (this.gettingStartedNativeSettingsTimer !== null) {
+				window.clearInterval(this.gettingStartedNativeSettingsTimer);
+				this.gettingStartedNativeSettingsTimer = null;
+			}
+			void this.activateTaskCenterView({ revealGettingStarted: true });
+		}, 300);
+	}
+
+	private async saveGettingStartedHotkeys(hotkeys: GettingStartedHotkeys): Promise<boolean> {
+		const validation = validateGettingStartedHotkeys(hotkeys);
+		const manager = this.getHotkeyManager();
+		const commands = (this.app as unknown as AppWithInternals).commands?.commands;
+		if (!validation.valid || !commands || !manager?.setHotkeys || !manager.save) {
+			new Notice("三组快捷键尚未完整配置，或当前 Obsidian 版本无法写入快捷键。");
+			return false;
+		}
+		const originalSettings = this.getGettingStartedHotkeys();
+		const result = await saveHotkeyAssignments(
+			this.getGettingStartedHotkeyAssignments(hotkeys),
+			commands,
+			{
+				getHotkeys: (commandId) => manager.getHotkeys?.(commandId),
+				getDefaultHotkeys: (commandId) => manager.getDefaultHotkeys?.(commandId),
+				setHotkeys: (commandId, commandHotkeys) => manager.setHotkeys?.(commandId, commandHotkeys),
+				save: () => manager.save?.()
+			}
+		);
+		if (Object.keys(result.conflicts).length > 0) {
+			new Notice(`快捷键与其他命令冲突，整批未保存：${Object.values(result.conflicts).flat().join("、")}`);
+			return false;
+		}
+		if (!result.saved) {
+			if (result.rollbackError) {
+				this.log("回滚新人向导快捷键失败", result.rollbackError);
+			}
+			new Notice(`保存快捷键失败：${getErrorMessage(result.error)}`);
+			return false;
+		}
+		try {
+			const cloned = cloneGettingStartedHotkeys(hotkeys);
+			this.settings.officialRecorderStartHotkey = cloned.start;
+			this.settings.officialRecorderStopHotkey = cloned.stop;
+			this.settings.transcribeAllAudioHotkey = cloned.transcribe;
+			delete this.settings.gettingStartedState.hotkeysManuallyConfirmedAt;
+			await this.saveSettings();
+			new Notice("三组快捷键已保存。");
+			return true;
+		} catch (error) {
+			try {
+				await result.rollback?.();
+			} catch (rollbackError) {
+				this.log("回滚新人向导快捷键失败", rollbackError);
+			}
+			this.settings.officialRecorderStartHotkey = cloneHotkey(originalSettings.start);
+			this.settings.officialRecorderStopHotkey = cloneHotkey(originalSettings.stop);
+			this.settings.transcribeAllAudioHotkey = cloneHotkey(originalSettings.transcribe);
+			try {
+				await this.saveSettings();
+			} catch (rollbackSettingsError) {
+				this.log("回滚新人向导快捷键设置失败", rollbackSettingsError);
+			}
+			new Notice(`保存快捷键失败：${getErrorMessage(error)}`);
+			return false;
+		}
+	}
+
 
 	private restoreTaskCenter(): void {
 		const restoredTasks = markInterruptedTasks(this.settings.taskCenterState.tasks).map((task): EchoNotesTask => ({
@@ -639,71 +912,458 @@ export default class EchoNotesPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
-	private async maybeShowGettingStartedWelcome(): Promise<void> {
-		if (
-			this.settings.gettingStartedState.status !== "not-started" ||
-			this.gettingStartedWelcomeModal
-		) {
+	private async maybeOpenGettingStartedGuide(): Promise<void> {
+		const state = this.settings.gettingStartedState;
+		const status = state.status;
+		if (!shouldAutoOpenGettingStarted(status, Platform.isMobile, Boolean(state.activeReview))) {
 			return;
 		}
+		if (state.activeReview) {
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+			return;
+		}
+		if (status === "not-started") {
+			this.settings.gettingStartedState = markGettingStartedShown(this.settings.gettingStartedState);
+			await this.saveSettings();
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+			return;
+		}
+		if (status === "in-progress") {
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+		}
+	}
 
-		this.settings.gettingStartedState = markGettingStartedShown(
+	private registerGettingStartedFileEvents(): void {
+		this.registerEvent(this.app.vault.on("modify", (file) => {
+			if (
+				file instanceof TFile &&
+				file.path === getGettingStartedExperienceNotePath(this.settings.gettingStartedState)
+			) {
+				void this.detectGettingStartedAudio(file);
+			}
+		}));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+			const nextState = updateGettingStartedPath(this.settings.gettingStartedState, oldPath, file.path);
+			if (JSON.stringify(nextState) !== JSON.stringify(this.settings.gettingStartedState)) {
+				this.settings.gettingStartedState = nextState;
+				void this.saveSettings();
+			}
+		}));
+		this.registerEvent(this.app.vault.on("delete", (file) => {
+			const nextState = removeGettingStartedPath(this.settings.gettingStartedState, file.path);
+			if (JSON.stringify(nextState) !== JSON.stringify(this.settings.gettingStartedState)) {
+				this.settings.gettingStartedState = nextState;
+				void this.saveSettings();
+			}
+		}));
+	}
+
+	private async reconcileGettingStartedFiles(): Promise<void> {
+		let nextState = this.settings.gettingStartedState;
+		for (const path of getGettingStartedTrackedPaths(nextState)) {
+			if (path && !this.app.vault.getAbstractFileByPath(path)) {
+				nextState = removeGettingStartedPath(nextState, path);
+			}
+		}
+		if (JSON.stringify(nextState) !== JSON.stringify(this.settings.gettingStartedState)) {
+			this.settings.gettingStartedState = nextState;
+			await this.saveSettings();
+		}
+		const sourceNote = this.getGettingStartedFile(getGettingStartedExperienceNotePath(nextState));
+		if (sourceNote) {
+			await this.detectGettingStartedAudio(sourceNote);
+		}
+	}
+
+	private async detectGettingStartedAudio(sourceNote: TFile): Promise<void> {
+		const state = this.settings.gettingStartedState;
+		if (sourceNote.path !== getGettingStartedExperienceNotePath(state)) {
+			return;
+		}
+		const practiceStage = getGettingStartedPracticeStage(state);
+		const waitingForFirst = practiceStage === "waiting-for-first-audio";
+		const waitingForShortcut = practiceStage === "waiting-for-shortcut-audio";
+		if (!waitingForFirst && !waitingForShortcut) {
+			return;
+		}
+		const startedAt = state.activeReview?.practiceStartedAt ??
+			(waitingForFirst ? state.firstPracticeStartedAt : state.shortcutPracticeStartedAt);
+		if (!startedAt) {
+			return;
+		}
+		const content = await this.app.vault.cachedRead(sourceNote);
+		const candidates = parseAudioLinks(content)
+			.map((match) => this.audioFileService.resolveAudioFile(match.linkPath, sourceNote))
+			.filter((file): file is TFile => Boolean(file))
+			.filter((file) => isSupportedAudioFile(file))
+			.map((file) => ({ path: file.path, createdAt: file.stat.ctime, value: file }));
+		const audioFile = selectNewGettingStartedAudio(
+			candidates,
+			startedAt,
+			this.gettingStartedKnownAudioPaths,
+			waitingForFirst ? undefined : state.firstAudioPath
+		);
+		if (!audioFile) {
+			return;
+		}
+		const recordedState = waitingForFirst
+			? recordFirstGettingStartedAudio(state, audioFile.path)
+			: recordShortcutGettingStartedAudio(state, audioFile.path);
+		this.settings.gettingStartedState = waitingForShortcut
+			? waitForShortcutGettingStartedTranscription(recordedState)
+			: recordedState;
+		await this.saveSettings();
+		this.gettingStartedKnownAudioPaths.add(audioFile.path);
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+		if (waitingForShortcut) {
+			await this.openFileInMainWorkspace(sourceNote);
+			const hotkey = formatHotkey(this.getGettingStartedHotkeys().transcribe);
+			new Notice(
+				hotkey
+					? `录音已保存，请按 ${hotkey} 转写当前笔记全部音频。转写成功后会自动生成 AI 分析。`
+					: "录音已保存，请执行“转写当前笔记全部音频”命令。",
+				0
+			);
+		}
+	}
+
+	private async createGettingStartedExperienceNote(): Promise<void> {
+		let note = this.getGettingStartedFile(
+			getGettingStartedExperienceNotePath(this.settings.gettingStartedState)
+		) ?? this.getGettingStartedFile(this.settings.gettingStartedState.experienceNotePath);
+		if (!note) {
+			note = await this.createNewGettingStartedExperienceNote();
+		}
+		await this.captureGettingStartedKnownAudioPaths(note);
+		this.settings.gettingStartedState = beginFirstGettingStartedPractice(
+			this.settings.gettingStartedState,
+			note.path
+		);
+		await this.saveSettings();
+		await this.openFileInMainWorkspace(note);
+		await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+		const started = this.executeObsidianCommand(AUDIO_RECORDER_START_COMMAND_ID);
+		if (!started) {
+			new Notice("无法启动核心录音机，请确认 Audio recorder 已开启后重试。");
+			this.settings.gettingStartedState = cancelFirstGettingStartedRecording(
+				this.settings.gettingStartedState
+			);
+			await this.saveSettings();
+		} else {
+			new Notice("录音已开始，说几句话后在右侧新人指引中点击停止录音。");
+		}
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+	}
+
+	private async stopGettingStartedFirstRecording(): Promise<void> {
+		if (!this.executeObsidianCommand(AUDIO_RECORDER_STOP_COMMAND_ID)) {
+			new Notice("无法停止核心录音机，请确认录音正在进行。");
+			this.settings.gettingStartedState = cancelFirstGettingStartedRecording(
+				this.settings.gettingStartedState
+			);
+			await this.saveSettings();
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+			return;
+		}
+		new Notice("正在等待 Obsidian 保存录音并插入体验笔记。");
+		const note = this.getGettingStartedFile(
+			getGettingStartedExperienceNotePath(this.settings.gettingStartedState)
+		);
+		if (note) {
+			window.setTimeout(() => void this.detectGettingStartedAudio(note), 300);
+		}
+	}
+
+	private async transcribeGettingStartedFirstRecording(): Promise<void> {
+		const state = this.settings.gettingStartedState;
+		const audioFile = this.getGettingStartedFile(getGettingStartedActiveAudioPath(state));
+		const sourceNote = this.getGettingStartedFile(getGettingStartedExperienceNotePath(state));
+		if (!audioFile || !sourceNote) {
+			new Notice("体验录音或笔记不存在，请重新开始新人旅程。");
+			return;
+		}
+		this.settings.gettingStartedState = beginFirstGettingStartedTranscription(state);
+		await this.saveSettings();
+		await this.openFileInMainWorkspace(sourceNote);
+		const content = await this.app.vault.cachedRead(sourceNote);
+		const audioMatch = parseAudioLinks(content).find((match) =>
+			this.audioFileService.resolveAudioFile(match.linkPath, sourceNote)?.path === audioFile.path
+		);
+		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
+			audioLinkPath: audioMatch?.linkPath,
+			onTranscriptFileReady: audioMatch
+				? (transcriptFile) => this.insertTranscriptLinkIntoFile(sourceNote, audioMatch.linkPath, transcriptFile)
+				: undefined
+		});
+		if (!result && getGettingStartedPracticeStage(this.settings.gettingStartedState) === "first-transcribing") {
+			this.settings.gettingStartedState = cancelFirstGettingStartedTranscription(
+				this.settings.gettingStartedState
+			);
+			await this.saveSettings();
+			await this.activateTaskCenterView({ revealGettingStarted: true });
+		}
+	}
+
+	private async startGettingStartedShortcutPractice(): Promise<void> {
+		let state = this.settings.gettingStartedState;
+		let note = this.getGettingStartedFile(getGettingStartedExperienceNotePath(state)) ??
+			this.getGettingStartedFile(state.experienceNotePath);
+		if (!note) {
+			note = await this.createNewGettingStartedExperienceNote();
+		}
+		if (state.activeReview?.chapter === "shortcut") {
+			state = {
+				...state,
+				activeReview: { ...state.activeReview, experienceNotePath: note.path }
+			};
+		} else if (!state.experienceNotePath) {
+			state = { ...state, experienceNotePath: note.path };
+		}
+		this.settings.gettingStartedState = beginShortcutGettingStartedPractice(state);
+		await this.captureGettingStartedKnownAudioPaths(note);
+		await this.saveSettings();
+		await this.openFileInMainWorkspace(note);
+		const hotkeys = this.getGettingStartedHotkeys();
+		new Notice(`请按 ${formatHotkey(hotkeys.start)} 开始录音，说几句话后按 ${formatHotkey(hotkeys.stop)} 停止。`, 0);
+	}
+
+	private async openGettingStartedExperienceNote(): Promise<void> {
+		const state = this.settings.gettingStartedState;
+		const note = this.getGettingStartedFile(getGettingStartedExperienceNotePath(state)) ??
+			this.getGettingStartedFile(state.chapters.shortcut.latestReviewExperienceNotePath) ??
+			this.getGettingStartedFile(state.chapters.first.latestReviewExperienceNotePath) ??
+			this.getGettingStartedFile(state.experienceNotePath);
+		if (!note) {
+			new Notice("体验笔记不存在。");
+			return;
+		}
+		await this.openFileInMainWorkspace(note);
+	}
+
+	private async waitForGettingStartedShortcutTranscription(): Promise<void> {
+		this.settings.gettingStartedState = waitForShortcutGettingStartedTranscription(
 			this.settings.gettingStartedState
 		);
 		await this.saveSettings();
-		const modal = new GettingStartedModal(this.app, async (start) => {
-			this.gettingStartedWelcomeModal = null;
-			if (start) {
-				await this.openGettingStarted();
-				return;
-			}
-			this.settings.gettingStartedState = dismissGettingStarted(
-				this.settings.gettingStartedState
-			);
-			this.gettingStartedGuideExpanded = false;
-			await this.saveSettings();
-		});
-		this.gettingStartedWelcomeModal = modal;
-		modal.open();
+		await this.openGettingStartedExperienceNote();
+		new Notice(`请按 ${formatHotkey(this.getGettingStartedHotkeys().transcribe)} 开始转写，AI 分析会在转写成功后自动执行。`, 0);
 	}
 
-	private async recordGettingStartedSuccess(milestone: GettingStartedMilestone): Promise<void> {
-		if (this.settings.gettingStartedState.status !== "in-progress") {
+	private async initializeGettingStartedMemory(): Promise<void> {
+		this.openMemoryInitialization(
+			undefined,
+			() => window.setTimeout(() => {
+				void this.activateTaskCenterView({ revealGettingStarted: true });
+			}, 0)
+		);
+	}
+
+	private async startGettingStartedMemory(): Promise<void> {
+		const transcript = this.getGettingStartedFile(
+			getGettingStartedMemorySourcePath(this.settings.gettingStartedState)
+		);
+		if (!transcript || !this.isTranscriptMarkdownFile(transcript)) {
+			new Notice("请先选择一份有效的 Echo Notes 转写稿。");
 			return;
 		}
-		this.settings.gettingStartedState = recordGettingStartedMilestone(
-			this.settings.gettingStartedState,
-			milestone
-		);
-		if (this.settings.gettingStartedState.status === "completed") {
-			this.gettingStartedGuideExpanded = true;
-			this.gettingStartedCompletionVisible = true;
-			if (this.gettingStartedCompletionTimer !== null) {
-				window.clearTimeout(this.gettingStartedCompletionTimer);
-			}
-			this.gettingStartedCompletionTimer = window.setTimeout(() => {
-				this.gettingStartedCompletionTimer = null;
-				this.gettingStartedCompletionVisible = false;
-				this.gettingStartedGuideExpanded = false;
-				this.notifySettingsChanged();
-			}, 3000);
-		}
-		await this.saveSettings();
+		await this.startMemoryTask(transcript, undefined, true);
 	}
 
-	private currentNoteHasAudio(): boolean {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		const sourceNote = view?.file;
-		if (!view || !sourceNote) {
+	private async selectGettingStartedMemoryTranscript(): Promise<void> {
+		const transcripts = this.app.vault.getMarkdownFiles()
+			.filter((file) => this.isTranscriptMarkdownFile(file))
+			.sort((left, right) => right.stat.mtime - left.stat.mtime);
+		if (transcripts.length === 0) {
+			new Notice("Vault 中还没有可用的 Echo Notes 转写稿。");
+			return;
+		}
+		const transcript = await selectGettingStartedTranscript(this.app, transcripts);
+		if (!transcript) {
+			return;
+		}
+		this.settings.gettingStartedState = selectGettingStartedMemorySource(
+			this.settings.gettingStartedState,
+			transcript.path
+		);
+		await this.saveSettings();
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+	}
+
+	private async openGettingStartedTranscript(kind: "first" | "shortcut"): Promise<void> {
+		const state = this.settings.gettingStartedState;
+		const transcript = this.getGettingStartedFile(
+			kind === "shortcut"
+				? state.chapters.shortcut.latestReviewTranscriptPath ?? state.shortcutTranscriptPath
+				: state.chapters.first.latestReviewTranscriptPath ?? state.firstTranscriptPath
+		);
+		if (!transcript) {
+			new Notice("新人旅程转写稿不存在。");
+			return;
+		}
+		await this.openFileInMainWorkspace(transcript);
+	}
+
+	private async openGettingStartedMemoryCandidate(): Promise<void> {
+		const state = this.settings.gettingStartedState;
+		const candidate = this.getGettingStartedFile(
+			state.chapters.memory.latestReviewCandidatePath ?? state.memoryCandidatePath
+		);
+		if (!candidate) {
+			new Notice("候选记忆文件不存在或旧版新人指引未记录该路径。");
+			return;
+		}
+		await this.openFileInMainWorkspace(candidate);
+	}
+
+	private getGettingStartedFile(path: string | undefined): TFile | null {
+		if (!path) {
+			return null;
+		}
+		const file = this.app.vault.getAbstractFileByPath(path);
+		return file instanceof TFile ? file : null;
+	}
+
+	private async createNewGettingStartedExperienceNote(): Promise<TFile> {
+		const path = getAvailableGettingStartedNotePath((candidatePath) =>
+			Boolean(this.app.vault.getAbstractFileByPath(candidatePath))
+		);
+		return this.app.vault.create(
+			path,
+			"---\necho_notes_getting_started: true\n---\n\n# Echo Notes 首次体验\n\n"
+		);
+	}
+
+	private async openFileInMainWorkspace(file: TFile): Promise<void> {
+		const activeMarkdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const leaf = activeMarkdownView?.leaf ?? this.app.workspace.getLeaf("tab");
+		await leaf.openFile(file);
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
+	}
+
+	private executeObsidianCommand(commandId: string): boolean {
+		return (this.app as unknown as AppWithInternals).commands?.executeCommandById?.(commandId) ?? false;
+	}
+
+	private async captureGettingStartedKnownAudioPaths(sourceNote: TFile): Promise<void> {
+		const content = await this.app.vault.cachedRead(sourceNote);
+		this.gettingStartedKnownAudioPaths = new Set(
+			parseAudioLinks(content)
+				.map((match) => this.audioFileService.resolveAudioFile(match.linkPath, sourceNote)?.path)
+				.filter((path): path is string => Boolean(path))
+		);
+	}
+
+	private async markGettingStartedRunning(
+		kind: GettingStartedFailureKind,
+		targetPath: string
+	): Promise<void> {
+		if (!this.matchesGettingStartedTarget(kind, targetPath)) {
+			return;
+		}
+		this.settings.gettingStartedState = markGettingStartedTaskRunning(
+			this.settings.gettingStartedState,
+			kind
+		);
+		await this.saveSettings();
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+	}
+
+	private async markGettingStartedTranscriptionSuccess(audioPath: string, transcriptPath: string): Promise<void> {
+		const nextState = recordGettingStartedTranscription(
+			this.settings.gettingStartedState,
+			audioPath,
+			transcriptPath
+		);
+		if (JSON.stringify(nextState) === JSON.stringify(this.settings.gettingStartedState)) {
+			return;
+		}
+		this.settings.gettingStartedState = nextState;
+		await this.saveSettings();
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+	}
+
+	private async markGettingStartedAnalysisSuccess(transcriptPath: string): Promise<void> {
+		const nextState = recordGettingStartedAnalysis(this.settings.gettingStartedState, transcriptPath);
+		if (JSON.stringify(nextState) === JSON.stringify(this.settings.gettingStartedState)) {
+			return;
+		}
+		this.settings.gettingStartedState = nextState;
+		await this.saveSettings();
+		const transcript = this.getGettingStartedFile(transcriptPath);
+		if (transcript) {
+			await this.openFileInMainWorkspace(transcript);
+		}
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+	}
+
+	private async markGettingStartedMemorySuccess(transcriptPath: string, candidatePath: string): Promise<void> {
+		const nextState = recordGettingStartedMemory(
+			this.settings.gettingStartedState,
+			transcriptPath,
+			candidatePath
+		);
+		if (JSON.stringify(nextState) === JSON.stringify(this.settings.gettingStartedState)) {
+			return;
+		}
+		this.settings.gettingStartedState = nextState;
+		await this.saveSettings();
+		await this.activateTaskCenterView();
+	}
+
+	private async markGettingStartedFailure(
+		kind: GettingStartedFailureKind,
+		targetPath: string,
+		taskId: string
+	): Promise<void> {
+		if (!this.matchesGettingStartedTarget(kind, targetPath)) {
+			return;
+		}
+		this.settings.gettingStartedState = recordGettingStartedFailure(
+			this.settings.gettingStartedState,
+			kind,
+			taskId
+		);
+		await this.saveSettings();
+		await this.activateTaskCenterView({ revealGettingStarted: true });
+	}
+
+	private matchesGettingStartedTarget(kind: GettingStartedFailureKind, targetPath: string): boolean {
+		const state = this.settings.gettingStartedState;
+		const review = state.activeReview;
+		if (review) {
+			if (kind === "transcription") {
+				return (review.chapter === "first" || review.chapter === "shortcut") &&
+					targetPath === review.audioPath;
+			}
+			if (kind === "analysis") {
+				return review.chapter === "shortcut" && targetPath === review.transcriptPath;
+			}
+			return review.chapter === "memory" && targetPath === review.memorySourceTranscriptPath;
+		}
+		if (state.status !== "in-progress") {
 			return false;
 		}
-		return parseAudioLinks(view.editor.getValue()).some((match) =>
-			Boolean(this.audioFileService.resolveAudioFile(match.linkPath, sourceNote))
-		);
+		if (kind === "transcription") {
+			return state.step === "first-practice" && targetPath === state.firstAudioPath ||
+				state.step === "shortcut-practice" && targetPath === state.shortcutAudioPath;
+		}
+		if (kind === "analysis") {
+			return state.step === "shortcut-practice" &&
+				state.chapters.shortcut.outcome === "pending" &&
+				targetPath === state.shortcutTranscriptPath;
+		}
+		return getCurrentGettingStartedChapter(state) === "memory" &&
+			targetPath === getGettingStartedMemorySourcePath(state);
 	}
 
 	private notifySettingsChanged(): void {
 		for (const listener of this.settingsListeners) {
+			listener();
+		}
+	}
+
+	private notifyGettingStartedChanged(): void {
+		for (const listener of this.gettingStartedListeners) {
 			listener();
 		}
 	}
@@ -716,7 +1376,7 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 
-		await this.app.workspace.getLeaf(false).openFile(file);
+		await this.openFileInMainWorkspace(file);
 	}
 
 	isOfficialAudioRecorderEnabled(): boolean | null {
@@ -796,24 +1456,11 @@ export default class EchoNotesPlugin extends Plugin {
 
 	async setTranscribeAllAudioHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
 		const commandId = `${this.manifest.id}:transcribe-all-audio-files-in-current-note`;
-		const hotkeyManager = this.getHotkeyManager();
-		if (typeof hotkeyManager?.setHotkeys !== "function" || typeof hotkeyManager?.save !== "function") {
-			new Notice("当前 Obsidian 版本未暴露快捷键内部 API，请到 Obsidian 快捷键设置中手动修改 Echo Notes 命令。");
-			return false;
-		}
-
-		try {
-			hotkeyManager.setHotkeys(commandId, this.getCommandHotkeys(hotkey));
-			await hotkeyManager.save();
+		const saved = await this.setObsidianCommandHotkey(commandId, hotkey, "转写当前笔记全部音频", "Echo Notes");
+		if (saved) {
 			this.settings.transcribeAllAudioHotkey = cloneHotkey(hotkey);
-			new Notice("已保存 Echo Notes 转写当前笔记全部音频快捷键。");
-			return true;
-		} catch (error) {
-			const message = getErrorMessage(error);
-			new Notice(`保存 Echo Notes 快捷键失败：${message}`);
-			this.log("保存 Echo Notes 快捷键失败", { commandId, error: message });
-			return false;
 		}
+		return saved;
 	}
 
 	getApiKey(provider: TranscriptionProviderId = getSelectedTranscriptionConfig(this.settings).provider): string {
@@ -882,10 +1529,10 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	openMemoryInitialization(onInitialized?: () => void): void {
+	openMemoryInitialization(onInitialized?: () => void, onClosed?: () => void): void {
 		if (this.settings.memoryInitialized) {
 			new Notice("Echo Memory 已初始化。");
-			void this.openMemoryHome();
+			void this.openMemoryHome().finally(() => onClosed?.());
 			return;
 		}
 		new MemoryInitializationModal(this.app, async (profile) => {
@@ -897,7 +1544,7 @@ export default class EchoNotesPlugin extends Plugin {
 			onInitialized?.();
 			await this.app.workspace.getLeaf(false).openFile(homeFile);
 			new Notice("Echo Memory 已初始化并启用。");
-		}).open();
+		}, onClosed).open();
 	}
 
 	async openMemoryHome(): Promise<void> {
@@ -993,8 +1640,25 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice("请先打开一个 Echo Memory 候选包或审核文件。");
 			return;
 		}
+		await this.openMemoryCandidateReview(currentFile);
+	}
+
+	async reviewMemoryCandidatePath(path: string): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			new Notice(`候选记忆文件不存在：${path}`);
+			return;
+		}
+		await this.openMemoryCandidateReview(file);
+	}
+
+	private async openMemoryCandidateReview(file: TFile): Promise<void> {
 		try {
-			const context = await this.memoryService.getReviewContext(this.settings, currentFile);
+			const context = await this.memoryService.getReviewContext(this.settings, file);
 			new MemoryReviewModal(this.app, context.candidate, context.review, async (updates) => {
 				const result = await this.memoryService.saveMemoryReview(this.settings, context.candidatePath, updates);
 				const reviewFile = this.app.vault.getAbstractFileByPath(result.reviewPath);
@@ -1011,6 +1675,22 @@ export default class EchoNotesPlugin extends Plugin {
 		} catch (error) {
 			new Notice(`无法打开候选审核：${getErrorMessage(error)}`);
 		}
+	}
+
+	private showMemoryReviewNotice(message: string, candidatePath: string): void {
+		const fragment = createFragment();
+		fragment.createSpan({ text: message });
+		fragment.appendText(" ");
+		const buttonEl = fragment.createEl("button", {
+			cls: "echo-notes-notice-action",
+			text: "立即审核",
+			attr: { type: "button" }
+		});
+		const notice = new Notice(fragment, 12000);
+		buttonEl.addEventListener("click", () => {
+			notice.hide();
+			void this.reviewMemoryCandidatePath(candidatePath);
+		});
 	}
 
 	async manageCurrentMemoryRelations(): Promise<void> {
@@ -1080,7 +1760,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-task-center",
-			name: "Open Task Center",
+			name: "打开任务中心",
 			callback: () => {
 				void this.activateTaskCenterView();
 			}
@@ -1088,7 +1768,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-getting-started",
-			name: "Open getting started",
+			name: "打开新人指引",
 			callback: () => {
 				void this.openGettingStarted();
 			}
@@ -1096,7 +1776,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "transcribe-selected-audio",
-			name: "Transcribe selected audio",
+			name: "转写选中音频",
 			editorCallback: (editor, view) => {
 				void this.handleTranscribeSelectedAudio(editor, view);
 			}
@@ -1104,7 +1784,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "transcribe-all-audio-files-in-current-note",
-			name: "Transcribe all audio files in current note",
+			name: "转写当前笔记全部音频",
 			editorCallback: (editor, view) => {
 				void this.handleTranscribeAllAudioInCurrentNote(editor, view);
 			}
@@ -1112,7 +1792,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "start-realtime-transcription",
-			name: "Start realtime transcription",
+			name: "开始实时转写",
 			checkCallback: (checking) => {
 				const available = !this.activeRealtimeRecording;
 				if (available && !checking) {
@@ -1124,7 +1804,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "stop-realtime-transcription",
-			name: "Stop realtime transcription",
+			name: "停止实时转写",
 			checkCallback: (checking) => {
 				const available = Boolean(this.activeRealtimeRecording);
 				if (available && !checking) {
@@ -1136,7 +1816,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-active-realtime-transcript",
-			name: "Open active realtime transcript",
+			name: "打开当前实时转写稿",
 			checkCallback: (checking) => {
 				const recording = this.activeRealtimeRecording;
 				if (recording && !checking) {
@@ -1148,7 +1828,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "analyze-current-transcript-with-template",
-			name: "Analyze current transcript with selected template",
+			name: "使用选定模板分析当前转写稿",
 			callback: () => {
 				void this.handleAnalyzeCurrentTranscriptWithTemplate();
 			}
@@ -1156,13 +1836,13 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "initialize-echo-memory",
-			name: "Initialize Echo Memory",
+			name: "初始化 Echo Memory",
 			callback: () => this.openMemoryInitialization()
 		});
 
 		this.addCommand({
 			id: "extract-memory-from-current-transcript",
-			name: "Extract memory from current transcript",
+			name: "从当前转写稿提取记忆",
 			callback: () => {
 				void this.handleExtractMemoryFromCurrentTranscript();
 			}
@@ -1170,7 +1850,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "review-current-memory-candidate",
-			name: "Review current memory candidate",
+			name: "审核当前记忆候选",
 			callback: () => {
 				void this.reviewCurrentMemoryCandidate();
 			}
@@ -1178,7 +1858,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "manage-current-memory-relations",
-			name: "Manage current memory relations",
+			name: "管理当前记忆关系",
 			callback: () => {
 				void this.manageCurrentMemoryRelations();
 			}
@@ -1186,7 +1866,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-echo-memory-home",
-			name: "Open Echo Memory home",
+			name: "打开 Echo Memory 首页",
 			callback: () => {
 				void this.openMemoryHome();
 			}
@@ -1194,7 +1874,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-echo-memory-timeline",
-			name: "Open Echo Memory timeline",
+			name: "打开 Echo Memory 时间线",
 			callback: () => {
 				void this.openMemoryTimeline();
 			}
@@ -1202,7 +1882,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "create-personal-agent-context-package",
-			name: "Create personal agent context package",
+			name: ["生成", "Personal Agent", "上下文包"].join(" "),
 			callback: () => {
 				void this.openPersonalAgentContextPackage();
 			}
@@ -1210,13 +1890,12 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "rebuild-memory-profiles",
-			name: "Rebuild memory profiles and aggregations from candidates",
+			name: "从候选包重建记忆画像与聚合视图",
 			callback: () => {
 				void this.rebuildMemoryProfiles();
 			}
 		});
 
-		this.applyConfiguredTranscribeAllAudioHotkey();
 	}
 
 	private registerEditorContextMenu(): void {
@@ -1247,22 +1926,6 @@ export default class EchoNotesPlugin extends Plugin {
 		} catch {
 			// 命令尚未注册时，部分 Obsidian 版本会抛错。
 		}
-	}
-
-	private getCommandHotkeys(hotkey: EchoNotesHotkeySetting): Hotkey[] {
-		const cloned = cloneHotkey(hotkey);
-		return cloned ? [cloned] : [];
-	}
-
-	private applyConfiguredTranscribeAllAudioHotkey(): void {
-		const hotkey = cloneHotkey(this.settings.transcribeAllAudioHotkey);
-		if (!hotkey) {
-			return;
-		}
-		this.getHotkeyManager()?.setHotkeys?.(
-			`${this.manifest.id}:transcribe-all-audio-files-in-current-note`,
-			[hotkey]
-		);
 	}
 
 	private getInternalPlugins(): InternalPlugins | undefined {
@@ -1296,24 +1959,39 @@ export default class EchoNotesPlugin extends Plugin {
 	private async setObsidianCommandHotkey(
 		commandId: string,
 		hotkey: EchoNotesHotkeySetting,
-		actionLabel: string
+		actionLabel: string,
+		commandOwner = "Obsidian 核心插件录音机"
 	): Promise<boolean> {
 		const hotkeyManager = this.getHotkeyManager();
-		if (typeof hotkeyManager?.setHotkeys !== "function" || typeof hotkeyManager?.save !== "function") {
+		const commands = (this.app as unknown as AppWithInternals).commands?.commands;
+		if (!commands || typeof hotkeyManager?.setHotkeys !== "function" || typeof hotkeyManager?.save !== "function") {
 			new Notice("当前 Obsidian 版本未暴露快捷键内部 API，请到 Obsidian 快捷键设置中手动修改 Audio recorder。");
 			return false;
 		}
-
-		try {
-			hotkeyManager.setHotkeys(commandId, this.getCommandHotkeys(hotkey));
-			await hotkeyManager.save();
-			new Notice(`已保存 Obsidian 核心插件录音机${actionLabel}快捷键。`);
-			return true;
-		} catch (error) {
-			new Notice(`保存 Obsidian 核心插件录音机快捷键失败：${getErrorMessage(error)}`);
-			this.log("保存 Obsidian 核心插件录音机快捷键失败", { commandId, error });
+		const result = await saveHotkeyAssignments(
+			[{ id: "hotkey", commandId, hotkey }],
+			commands,
+			{
+				getHotkeys: (id) => hotkeyManager.getHotkeys?.(id),
+				getDefaultHotkeys: (id) => hotkeyManager.getDefaultHotkeys?.(id),
+				setHotkeys: (id, commandHotkeys) => hotkeyManager.setHotkeys?.(id, commandHotkeys),
+				save: () => hotkeyManager.save?.()
+			}
+		);
+		if (result.conflicts.hotkey?.length) {
+			new Notice(`快捷键与其他命令冲突，未保存：${result.conflicts.hotkey.join("、")}`);
 			return false;
 		}
+		if (result.saved) {
+			new Notice(`已保存${commandOwner}${actionLabel}快捷键。`);
+			return true;
+		}
+		if (result.rollbackError) {
+			this.log("回滚快捷键失败", { commandId, error: result.rollbackError });
+		}
+		new Notice(`保存${commandOwner}快捷键失败：${getErrorMessage(result.error)}`);
+		this.log(`保存${commandOwner}快捷键失败`, { commandId, error: result.error });
+		return false;
 	}
 
 	private getInternalPlugin(pluginId: string): InternalPlugin | null {
@@ -1612,6 +2290,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			new Notice("Transcript 已存在，已跳过转写。");
 			await notifyTranscriptFileReady(reusableTranscript);
+			await this.markGettingStartedTranscriptionSuccess(audioFile.path, reusableTranscript.path);
 			return { transcriptFile: reusableTranscript, analysisEligible: true };
 		}
 
@@ -1665,9 +2344,22 @@ export default class EchoNotesPlugin extends Plugin {
 				run: () => this.retryTranscriptionTask(audioFile.path, sourceNote?.path, options.audioLinkPath)
 			}
 		});
+		await this.markGettingStartedRunning("transcription", audioFile.path);
 		let completedSegments: TranscriptionSegment[] = [];
 		let streamingState: StreamingTranscriptionState | undefined;
 		let diagnosticsPassed = false;
+		let longAudioNotice: Notice | null = null;
+		const updateLongAudioNotice = (message: string): void => {
+			if (!longAudioNotice) {
+				longAudioNotice = new Notice(message, 0);
+				return;
+			}
+			longAudioNotice.setMessage(message);
+		};
+		const hideLongAudioNotice = (): void => {
+			longAudioNotice?.hide();
+			longAudioNotice = null;
+		};
 		try {
 			const diagnostics = diagnoseTranscriptionProviderSettings(
 				transcriptionConfig,
@@ -1759,7 +2451,7 @@ export default class EchoNotesPlugin extends Plugin {
 						currentSegment: completedSegments.length,
 						totalSegments: undefined
 					});
-					new Notice(`正在准备长音频分段：${audioFile.name}`);
+					updateLongAudioNotice(`长音频处理中：正在准备分段 · ${audioFile.name}`);
 					return;
 				}
 
@@ -1783,10 +2475,10 @@ export default class EchoNotesPlugin extends Plugin {
 						currentSegment: completedSegments.length,
 						totalSegments: progress.totalSegments
 					});
-					new Notice(
+					updateLongAudioNotice(
 						completedSegments.length > 0
-							? `已恢复 ${completedSegments.length} 个成功分段，只转写剩余内容：${audioFile.name}`
-							: `长音频将分 ${progress.totalSegments} 段逐步转写：${audioFile.name}`
+							? `长音频处理中：已恢复 ${completedSegments.length}/${progress.totalSegments} 段，继续转写剩余内容 · ${audioFile.name}`
+							: `长音频处理中：共 ${progress.totalSegments} 段，正在逐段转写 · ${audioFile.name}`
 					);
 					return;
 				}
@@ -1797,8 +2489,8 @@ export default class EchoNotesPlugin extends Plugin {
 						currentSegment: progress.segment.index,
 						totalSegments: progress.segment.total
 					});
-					new Notice(
-						`开始转写分段 ${progress.segment.index}/${progress.segment.total}：${audioFile.name}`
+					updateLongAudioNotice(
+						`长音频处理中：正在转写分段 ${progress.segment.index}/${progress.segment.total} · ${audioFile.name}`
 					);
 					return;
 				}
@@ -1815,8 +2507,8 @@ export default class EchoNotesPlugin extends Plugin {
 						currentSegment: progress.segment?.index,
 						totalSegments: progress.segment?.total
 					});
-					new Notice(
-						`${targetText}${rangeText} 转写失败，正在进行第 ${progress.attempt}/${progress.maxAttempts} 次重试。`
+					updateLongAudioNotice(
+						`长音频处理中：${targetText}${rangeText}失败，${Math.round(progress.delayMs / 1000)} 秒后重试 ${progress.attempt}/${progress.maxAttempts} · ${audioFile.name}`
 					);
 					return;
 				}
@@ -1838,8 +2530,8 @@ export default class EchoNotesPlugin extends Plugin {
 						currentSegment: completedSegments.length,
 						totalSegments: progress.totalSegments
 					});
-					new Notice(
-						`分段 ${rangeText} 持续失败，已自动缩小为 ${progress.replacementSegments.length} 段；已完成内容不会重传。`
+					updateLongAudioNotice(
+						`长音频处理中：分段 ${rangeText} 已缩小为 ${progress.replacementSegments.length} 段，已完成内容不会重传 · ${audioFile.name}`
 					);
 					return;
 				}
@@ -1859,7 +2551,9 @@ export default class EchoNotesPlugin extends Plugin {
 					currentSegment: progress.segment.index,
 					totalSegments: progress.segment.total
 				});
-				new Notice(`已写入分段 ${progress.segment.index}/${progress.segment.total}：${audioFile.name}`);
+				updateLongAudioNotice(
+					`长音频处理中：已完成分段 ${progress.segment.index}/${progress.segment.total} · ${audioFile.name}`
+				);
 			};
 			const result = await provider.transcribe({
 				audioFile,
@@ -1870,6 +2564,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			await notifyTranscriptFileReady(transcriptFile);
+			hideLongAudioNotice();
 			this.taskCenter.updateTask(transcriptionTaskId, {
 				status: "success",
 				stage: "转写完成",
@@ -1882,10 +2577,11 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 					completedAt: Date.now()
 				});
-				await this.recordGettingStartedSuccess("transcription");
+				await this.markGettingStartedTranscriptionSuccess(audioFile.path, transcriptFile.path);
 				new Notice(`转写完成：${audioFile.name}`);
 				return { transcriptFile, analysisEligible: true };
 		} catch (error) {
+			hideLongAudioNotice();
 			const message = getErrorMessage(error);
 			const traceId = error instanceof TranscriptionError ? error.traceId ?? streamingState?.traceId : streamingState?.traceId;
 			this.taskCenter.updateTask(transcriptionTaskId, {
@@ -1895,7 +2591,8 @@ export default class EchoNotesPlugin extends Plugin {
 				traceId,
 				completedAt: Date.now()
 			});
-			new Notice(`转写失败：${message}`);
+			await this.markGettingStartedFailure("transcription", audioFile.path, transcriptionTaskId);
+			new Notice(getTaskFailureNotice("transcription", message));
 			this.log("转写失败", error);
 
 			if (
@@ -2080,6 +2777,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		});
 		this.processingAnalyses.add(processingKey);
+		await this.markGettingStartedRunning("analysis", transcriptFile.path);
 		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
 		return this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId);
 	}
@@ -2111,6 +2809,7 @@ export default class EchoNotesPlugin extends Plugin {
 				completedAt: Date.now()
 			});
 			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
+			await this.markGettingStartedFailure("analysis", transcriptFile.path, analysisTaskId);
 			this.processingAnalyses.delete(processingKey);
 			return false;
 		}
@@ -2142,6 +2841,7 @@ export default class EchoNotesPlugin extends Plugin {
 					completedAt: Date.now()
 				});
 				new Notice("转写稿内容为空，已跳过 AI 纪要分析。");
+				await this.markGettingStartedFailure("analysis", transcriptFile.path, analysisTaskId);
 				return false;
 			}
 
@@ -2262,7 +2962,7 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
-			await this.recordGettingStartedSuccess("analysis");
+			await this.markGettingStartedAnalysisSuccess(transcriptFile.path);
 			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
 			return true;
 		} catch (error) {
@@ -2282,7 +2982,8 @@ export default class EchoNotesPlugin extends Plugin {
 				error: message,
 				completedAt: Date.now()
 			});
-			new Notice(`${templateTitle} 生成失败：${message}`);
+			await this.markGettingStartedFailure("analysis", transcriptFile.path, analysisTaskId);
+			new Notice(getTaskFailureNotice("analysis", message));
 			this.log("AI 纪要分析失败", error);
 			return false;
 		} finally {
@@ -2345,6 +3046,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		} as const;
 		this.taskCenter.restartTask(task);
+		await this.markGettingStartedRunning("memory", transcriptFile.path);
 		new Notice(`${retryRequested ? "重新开始" : "后台提取"}记忆：${transcriptFile.name}`);
 		const activeMemoryTask: ActiveMemoryTask = {
 			controller,
@@ -2408,10 +3110,15 @@ export default class EchoNotesPlugin extends Plugin {
 				traceId: result.traceIds.join(", ") || undefined,
 				completedAt: Date.now()
 			});
-			new Notice(
+			await this.markGettingStartedMemorySuccess(
+				transcriptFile.path,
+				result.candidateFilePath
+			);
+			this.showMemoryReviewNotice(
 				result.skipped
 					? `记忆候选已存在：${transcriptFile.name}`
-					: `已沉淀 ${result.assertionCount} 条候选记忆${formatRejectedMemoryAssertionSummary(result.rejectedAssertionCount)}：${transcriptFile.name}`
+					: `已沉淀 ${result.assertionCount} 条候选记忆${formatRejectedMemoryAssertionSummary(result.rejectedAssertionCount)}：${transcriptFile.name}`,
+				result.candidateFilePath
 			);
 		} catch (error) {
 			if (controller.signal.aborted || this.activeMemoryTasks.get(processingKey)?.controller !== controller) {
@@ -2424,12 +3131,13 @@ export default class EchoNotesPlugin extends Plugin {
 				error: message,
 				completedAt: Date.now()
 			});
+			await this.markGettingStartedFailure("memory", transcriptFile.path, taskId);
 			try {
 				await this.memoryService.appendExtractionFailureLog(this.settings, transcriptFile.path, message);
 			} catch (logError) {
 				this.log("写入 Echo Memory 失败日志失败", logError);
 			}
-			new Notice(`记忆提取失败：${message}`);
+			new Notice(getTaskFailureNotice("memory", message));
 			this.log("Echo Memory 记忆提取失败", error);
 		} finally {
 			if (this.activeMemoryTasks.get(processingKey)?.controller === controller) {
@@ -2696,7 +3404,6 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
-			await this.recordGettingStartedSuccess("transcription");
 			new Notice(`实时转写完成：${recording.audioFile.name}`);
 			this.startAnalysisTasks(
 				transcriptFile,
@@ -3054,6 +3761,8 @@ function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination):
 			return "录音转写 → 转写服务";
 		case "analysis-model":
 			return "AI 分析 → 模型配置";
+		case "memory-model":
+			return "Echo Memory → 模型配置";
 		case "transcription-recording":
 			return "录音转写 → 录音控制";
 	}

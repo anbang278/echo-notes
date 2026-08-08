@@ -1,6 +1,6 @@
 import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type EchoNotesPlugin from "../main";
-import type { GettingStartedChecklistSnapshot } from "../main";
+import { GettingStartedGuide } from "../getting-started/getting-started-guide";
 import {
 	formatTaskBytes,
 	formatTaskElapsedTime,
@@ -8,12 +8,17 @@ import {
 	type EchoNotesTask,
 	type EchoNotesTaskStatus
 } from "./task-center-store";
+import { filterTaskCenterTasks, getTaskFailureGuidance, getTaskNextStep } from "./task-center-copy";
 
 export const ECHO_NOTES_TASK_CENTER_VIEW_TYPE = "echo-notes-task-center";
 
 export class EchoNotesTaskCenterView extends ItemView {
 	private plugin: EchoNotesPlugin;
 	private unsubscribers: Array<() => void> = [];
+	private gettingStartedGuide: GettingStartedGuide | null = null;
+	private statusFilter: EchoNotesTaskStatus | "all" = "all";
+	private kindFilter: EchoNotesTask["kind"] | "all" = "all";
+	private query = "";
 
 	constructor(leaf: WorkspaceLeaf, plugin: EchoNotesPlugin) {
 		super(leaf);
@@ -33,9 +38,14 @@ export class EchoNotesTaskCenterView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.gettingStartedGuide = new GettingStartedGuide(
+			() => this.plugin.getGettingStartedGuideSnapshot(),
+			this.plugin.getGettingStartedGuideActions(),
+			() => this.render()
+		);
 		this.unsubscribers = [
 			this.plugin.subscribeTaskCenter(() => this.render()),
-			this.plugin.subscribeSettings(() => this.render())
+			this.plugin.subscribeGettingStarted(() => this.render())
 		];
 		this.render();
 	}
@@ -45,16 +55,27 @@ export class EchoNotesTaskCenterView extends ItemView {
 			unsubscribe();
 		}
 		this.unsubscribers = [];
+		this.gettingStartedGuide?.destroy();
+		this.gettingStartedGuide = null;
 		this.contentEl.empty();
 	}
 
+	revealGettingStarted(): void {
+		this.gettingStartedGuide?.open();
+	}
+
 	private render(): void {
-		const tasks = this.plugin.getTaskCenterTasks();
-		const counts = summarizeTaskCounts(tasks);
+		const allTasks = this.plugin.getTaskCenterTasks();
+		const counts = summarizeTaskCounts(allTasks);
+		const tasks = filterTaskCenterTasks(allTasks, {
+			status: this.statusFilter,
+			kind: this.kindFilter,
+			query: this.query
+		});
 
 		this.contentEl.empty();
 		this.contentEl.addClass("echo-notes-task-center");
-		this.renderGettingStarted(this.plugin.getGettingStartedChecklistSnapshot());
+		this.gettingStartedGuide?.renderInto(this.contentEl);
 
 		const headerEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-header" });
 		const titleWrapEl = headerEl.createDiv({ cls: "echo-notes-task-center-title-wrap" });
@@ -70,123 +91,57 @@ export class EchoNotesTaskCenterView extends ItemView {
 			this.plugin.clearFinishedTaskCenterTasks();
 		});
 
+		const filtersEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-filters" });
+		const searchEl = filtersEl.createEl("input", {
+			cls: "echo-notes-task-center-search",
+			attr: { type: "search", placeholder: "搜索任务、文件或阶段", "aria-label": "搜索任务、文件或阶段" }
+		});
+		searchEl.value = this.query;
+		searchEl.addEventListener("input", () => {
+			this.query = searchEl.value;
+		});
+		searchEl.addEventListener("change", () => this.render());
+		searchEl.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				this.render();
+			}
+		});
+		this.createFilterSelect(filtersEl, "任务类型", this.kindFilter, {
+			all: "全部类型",
+			transcription: "转写",
+			analysis: "AI 分析",
+			memory: "记忆"
+		}, (value) => {
+			this.kindFilter = value as EchoNotesTask["kind"] | "all";
+			this.render();
+		});
+		this.createFilterSelect(filtersEl, "任务状态", this.statusFilter, {
+			all: "全部状态",
+			running: "运行中",
+			failed: "失败",
+			success: "完成",
+			skipped: "已跳过"
+		}, (value) => {
+			this.statusFilter = value as EchoNotesTaskStatus | "all";
+			this.render();
+		});
+		filtersEl.createSpan({
+			cls: "echo-notes-task-center-filter-summary",
+			text: tasks.length === allTasks.length ? "" : `显示 ${tasks.length}/${allTasks.length} 个任务`
+		});
+
 		if (tasks.length === 0) {
-			this.contentEl.createDiv({ cls: "echo-notes-task-center-empty", text: "暂无任务。" });
+			this.contentEl.createDiv({
+				cls: "echo-notes-task-center-empty",
+				text: allTasks.length === 0 ? "暂无任务。完成一次转写或分析后，任务会自动出现在这里。" : "没有匹配的任务，请调整筛选条件。"
+			});
 			return;
 		}
 
 		const listEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-list" });
 		for (const task of tasks) {
 			this.renderTask(listEl, task);
-		}
-	}
-
-	private renderGettingStarted(snapshot: GettingStartedChecklistSnapshot): void {
-		if (snapshot.state.status === "dismissed") {
-			return;
-		}
-
-		const sectionEl = this.contentEl.createEl("section", {
-			cls: `echo-notes-getting-started-checklist${snapshot.completionVisible ? " is-completed" : ""}`,
-			attr: { "aria-labelledby": "echo-notes-getting-started-checklist-title" }
-		});
-		const headerEl = sectionEl.createDiv({ cls: "echo-notes-getting-started-checklist-header" });
-		const headingEl = headerEl.createDiv({ cls: "echo-notes-getting-started-checklist-heading" });
-		headingEl.createDiv({
-			cls: "echo-notes-getting-started-checklist-title",
-			text: "开始使用 Echo Notes",
-			attr: { id: "echo-notes-getting-started-checklist-title" }
-		});
-		headingEl.createDiv({
-			cls: "echo-notes-getting-started-checklist-progress",
-			text: `${snapshot.progress.completedSteps}/3`,
-			attr: { "aria-label": `已完成 ${snapshot.progress.completedSteps} 个，共 3 个步骤` }
-		});
-
-		const toggleEl = this.createIconButton(
-			headerEl,
-			snapshot.guideExpanded ? "chevron-up" : "chevron-down",
-			snapshot.guideExpanded ? "收起新人指引" : "展开新人指引",
-			() => this.plugin.setGettingStartedGuideExpanded(!snapshot.guideExpanded)
-		);
-		toggleEl.addClass("echo-notes-getting-started-toggle");
-
-		if (!snapshot.guideExpanded && !snapshot.completionVisible) {
-			return;
-		}
-
-		if (snapshot.completionVisible) {
-			const successEl = sectionEl.createDiv({
-				cls: "echo-notes-getting-started-success",
-				attr: { role: "status", "aria-live": "polite" }
-			});
-			const iconEl = successEl.createSpan({ cls: "echo-notes-getting-started-success-icon" });
-			iconEl.setAttribute("aria-hidden", "true");
-			setIcon(iconEl, "party-popper");
-			successEl.createSpan({ text: "首次转写与 AI 分析已完成" });
-		}
-
-		const listEl = sectionEl.createDiv({ cls: "echo-notes-getting-started-steps" });
-		this.renderGettingStartedStep(
-			listEl,
-			snapshot.progress.transcriptionReady,
-			"转写服务可用",
-			snapshot.progress.transcriptionReady ? "查看配置" : "去配置",
-			() => this.plugin.openSettingsDestination(
-				"transcription-service",
-				{ guide: "provider-api-key" }
-			)
-		);
-		this.renderGettingStartedStep(
-			listEl,
-			snapshot.progress.analysisReady,
-			"AI 分析可用",
-			snapshot.progress.analysisReady ? "查看配置" : "去配置",
-			() => this.plugin.openSettingsDestination(
-				"analysis-model",
-				{ guide: "provider-api-key" }
-			)
-		);
-		this.renderGettingStartedStep(
-			listEl,
-			snapshot.progress.firstProcessingCompleted,
-			"完成首次处理",
-			snapshot.processingActionLabel,
-			snapshot.processingAction
-				? () => this.plugin.runGettingStartedProcessingAction(snapshot)
-				: undefined,
-			snapshot.processingStatus
-		);
-	}
-
-	private renderGettingStartedStep(
-		containerEl: HTMLElement,
-		completed: boolean,
-		label: string,
-		actionLabel: string | null,
-		onAction?: () => Promise<unknown> | void,
-		status?: string
-	): void {
-		const rowEl = containerEl.createDiv({
-			cls: `echo-notes-getting-started-step${completed ? " is-completed" : ""}`
-		});
-		const statusIconEl = rowEl.createSpan({ cls: "echo-notes-getting-started-step-icon" });
-		statusIconEl.setAttribute("aria-hidden", "true");
-		setIcon(statusIconEl, completed ? "circle-check" : "circle");
-		const textEl = rowEl.createDiv({ cls: "echo-notes-getting-started-step-text" });
-		textEl.createDiv({ cls: "echo-notes-getting-started-step-label", text: label });
-		if (status) {
-			textEl.createDiv({ cls: "echo-notes-getting-started-step-status", text: status });
-		}
-		if (actionLabel && onAction) {
-			const buttonEl = rowEl.createEl("button", {
-				cls: "echo-notes-getting-started-step-action",
-				text: actionLabel,
-				attr: { type: "button" }
-			});
-			buttonEl.addEventListener("click", () => {
-				void onAction();
-			});
 		}
 	}
 
@@ -202,6 +157,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 
 		mainEl.createDiv({ cls: "echo-notes-task-title", text: task.title });
 		mainEl.createDiv({ cls: "echo-notes-task-stage", text: task.stage });
+		mainEl.createDiv({ cls: "echo-notes-task-next-step", text: `下一步：${getTaskNextStep(task)}` });
 
 		const metaEl = mainEl.createDiv({ cls: "echo-notes-task-meta" });
 		this.renderMeta(metaEl, "Provider", task.provider ?? "未记录");
@@ -226,13 +182,24 @@ export class EchoNotesTaskCenterView extends ItemView {
 		}
 
 		if (task.error) {
-			mainEl.createDiv({ cls: "echo-notes-task-error", text: task.error });
+			const guidance = getTaskFailureGuidance(task.kind, task.error);
+			const errorEl = mainEl.createDiv({ cls: "echo-notes-task-error" });
+			errorEl.createDiv({ cls: "echo-notes-task-error-cause", text: `发生原因：${guidance.causedBy}` });
+			errorEl.createDiv({ cls: "echo-notes-task-error-next", text: `处理建议：${guidance.nextStep}` });
+			const details = errorEl.createEl("details", { cls: "echo-notes-task-error-details" });
+			details.createEl("summary", { text: "技术详情" });
+			details.createEl("pre", { text: task.error });
 		}
 
 		const actionsEl = taskEl.createDiv({ cls: "echo-notes-task-card-actions" });
 		this.createIconButton(actionsEl, "file-search", "打开任务文件", () => {
 			void this.plugin.openTaskCenterTask(task);
 		});
+		if (task.kind === "memory" && task.status === "success" && task.outputPath) {
+			this.createTextAction(actionsEl, "clipboard-check", "立即审核", () => {
+				void this.plugin.reviewMemoryCandidatePath(task.outputPath!);
+			});
+		}
 		if (task.retry && (task.status === "failed" || (task.status === "running" && task.retry.allowWhileRunning))) {
 			this.createIconButton(actionsEl, "rotate-ccw", task.retry.label, async () => {
 				const retried = await this.plugin.retryTaskCenterTask(task.id);
@@ -241,6 +208,40 @@ export class EchoNotesTaskCenterView extends ItemView {
 				}
 			});
 		}
+	}
+
+	private createFilterSelect(
+		containerEl: HTMLElement,
+		label: string,
+		value: string,
+		options: Record<string, string>,
+		onChange: (value: string) => void
+	): void {
+		const selectEl = containerEl.createEl("select", {
+			cls: "echo-notes-task-center-filter",
+			attr: { "aria-label": label }
+		});
+		for (const [optionValue, optionLabel] of Object.entries(options)) {
+			selectEl.createEl("option", { value: optionValue, text: optionLabel });
+		}
+		selectEl.value = value;
+		selectEl.addEventListener("change", () => onChange(selectEl.value));
+	}
+
+	private createTextAction(
+		containerEl: HTMLElement,
+		icon: string,
+		label: string,
+		onClick: () => void
+	): HTMLButtonElement {
+		const buttonEl = containerEl.createEl("button", {
+			cls: "echo-notes-task-text-action",
+			attr: { type: "button", "aria-label": label, title: label }
+		});
+		setIcon(buttonEl, icon);
+		buttonEl.createSpan({ text: label });
+		buttonEl.addEventListener("click", onClick);
+		return buttonEl;
 	}
 
 	private renderMeta(containerEl: HTMLElement, label: string, value: string): void {

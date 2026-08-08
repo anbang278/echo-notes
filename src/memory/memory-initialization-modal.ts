@@ -3,11 +3,17 @@ import type { MemoryUserProfile } from "./memory-types";
 
 export class MemoryInitializationModal extends Modal {
 	private onInitialize: (profile: MemoryUserProfile) => Promise<void>;
+	private onClosed?: () => void;
 	private submitting = false;
 
-	constructor(app: App, onInitialize: (profile: MemoryUserProfile) => Promise<void>) {
+	constructor(
+		app: App,
+		onInitialize: (profile: MemoryUserProfile) => Promise<void>,
+		onClosed?: () => void
+	) {
 		super(app);
 		this.onInitialize = onInitialize;
+		this.onClosed = onClosed;
 	}
 
 	onOpen(): void {
@@ -58,5 +64,6 @@ export class MemoryInitializationModal extends Modal {
 
 	onClose(): void {
 		this.contentEl.empty();
+		this.onClosed?.();
 	}
 }

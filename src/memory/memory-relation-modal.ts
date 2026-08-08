@@ -116,6 +116,9 @@ export class MemoryRelationModal extends Modal {
 					this.note = value;
 				});
 			});
+		if (source && target) {
+			this.renderComparison(editor, source, target);
+		}
 		const actions = new Setting(editor).setClass("echo-notes-memory-relation-actions");
 		actions.addButton((button) => {
 			button
@@ -130,6 +133,49 @@ export class MemoryRelationModal extends Modal {
 				}
 			});
 		});
+	}
+
+	private renderComparison(
+		containerEl: HTMLElement,
+		source: MemoryRelationEndpoint,
+		target: MemoryRelationEndpoint
+	): void {
+		const comparison = containerEl.createDiv({ cls: "echo-notes-memory-relation-comparison" });
+		comparison.createEl("h4", { text: `${["记忆 A", "记忆 B"].join(" / ")} 对比` });
+		comparison.createDiv({
+			cls: "echo-notes-memory-relation-comparison-hint",
+			text: "示例：同一主体的“目标”与“状态”可能互相补充；同一目标后来发生变化时，可用“替代旧记忆”明确时间顺序。"
+		});
+		const fields = [
+			["主体", source.subjectName, target.subjectName],
+			["时间", formatObservedAt(source.observedAt), formatObservedAt(target.observedAt)],
+			["关系/属性", source.predicate, target.predicate],
+			["内容", source.effectiveValue, target.effectiveValue],
+			["原文证据", source.evidenceQuote ?? "当前关系记录未保存证据，请打开候选包查看", target.evidenceQuote ?? "当前关系记录未保存证据，请打开候选包查看"]
+		] as const;
+		const grid = comparison.createDiv({ cls: "echo-notes-memory-relation-comparison-grid" });
+		this.renderComparisonCard(grid, "记忆 A", source, fields.map((field) => [field[0], field[1]] as const));
+		this.renderComparisonCard(grid, "记忆 B", target, fields.map((field) => [field[0], field[2]] as const));
+		const differences = comparison.createDiv({ cls: "echo-notes-memory-relation-differences" });
+		differences.createSpan({ text: normalizeSubject(source.subjectName) === normalizeSubject(target.subjectName) ? "主体相同" : "主体不同" });
+		differences.createSpan({ text: source.observedAt === target.observedAt ? "同一时间" : `时间不同：${formatDateDistance(source.observedAt, target.observedAt)}` });
+		differences.createSpan({ text: source.effectiveValue === target.effectiveValue ? "内容相同" : "内容存在差异" });
+	}
+
+	private renderComparisonCard(
+		containerEl: HTMLElement,
+		label: string,
+		endpoint: MemoryRelationEndpoint,
+		fields: ReadonlyArray<readonly [string, string]>
+	): void {
+		const card = containerEl.createDiv({ cls: "echo-notes-memory-relation-comparison-card" });
+		card.createDiv({ cls: "echo-notes-memory-relation-comparison-label", text: label });
+		card.createDiv({ cls: "echo-notes-memory-relation-comparison-subject", text: `${endpoint.subjectType} · ${endpoint.subjectName}` });
+		for (const [field, value] of fields) {
+			const row = card.createDiv({ cls: "echo-notes-memory-relation-comparison-field" });
+			row.createSpan({ cls: "echo-notes-memory-relation-comparison-field-label", text: field });
+			row.createSpan({ cls: "echo-notes-memory-relation-comparison-field-value", text: value });
+		}
 	}
 
 	private renderRelationList(): void {
@@ -259,6 +305,21 @@ function normalizeSubject(value: string): string {
 function truncate(value: string, maxLength: number): string {
 	const normalized = value.replace(/\s+/g, " ").trim();
 	return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function formatObservedAt(value: string): string {
+	const parsed = new Date(value);
+	return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function formatDateDistance(left: string, right: string): string {
+	const leftTime = new Date(left).getTime();
+	const rightTime = new Date(right).getTime();
+	if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) {
+		return "日期待确认";
+	}
+	const days = Math.round(Math.abs(leftTime - rightTime) / 86_400_000);
+	return days === 0 ? "同一天" : `${days} 天`;
 }
 
 function getErrorMessage(error: unknown): string {

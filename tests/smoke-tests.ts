@@ -44,13 +44,48 @@ import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/
 import { LinkService } from "../src/obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "../src/obsidian/realtime-link-insertion";
 import {
+	acknowledgeFirstGettingStartedChapter,
+	acknowledgeShortcutGettingStartedChapter,
+	beginFirstGettingStartedPractice,
+	beginFirstGettingStartedTranscription,
+	beginShortcutGettingStartedPractice,
+	cancelGettingStartedReview,
+	canSkipGettingStartedChapter,
 	dismissGettingStarted,
+	getFirstIncompleteGettingStartedStep,
 	getGettingStartedProgress,
+	markGettingStartedTaskRunning,
 	markGettingStartedShown,
 	normalizeGettingStartedState,
-	recordGettingStartedMilestone,
-	startGettingStarted
+	recordFirstGettingStartedAudio,
+	recordGettingStartedAnalysis,
+	recordGettingStartedFailure,
+	recordGettingStartedMemory,
+	recordGettingStartedTranscription,
+	recordShortcutGettingStartedAudio,
+	removeGettingStartedPath,
+	selectGettingStartedMemorySource,
+	shouldAutoOpenGettingStarted,
+	shouldStartGettingStartedOnOpen,
+	skipGettingStartedChapter,
+	startGettingStartedReview,
+	startGettingStarted,
+	updateGettingStartedPath,
+	waitForShortcutGettingStartedTranscription
 } from "../src/getting-started/getting-started-state";
+import {
+	captureHotkeyFromKeyboardEvent,
+	cloneGettingStartedHotkeys,
+	findHotkeyAssignmentConflicts,
+	fillMissingGettingStartedHotkeys,
+	getRecommendedGettingStartedHotkeys,
+	saveHotkeyAssignments,
+	validateGettingStartedHotkeys
+} from "../src/getting-started/getting-started-hotkeys";
+import {
+	getAvailableGettingStartedNotePath,
+	selectNewGettingStartedAudio
+} from "../src/getting-started/getting-started-files";
 import { buildMultipartFormDataBody } from "../src/network/multipart-form-data";
 import { shouldSkipAutomationForPrivateNote } from "../src/privacy/note-privacy";
 import {
@@ -191,7 +226,8 @@ import {
 	parseMemoryRelationStore,
 	renderMemoryRelationStore,
 	resolveMemoryRelations,
-	revokeMemoryRelation
+	revokeMemoryRelation,
+	stripMemoryRelationEvidence
 } from "../src/memory/memory-relation";
 import {
 	MEMORY_TASK_TIMEOUT_MS,
@@ -200,6 +236,12 @@ import {
 } from "../src/memory/memory-timeout";
 import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
 import { splitAnalysisText, estimateAnalysisTextTokens } from "../src/analysis/analysis-chunking";
+import {
+	filterTaskCenterTasks,
+	getTaskFailureGuidance,
+	getTaskFailureNotice,
+	getTaskNextStep
+} from "../src/task-center/task-center-copy";
 import { analyzeChunkSequence } from "../src/analysis/analysis-chunked-service";
 import {
 	ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS,
@@ -555,6 +597,8 @@ assert.equal(reviewPath, "Echo Memory/02 记忆候选/2026-07-29 Test abc123.rev
 assert.equal(getCandidatePathFromReviewPath(reviewPath), candidatePath);
 assert.throws(() => getMemoryReviewPath(reviewPath), /非审核 Markdown/);
 assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /审核：\[\[Echo Memory\/02 记忆候选\/2026-07-29 Test abc123\.review\.md\]\]/);
+assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /审核当前记忆候选/);
+assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /立即审核/);
 
 const initialMemoryReview = createMemoryReview(memoryCandidate, candidatePath, "2026-07-29T08:10:00.000Z");
 assert.equal(initialMemoryReview.reviews["assertion-test"].status, "pending");
@@ -680,6 +724,9 @@ const relationSourceEndpoint = createMemoryRelationEndpoint({
 	reviewPath,
 	assertion: approvedAssertions[0].assertion
 });
+assert.equal(relationSourceEndpoint.evidenceQuote, approvedAssertions[0].assertion.evidenceQuote);
+assert.equal(relationSourceEndpoint.category, approvedAssertions[0].assertion.category);
+assert.equal(relationSourceEndpoint.confidence, approvedAssertions[0].assertion.confidence);
 const olderMemoryCandidate: MemoryCandidatePackage = {
 	...memoryCandidate,
 	id: "memory-older",
@@ -721,10 +768,78 @@ const supersededRelationStore = confirmMemoryRelation(
 const supersededRelation = Object.values(supersededRelationStore.relations)[0];
 assert.equal(supersededRelation.status, "active");
 assert.equal(supersededRelation.history.length, 1);
+const renderedSupersededRelationStore = renderMemoryRelationStore(supersededRelationStore);
 assert.deepEqual(
-	parseMemoryRelationStore(renderMemoryRelationStore(supersededRelationStore)),
-	supersededRelationStore
+	parseMemoryRelationStore(renderedSupersededRelationStore),
+	stripMemoryRelationEvidence(supersededRelationStore)
 );
+assert.doesNotMatch(renderedSupersededRelationStore, /evidenceQuote/);
+assert.equal(supersededRelationStore.relations[supersededRelation.id].source.evidenceQuote, relationSourceEndpoint.evidenceQuote);
+const legacyRelationStoreContent = `${JSON.stringify(supersededRelationStore, null, 2)}\n`;
+const parsedLegacyRelationStore = parseMemoryRelationStore(legacyRelationStoreContent);
+assert.ok(parsedLegacyRelationStore);
+assert.equal(
+	parsedLegacyRelationStore.relations[supersededRelation.id].source.evidenceQuote,
+	relationSourceEndpoint.evidenceQuote
+);
+const sanitizedLegacyRelationStore = stripMemoryRelationEvidence(parsedLegacyRelationStore);
+assert.notEqual(sanitizedLegacyRelationStore, parsedLegacyRelationStore);
+assert.equal(sanitizedLegacyRelationStore.relations[supersededRelation.id].source.evidenceQuote, undefined);
+assert.equal(sanitizedLegacyRelationStore.relations[supersededRelation.id].history[0].target.evidenceQuote, undefined);
+const apiKeyFailure = getTaskFailureGuidance("analysis", "missing API key");
+assert.match(apiKeyFailure.causedBy, /密钥/);
+assert.match(apiKeyFailure.nextStep, /API Key/);
+assert.match(getTaskFailureNotice("transcription", "network timeout"), /任务中心/);
+const taskCenterFixtures = [
+	{
+		id: "transcription:test",
+		kind: "transcription" as const,
+		title: "访谈录音.wav",
+		status: "failed" as const,
+		stage: "转写失败",
+		targetPath: "Audio/访谈录音.wav",
+		error: "network timeout",
+		createdAt: 1,
+		updatedAt: 2
+	},
+	{
+		id: "memory:test",
+		kind: "memory" as const,
+		title: "记忆提取：访谈录音",
+		status: "success" as const,
+		stage: "3 条候选记忆已写入",
+		targetPath: "Meetings/访谈录音.transcript.md",
+		outputPath: "Echo Memory/02 记忆候选/访谈录音.md",
+		createdAt: 1,
+		updatedAt: 3
+	}
+];
+assert.deepEqual(
+	filterTaskCenterTasks(taskCenterFixtures, { status: "failed", kind: "all", query: "" }).map((task) => task.id),
+	["transcription:test"]
+);
+assert.deepEqual(
+	filterTaskCenterTasks(taskCenterFixtures, { status: "all", kind: "memory", query: "候选" }).map((task) => task.id),
+	["memory:test"]
+);
+assert.match(getTaskNextStep(taskCenterFixtures[1]), /立即审核/);
+const mainSource = readFileSync("src/main.ts", "utf8");
+assert.doesNotMatch(
+	mainSource,
+	/applyConfiguredTranscribeAllAudioHotkey/,
+	"插件启动或命令重注册不得把设置中的快捷键隐式写入 Obsidian 快捷键管理器"
+);
+for (const commandName of [
+	"打开任务中心",
+	"转写选中音频",
+	"转写当前笔记全部音频",
+	"开始实时转写",
+	"停止实时转写",
+	"审核当前记忆候选",
+	"管理当前记忆关系"
+]) {
+	assert.match(mainSource, new RegExp(`name: \\"${commandName}\\"`));
+}
 assert.doesNotMatch(renderMemoryRelationStore(supersededRelationStore), /apiKey|rawResponse|Authorization/);
 const supersededResolution = resolveMemoryRelations(
 	supersededRelationStore,
@@ -3999,13 +4114,30 @@ assert.equal(normalizeEchoNotesSettings({ redactTranscriptBeforeAnalysis: true }
 assert.equal(DEFAULT_SETTINGS.gettingStartedState.status, "not-started");
 assert.equal(normalizeEchoNotesSettings(undefined).gettingStartedState.status, "not-started");
 assert.equal(normalizeEchoNotesSettings({}).gettingStartedState.status, "dismissed");
+assert.equal(shouldAutoOpenGettingStarted("not-started", false), true);
+assert.equal(shouldAutoOpenGettingStarted("in-progress", false), true);
+assert.equal(shouldAutoOpenGettingStarted("dismissed", false), false);
+assert.equal(shouldAutoOpenGettingStarted("completed", false), false);
+assert.equal(shouldAutoOpenGettingStarted("completed", false, true), true);
+assert.equal(shouldAutoOpenGettingStarted("dismissed", false, true), false);
+assert.equal(shouldAutoOpenGettingStarted("not-started", true), false);
+assert.equal(shouldStartGettingStartedOnOpen("dismissed", false), true);
+assert.equal(shouldStartGettingStartedOnOpen("completed", false), false);
+assert.equal(shouldStartGettingStartedOnOpen("not-started", true), false);
 const shownGettingStarted = markGettingStartedShown(
 	normalizeGettingStartedState(undefined),
 	1_000
 );
 assert.deepEqual(shownGettingStarted, {
-	schemaVersion: 1,
+	schemaVersion: 3,
 	status: "in-progress",
+	step: "transcription",
+	practiceStage: "idle",
+	chapters: {
+		first: { outcome: "pending" },
+		shortcut: { outcome: "pending" },
+		memory: { outcome: "pending" }
+	},
 	firstShownAt: 1_000
 });
 assert.equal(dismissGettingStarted(shownGettingStarted, 2_000).status, "dismissed");
@@ -4015,45 +4147,553 @@ const restartedGettingStarted = startGettingStarted(
 );
 assert.equal(restartedGettingStarted.status, "in-progress");
 assert.equal(restartedGettingStarted.firstShownAt, 1_000);
-const analysisBeforeTranscription = recordGettingStartedMilestone(
+
+const noReadiness = {
+	transcriptionReady: false,
+	analysisReady: false,
+	recorderReady: false,
+	hotkeysReady: false,
+	memoryReady: false
+};
+assert.equal(getFirstIncompleteGettingStartedStep(restartedGettingStarted, noReadiness), "transcription");
+assert.equal(
+	getFirstIncompleteGettingStartedStep(restartedGettingStarted, {
+		...noReadiness,
+		transcriptionReady: true
+	}),
+	"recorder"
+);
+assert.equal(
+	getFirstIncompleteGettingStartedStep(restartedGettingStarted, {
+		...noReadiness,
+		transcriptionReady: true,
+		recorderReady: true
+	}),
+	"first-practice",
+	"首次体验应在配置转写和录音后直接进入录音转写，不应等待 AI 分析或快捷键配置"
+);
+
+let journeyState = beginFirstGettingStartedPractice(
 	restartedGettingStarted,
-	"analysis",
+	"Echo Notes 首次体验.md",
 	4_000
 );
-const transcriptionAfterAnalysis = recordGettingStartedMilestone(
-	analysisBeforeTranscription,
-	"transcription",
+assert.equal(journeyState.practiceStage, "waiting-for-first-audio");
+journeyState = recordFirstGettingStartedAudio(journeyState, "Recordings/first.webm");
+assert.equal(journeyState.practiceStage, "first-audio-ready");
+journeyState = beginFirstGettingStartedTranscription(journeyState);
+assert.equal(markGettingStartedTaskRunning(journeyState, "transcription").practiceStage, "first-transcribing");
+assert.deepEqual(
+	recordGettingStartedTranscription(journeyState, "Recordings/unrelated.webm", "unrelated.transcript.md"),
+	journeyState
+);
+journeyState = recordGettingStartedTranscription(
+	journeyState,
+	"Recordings/first.webm",
+	"Recordings/first.transcript.md",
 	5_000
 );
-assert.equal(transcriptionAfterAnalysis.status, "in-progress");
-assert.equal(transcriptionAfterAnalysis.firstSuccessfulAnalysisAt, 4_000);
-assert.equal(transcriptionAfterAnalysis.firstSuccessfulTranscriptionAt, 5_000);
+assert.equal(journeyState.practiceStage, "first-transcription-completed");
+assert.deepEqual(getGettingStartedProgress(journeyState), {
+	chapterOutcomes: { first: "completed", shortcut: "pending", memory: "pending" },
+	firstTranscriptionCompleted: true,
+	shortcutAnalysisCompleted: false,
+	memoryCompleted: false,
+	resolvedChapters: 1,
+	completedChapters: 1,
+	skippedChapters: 0,
+	totalChapters: 3
+});
+journeyState = acknowledgeFirstGettingStartedChapter(journeyState, 6_000);
+assert.equal(journeyState.step, "analysis");
 assert.equal(
-	getGettingStartedProgress(transcriptionAfterAnalysis, true, true).firstProcessingCompleted,
-	false
+	getFirstIncompleteGettingStartedStep(journeyState, {
+		...noReadiness,
+		transcriptionReady: true,
+		recorderReady: true,
+		analysisReady: true
+	}),
+	"hotkeys"
 );
-const completedGettingStarted = recordGettingStartedMilestone(
-	transcriptionAfterAnalysis,
-	"analysis",
-	6_000
+
+journeyState = beginShortcutGettingStartedPractice(journeyState, 7_000);
+assert.equal(journeyState.practiceStage, "waiting-for-shortcut-audio");
+assert.deepEqual(
+	recordShortcutGettingStartedAudio(journeyState, "Recordings/first.webm"),
+	journeyState
+);
+journeyState = recordShortcutGettingStartedAudio(journeyState, "Recordings/shortcut.webm");
+journeyState = waitForShortcutGettingStartedTranscription(journeyState);
+assert.equal(journeyState.practiceStage, "waiting-for-shortcut-transcription");
+journeyState = markGettingStartedTaskRunning(journeyState, "transcription");
+assert.equal(journeyState.practiceStage, "shortcut-transcribing");
+journeyState = recordGettingStartedTranscription(
+	journeyState,
+	"Recordings/shortcut.webm",
+	"Recordings/shortcut.transcript.md",
+	8_000
+);
+assert.equal(journeyState.practiceStage, "analyzing");
+assert.deepEqual(
+	recordGettingStartedAnalysis(journeyState, "Recordings/first.transcript.md", 9_000),
+	journeyState
+);
+journeyState = recordGettingStartedFailure(journeyState, "analysis", "analysis:shortcut");
+assert.equal(journeyState.practiceStage, "failed");
+assert.equal(journeyState.lastFailureTaskId, "analysis:shortcut");
+journeyState = recordGettingStartedAnalysis(
+	journeyState,
+	"Recordings/shortcut.transcript.md",
+	9_000
+);
+assert.equal(journeyState.practiceStage, "shortcut-completed");
+journeyState = acknowledgeShortcutGettingStartedChapter(journeyState, 10_000);
+assert.equal(journeyState.step, "memory");
+assert.deepEqual(
+	recordGettingStartedMemory(journeyState, "Recordings/first.transcript.md", "Echo Memory/wrong.md", 11_000),
+	journeyState
+);
+journeyState = markGettingStartedTaskRunning(journeyState, "memory");
+journeyState = recordGettingStartedFailure(journeyState, "memory", "memory:shortcut");
+assert.equal(journeyState.lastFailureKind, "memory");
+const completedGettingStarted = recordGettingStartedMemory(
+	journeyState,
+	"Recordings/shortcut.transcript.md",
+	"Echo Memory/Candidates/first.md",
+	11_000
 );
 assert.equal(completedGettingStarted.status, "completed");
-assert.equal(completedGettingStarted.completedAt, 6_000);
-assert.deepEqual(getGettingStartedProgress(completedGettingStarted, true, false), {
-	transcriptionReady: true,
-	analysisReady: false,
-	firstProcessingCompleted: true,
-	completedSteps: 2
+assert.equal(completedGettingStarted.completedAt, 11_000);
+assert.deepEqual(getGettingStartedProgress(completedGettingStarted), {
+	chapterOutcomes: { first: "completed", shortcut: "completed", memory: "completed" },
+	firstTranscriptionCompleted: true,
+	shortcutAnalysisCompleted: true,
+	memoryCompleted: true,
+	resolvedChapters: 3,
+	completedChapters: 3,
+	skippedChapters: 0,
+	totalChapters: 3
 });
+
+const migratedCompletedGettingStarted = normalizeGettingStartedState({
+	schemaVersion: 1,
+	status: "completed",
+	completedAt: 12_000
+});
+assert.equal(migratedCompletedGettingStarted.schemaVersion, 3);
+assert.equal(migratedCompletedGettingStarted.status, "completed");
+assert.equal(migratedCompletedGettingStarted.step, "completed");
+assert.equal(getGettingStartedProgress(migratedCompletedGettingStarted).completedChapters, 3);
 assert.equal(
-	normalizeGettingStartedState({ schemaVersion: 1, status: "completed", completedAt: 7_000 }).status,
-	"in-progress"
+	normalizeGettingStartedState({ schemaVersion: 1, status: "dismissed", firstShownAt: 13_000 }).status,
+	"dismissed"
 );
+assert.equal(
+	normalizeGettingStartedState({ schemaVersion: 1, status: "in-progress", firstShownAt: 14_000 }).step,
+	"transcription"
+);
+
+const renamedGettingStarted = updateGettingStartedPath(
+	{
+		...journeyState,
+		experienceNotePath: "Guide/Echo Notes 首次体验.md",
+		shortcutAudioPath: "Guide/Recordings/shortcut.webm",
+		shortcutTranscriptPath: "Guide/Recordings/shortcut.transcript.md"
+	},
+	"Guide",
+	"Getting Started"
+);
+assert.equal(renamedGettingStarted.experienceNotePath, "Getting Started/Echo Notes 首次体验.md");
+assert.equal(renamedGettingStarted.shortcutAudioPath, "Getting Started/Recordings/shortcut.webm");
+const deletedShortcutGettingStarted = removeGettingStartedPath(
+	renamedGettingStarted,
+	"Getting Started/Recordings/shortcut.webm",
+	15_000
+);
+assert.equal(deletedShortcutGettingStarted.step, "memory");
+assert.equal(deletedShortcutGettingStarted.chapters.shortcut.outcome, "completed");
+assert.equal(deletedShortcutGettingStarted.shortcutAudioPath, undefined);
+const deletedExperienceGettingStarted = removeGettingStartedPath(
+	renamedGettingStarted,
+	"Getting Started/Echo Notes 首次体验.md",
+	16_000
+);
+assert.equal(deletedExperienceGettingStarted.step, "memory");
+assert.equal(deletedExperienceGettingStarted.experienceNotePath, undefined);
+
+const migratedV2GettingStarted = normalizeGettingStartedState({
+	schemaVersion: 2,
+	status: "in-progress",
+	step: "analysis",
+	practiceStage: "idle",
+	firstSuccessfulTranscriptionAt: 17_000,
+	firstTranscriptPath: "Recordings/v2.transcript.md"
+});
+assert.equal(migratedV2GettingStarted.schemaVersion, 3);
+assert.deepEqual(getGettingStartedProgress(migratedV2GettingStarted).chapterOutcomes, {
+	first: "completed",
+	shortcut: "pending",
+	memory: "pending"
+});
+const migratedV2CompletedGettingStarted = normalizeGettingStartedState({
+	schemaVersion: 2,
+	status: "completed",
+	step: "completed",
+	practiceStage: "completed",
+	completedAt: 18_000
+});
+assert.deepEqual(getGettingStartedProgress(migratedV2CompletedGettingStarted).chapterOutcomes, {
+	first: "completed",
+	shortcut: "completed",
+	memory: "completed"
+});
+assert.equal(normalizeGettingStartedState({
+	schemaVersion: 3,
+	status: "in-progress",
+	step: "transcription",
+	practiceStage: "idle",
+	chapters: {
+		first: { outcome: "pending" },
+		shortcut: { outcome: "pending" },
+		memory: { outcome: "pending" }
+	},
+	activeReview: {
+		chapter: "first",
+		practiceStage: "idle",
+		startedAt: 19_000
+	}
+}).activeReview, undefined);
+
+let skippedJourney = markGettingStartedShown(normalizeGettingStartedState(undefined), 20_000);
+const busyFirstJourney = beginFirstGettingStartedPractice(
+	skippedJourney,
+	"Echo Notes 跳过测试.md",
+	20_100
+);
+assert.equal(canSkipGettingStartedChapter(busyFirstJourney, "first"), false);
+skippedJourney = skipGettingStartedChapter(skippedJourney, "first", 21_000);
+assert.equal(skippedJourney.chapters.first.outcome, "skipped");
+assert.equal(skippedJourney.step, "analysis");
+assert.equal(getGettingStartedProgress(skippedJourney).resolvedChapters, 1);
+assert.equal(canSkipGettingStartedChapter(skippedJourney, "shortcut"), true);
+skippedJourney = skipGettingStartedChapter(skippedJourney, "shortcut", 22_000);
+assert.equal(skippedJourney.chapters.shortcut.outcome, "skipped");
+assert.equal(skippedJourney.step, "memory");
+skippedJourney = selectGettingStartedMemorySource(
+	skippedJourney,
+	"Recordings/existing.transcript.md"
+);
+assert.equal(skippedJourney.memorySourceTranscriptPath, "Recordings/existing.transcript.md");
+skippedJourney = skipGettingStartedChapter(skippedJourney, "memory", 23_000);
+assert.equal(skippedJourney.status, "completed");
+assert.equal(skippedJourney.completedAt, 23_000);
+assert.deepEqual(getGettingStartedProgress(skippedJourney), {
+	chapterOutcomes: { first: "skipped", shortcut: "skipped", memory: "skipped" },
+	firstTranscriptionCompleted: false,
+	shortcutAnalysisCompleted: false,
+	memoryCompleted: false,
+	resolvedChapters: 3,
+	completedChapters: 0,
+	skippedChapters: 3,
+	totalChapters: 3
+});
+
+let reviewJourney = startGettingStartedReview(skippedJourney, "first", 24_000);
+assert.equal(reviewJourney.status, "completed");
+assert.equal(reviewJourney.activeReview?.chapter, "first");
+const persistedReviewJourney = normalizeGettingStartedState(reviewJourney);
+assert.equal(persistedReviewJourney.activeReview?.startedAt, 24_000);
+reviewJourney = recordGettingStartedFailure(reviewJourney, "transcription", "review:first:failed");
+assert.equal(reviewJourney.chapters.first.outcome, "skipped");
+assert.equal(reviewJourney.activeReview?.lastFailureTaskId, "review:first:failed");
+reviewJourney = cancelGettingStartedReview(reviewJourney);
+assert.equal(reviewJourney.activeReview, undefined);
+assert.equal(reviewJourney.chapters.first.outcome, "skipped");
+
+reviewJourney = startGettingStartedReview(reviewJourney, "first", 25_000);
+reviewJourney = beginFirstGettingStartedPractice(reviewJourney, "Echo Notes 复习.md", 25_100);
+reviewJourney = recordFirstGettingStartedAudio(reviewJourney, "Recordings/review-first.webm");
+const renamedActiveReview = updateGettingStartedPath(reviewJourney, "Recordings", "Review Recordings");
+assert.equal(renamedActiveReview.activeReview?.audioPath, "Review Recordings/review-first.webm");
+const deletedActiveReview = removeGettingStartedPath(
+	renamedActiveReview,
+	"Review Recordings/review-first.webm",
+	25_150
+);
+assert.equal(deletedActiveReview.activeReview?.audioPath, undefined);
+assert.equal(deletedActiveReview.activeReview?.practiceStage, "idle");
+assert.equal(deletedActiveReview.chapters.first.outcome, "skipped");
+reviewJourney = beginFirstGettingStartedTranscription(reviewJourney);
+assert.equal(reviewJourney.activeReview?.practiceStage, "first-transcribing");
+assert.deepEqual(
+	recordGettingStartedTranscription(
+		reviewJourney,
+		"Recordings/unrelated-review.webm",
+		"Recordings/unrelated-review.transcript.md",
+		25_200
+	),
+	reviewJourney
+);
+reviewJourney = recordGettingStartedTranscription(
+	reviewJourney,
+	"Recordings/review-first.webm",
+	"Recordings/review-first.transcript.md",
+	25_300
+);
+assert.equal(reviewJourney.activeReview, undefined);
+assert.equal(reviewJourney.chapters.first.outcome, "completed");
+assert.equal(reviewJourney.chapters.first.skippedAt, undefined);
+assert.equal(reviewJourney.chapters.first.lastReviewCompletedAt, 25_300);
+assert.equal(
+	reviewJourney.chapters.first.latestReviewTranscriptPath,
+	"Recordings/review-first.transcript.md"
+);
+assert.equal(reviewJourney.chapters.shortcut.outcome, "skipped");
+assert.equal(getGettingStartedProgress(reviewJourney).completedChapters, 1);
+assert.equal(getGettingStartedProgress(reviewJourney).skippedChapters, 2);
+
+const renamedReviewJourney = updateGettingStartedPath(
+	reviewJourney,
+	"Recordings",
+	"Archive/Recordings"
+);
+assert.equal(
+	renamedReviewJourney.chapters.first.latestReviewTranscriptPath,
+	"Archive/Recordings/review-first.transcript.md"
+);
+const deletedReviewArtifact = removeGettingStartedPath(
+	renamedReviewJourney,
+	"Archive/Recordings/review-first.transcript.md",
+	26_000
+);
+assert.equal(deletedReviewArtifact.chapters.first.latestReviewTranscriptPath, undefined);
+assert.equal(deletedReviewArtifact.chapters.first.outcome, "completed");
+
+let shortcutReviewJourney = startGettingStartedReview(reviewJourney, "shortcut", 27_000);
+assert.equal(shortcutReviewJourney.activeReview?.experienceNotePath, "Echo Notes 复习.md");
+shortcutReviewJourney = beginShortcutGettingStartedPractice(shortcutReviewJourney, 27_100);
+shortcutReviewJourney = recordShortcutGettingStartedAudio(
+	shortcutReviewJourney,
+	"Recordings/review-shortcut.webm"
+);
+shortcutReviewJourney = waitForShortcutGettingStartedTranscription(shortcutReviewJourney);
+shortcutReviewJourney = recordGettingStartedTranscription(
+	shortcutReviewJourney,
+	"Recordings/review-shortcut.webm",
+	"Recordings/review-shortcut.transcript.md",
+	27_200
+);
+assert.equal(shortcutReviewJourney.activeReview?.practiceStage, "analyzing");
+assert.deepEqual(
+	recordGettingStartedAnalysis(shortcutReviewJourney, "Recordings/unrelated.transcript.md", 27_300),
+	shortcutReviewJourney
+);
+shortcutReviewJourney = recordGettingStartedAnalysis(
+	shortcutReviewJourney,
+	"Recordings/review-shortcut.transcript.md",
+	27_400
+);
+assert.equal(shortcutReviewJourney.activeReview, undefined);
+assert.equal(shortcutReviewJourney.chapters.shortcut.outcome, "completed");
+assert.equal(shortcutReviewJourney.chapters.memory.outcome, "skipped");
+
+let memoryReviewJourney = startGettingStartedReview(shortcutReviewJourney, "memory", 28_000);
+assert.equal(
+	memoryReviewJourney.activeReview?.memorySourceTranscriptPath,
+	"Recordings/existing.transcript.md"
+);
+assert.deepEqual(
+	recordGettingStartedMemory(
+		memoryReviewJourney,
+		"Recordings/unrelated.transcript.md",
+		"Echo Memory/Candidates/unrelated.md",
+		28_100
+	),
+	memoryReviewJourney
+);
+memoryReviewJourney = recordGettingStartedMemory(
+	memoryReviewJourney,
+	"Recordings/existing.transcript.md",
+	"Echo Memory/Candidates/review.md",
+	28_200
+);
+assert.equal(memoryReviewJourney.activeReview, undefined);
+assert.equal(memoryReviewJourney.chapters.memory.outcome, "completed");
+assert.equal(
+	memoryReviewJourney.chapters.memory.latestReviewCandidatePath,
+	"Echo Memory/Candidates/review.md"
+);
+assert.equal(getGettingStartedProgress(memoryReviewJourney).completedChapters, 3);
+assert.equal(getGettingStartedProgress(memoryReviewJourney).skippedChapters, 0);
+
+const capturedGettingStartedHotkey = captureHotkeyFromKeyboardEvent({
+	key: "k",
+	ctrlKey: true,
+	metaKey: false,
+	shiftKey: true,
+	altKey: false
+} as KeyboardEvent);
+assert.equal(formatHotkey(capturedGettingStartedHotkey ?? null), "Ctrl+Shift+K");
+assert.equal(captureHotkeyFromKeyboardEvent({ key: "Shift" } as KeyboardEvent), undefined);
+const validGettingStartedHotkeys = {
+	start: parseHotkeyInput("Ctrl+Shift+R"),
+	stop: parseHotkeyInput("Ctrl+Shift+S"),
+	transcribe: parseHotkeyInput("Ctrl+Shift+T")
+};
+assert.deepEqual(validateGettingStartedHotkeys(validGettingStartedHotkeys), {
+	valid: true,
+	missing: [],
+	duplicates: []
+});
+assert.equal(validateGettingStartedHotkeys({
+	...validGettingStartedHotkeys,
+	stop: parseHotkeyInput("Ctrl+Shift+R")
+}).valid, false);
+assert.deepEqual(validateGettingStartedHotkeys({
+	...validGettingStartedHotkeys,
+	transcribe: null
+}).missing, ["transcribe"]);
+const clonedGettingStartedHotkeys = cloneGettingStartedHotkeys(validGettingStartedHotkeys);
+assert.deepEqual(clonedGettingStartedHotkeys, validGettingStartedHotkeys);
+assert.notEqual(clonedGettingStartedHotkeys.start, validGettingStartedHotkeys.start);
+const macGettingStartedHotkeys = getRecommendedGettingStartedHotkeys("macOS");
+assert.deepEqual(
+	Object.values(macGettingStartedHotkeys).map((hotkey) => formatHotkey(hotkey)),
+	["Ctrl+L", "Ctrl+S", "Ctrl+Z"]
+);
+const windowsGettingStartedHotkeys = getRecommendedGettingStartedHotkeys("windows");
+assert.deepEqual(
+	Object.values(windowsGettingStartedHotkeys).map((hotkey) => formatHotkey(hotkey)),
+	["Alt+L", "Alt+A", "Alt+Z"]
+);
+const existingStartHotkey = parseHotkeyInput("Ctrl+Shift+R") ?? null;
+const filledGettingStartedHotkeys = fillMissingGettingStartedHotkeys(
+	{ start: existingStartHotkey, stop: null, transcribe: null },
+	macGettingStartedHotkeys
+);
+assert.equal(formatHotkey(filledGettingStartedHotkeys.start), "Ctrl+Shift+R");
+assert.equal(formatHotkey(filledGettingStartedHotkeys.stop), "Ctrl+S");
+assert.equal(formatHotkey(filledGettingStartedHotkeys.transcribe), "Ctrl+Z");
+assert.notEqual(filledGettingStartedHotkeys.start, existingStartHotkey);
+const hotkeyCommandRegistry = {
+	"audio-recorder:start": { name: "录音机：开始录音" },
+	"audio-recorder:stop": { name: "录音机：停止录音" },
+	"echo-notes:transcribe": { name: "Echo Notes：转写" },
+	"editor:save-file": { name: "保存当前文件" },
+	"editor:undo": { name: "撤销" }
+};
+const conflictingHotkeyState = new Map([
+	["audio-recorder:start", [{ modifiers: ["Ctrl" as const], key: "L" }]],
+	["audio-recorder:stop", [{ modifiers: ["Ctrl" as const], key: "S" }]],
+	["echo-notes:transcribe", [{ modifiers: ["Ctrl" as const], key: "Z" }]],
+	["editor:save-file", [{ modifiers: ["Ctrl" as const], key: "L" }]],
+	["editor:undo", [{ modifiers: ["Ctrl" as const], key: "Z" }]]
+]);
+let hotkeySetCalls = 0;
+let hotkeySaveCalls = 0;
+const conflictingHotkeyManager = {
+	getHotkeys: (commandId: string) => conflictingHotkeyState.get(commandId),
+	getDefaultHotkeys: () => undefined,
+	setHotkeys: (commandId: string, hotkeys: Array<{ modifiers: Array<"Ctrl" | "Meta" | "Shift" | "Alt">; key: string }>) => {
+		hotkeySetCalls += 1;
+		conflictingHotkeyState.set(commandId, structuredClone(hotkeys));
+	},
+	save: async () => {
+		hotkeySaveCalls += 1;
+	}
+};
+const conflictingAssignments = [
+	{ id: "start" as const, commandId: "audio-recorder:start", hotkey: parseHotkeyInput("Ctrl+L") ?? null },
+	{ id: "stop" as const, commandId: "audio-recorder:stop", hotkey: parseHotkeyInput("Ctrl+S") ?? null },
+	{ id: "transcribe" as const, commandId: "echo-notes:transcribe", hotkey: parseHotkeyInput("Ctrl+Z") ?? null }
+];
+assert.deepEqual(
+	findHotkeyAssignmentConflicts(conflictingAssignments, hotkeyCommandRegistry, conflictingHotkeyManager),
+	{ start: ["保存当前文件"], transcribe: ["撤销"] }
+);
+assert.deepEqual(
+	findHotkeyAssignmentConflicts(conflictingAssignments, hotkeyCommandRegistry, {
+		getDefaultHotkeys: (commandId: string) =>
+			commandId === "editor:save-file" ? [{ modifiers: ["Ctrl"], key: "L" }] : undefined
+	}),
+	{ start: ["保存当前文件"] },
+	"即使只能读取 Obsidian 默认快捷键，也必须阻止冲突写入"
+);
+const conflictingStateBeforeSave = structuredClone([...conflictingHotkeyState]);
+const rejectedHotkeySave = await saveHotkeyAssignments(
+	conflictingAssignments,
+	hotkeyCommandRegistry,
+	conflictingHotkeyManager
+);
+assert.equal(rejectedHotkeySave.saved, false);
+assert.deepEqual(rejectedHotkeySave.conflicts, { start: ["保存当前文件"], transcribe: ["撤销"] });
+assert.equal(hotkeySetCalls, 0);
+assert.equal(hotkeySaveCalls, 0);
+assert.deepEqual([...conflictingHotkeyState], conflictingStateBeforeSave);
+
+const legalHotkeyState = new Map([
+	["audio-recorder:start", [{ modifiers: ["Alt" as const], key: "1" }]],
+	["audio-recorder:stop", [{ modifiers: ["Alt" as const], key: "2" }]],
+	["echo-notes:transcribe", [{ modifiers: ["Alt" as const], key: "3" }]]
+]);
+const legalStateBeforeSave = structuredClone([...legalHotkeyState]);
+const legalHotkeyManager = {
+	getHotkeys: (commandId: string) => legalHotkeyState.get(commandId),
+	getDefaultHotkeys: () => undefined,
+	setHotkeys: (commandId: string, hotkeys: Array<{ modifiers: Array<"Ctrl" | "Meta" | "Shift" | "Alt">; key: string }>) => {
+		legalHotkeyState.set(commandId, structuredClone(hotkeys));
+	},
+	save: async () => undefined
+};
+const legalAssignments = [
+	{ id: "start" as const, commandId: "audio-recorder:start", hotkey: parseHotkeyInput("Ctrl+Shift+L") ?? null },
+	{ id: "stop" as const, commandId: "audio-recorder:stop", hotkey: parseHotkeyInput("Ctrl+Shift+S") ?? null },
+	{ id: "transcribe" as const, commandId: "echo-notes:transcribe", hotkey: parseHotkeyInput("Ctrl+Shift+T") ?? null }
+];
+const legalHotkeySave = await saveHotkeyAssignments(legalAssignments, hotkeyCommandRegistry, legalHotkeyManager);
+assert.equal(legalHotkeySave.saved, true);
+assert.equal(formatHotkey(legalHotkeyState.get("audio-recorder:start")?.[0] ?? null), "Ctrl+Shift+L");
+assert.equal(formatHotkey(legalHotkeyState.get("echo-notes:transcribe")?.[0] ?? null), "Ctrl+Shift+T");
+await legalHotkeySave.rollback?.();
+assert.deepEqual([...legalHotkeyState], legalStateBeforeSave);
+assert.equal(getAvailableGettingStartedNotePath(() => false), "Echo Notes 首次体验.md");
+assert.equal(
+	getAvailableGettingStartedNotePath((path) =>
+		path === "Echo Notes 首次体验.md" || path === "Echo Notes 首次体验 2.md"
+	),
+	"Echo Notes 首次体验 3.md"
+);
+assert.equal(
+	selectNewGettingStartedAudio(
+		[
+			{ path: "old.webm", createdAt: 500, value: "old" },
+			{ path: "known.webm", createdAt: 2_000, value: "known" },
+			{ path: "first.webm", createdAt: 2_100, value: "first" },
+			{ path: "new.webm", createdAt: 2_200, value: "new" }
+		],
+		1_000,
+		new Set(["known.webm"]),
+		"first.webm"
+	),
+	"new"
+);
+assert.equal(
+	selectNewGettingStartedAudio(
+		[{ path: "known.webm", createdAt: 2_000, value: "known" }],
+		1_000,
+		new Set(["known.webm"])
+	),
+	undefined
+);
+
 const normalizedGettingStartedSettings = normalizeEchoNotesSettings({
 	gettingStartedState: completedGettingStarted,
 	apiKey: "legacy-key-must-not-enter-getting-started"
 });
-assert.deepEqual(normalizedGettingStartedSettings.gettingStartedState, completedGettingStarted);
+assert.deepEqual(
+	normalizedGettingStartedSettings.gettingStartedState,
+	normalizeGettingStartedState(completedGettingStarted)
+);
 assert.equal(
 	JSON.stringify(normalizedGettingStartedSettings.gettingStartedState).includes("legacy-key"),
 	false

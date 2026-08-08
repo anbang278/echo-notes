@@ -1,5 +1,5 @@
 import { createStableFingerprint, normalizeEntityName } from "./memory-output";
-import type { MemoryAssertion, MemoryCandidatePackage } from "./memory-types";
+import { MEMORY_CATEGORIES, type MemoryAssertion, type MemoryCandidatePackage } from "./memory-types";
 
 export const MEMORY_RELATION_SCHEMA_VERSION = 1;
 export const MEMORY_RELATION_FILE_NAME = "echo-memory-relations.json";
@@ -31,6 +31,10 @@ export interface MemoryRelationEndpoint {
 	predicate: string;
 	effectiveValue: string;
 	observedAt: string;
+	/** 仅用于关系管理界面的即时对比，不改变关系存储兼容性。 */
+	evidenceQuote?: string;
+	category?: MemoryAssertion["category"];
+	confidence?: number;
 }
 
 export interface MemoryRelationEvent {
@@ -93,7 +97,10 @@ export function createMemoryRelationEndpoint(input: {
 		subjectName: input.assertion.subjectName,
 		predicate: input.assertion.predicate,
 		effectiveValue: input.assertion.value,
-		observedAt: input.assertion.observedAt
+		observedAt: input.assertion.observedAt,
+		evidenceQuote: input.assertion.evidenceQuote,
+		category: input.assertion.category,
+		confidence: input.assertion.confidence
 	};
 }
 
@@ -110,11 +117,52 @@ export function createMemoryRelationStore(updatedAt = new Date().toISOString()):
 }
 
 export function renderMemoryRelationStore(store: MemoryRelationStore): string {
-	const rendered = `${JSON.stringify(store, null, 2)}\n`;
+	const rendered = `${JSON.stringify(stripMemoryRelationEvidence(store), null, 2)}\n`;
 	if (rendered.length > MEMORY_RELATION_STORE_MAX_CHARACTERS) {
 		throw new Error("Echo Memory 关系存储超过 10,000,000 字符上限，请先归档历史关系。");
 	}
 	return rendered;
+}
+
+/**
+ * 关系端点在运行时可以带有原文证据，方便关系管理界面对比；关系 JSON 只保存
+ * 结构化元数据和回链，避免把原文在关系及其事件历史中重复持久化。
+ *
+ * 没有证据字段时返回原对象，便于调用方判断是否需要执行惰性清理。
+ */
+export function stripMemoryRelationEvidence(store: MemoryRelationStore): MemoryRelationStore {
+	let changed = false;
+	const stripEndpoint = (endpoint: MemoryRelationEndpoint): MemoryRelationEndpoint => {
+		if (typeof endpoint.evidenceQuote !== "string") {
+			return endpoint;
+		}
+		changed = true;
+		const sanitized = { ...endpoint };
+		delete sanitized.evidenceQuote;
+		return sanitized;
+	};
+	const relations = Object.fromEntries(
+		Object.entries(store.relations).map(([relationId, relation]) => {
+			const source = stripEndpoint(relation.source);
+			const target = stripEndpoint(relation.target);
+			const history = relation.history.map((event) => {
+				const eventSource = stripEndpoint(event.source);
+				const eventTarget = stripEndpoint(event.target);
+				return eventSource === event.source && eventTarget === event.target
+					? event
+					: { ...event, source: eventSource, target: eventTarget };
+			});
+			if (
+				source === relation.source &&
+				target === relation.target &&
+				history.every((event, index) => event === relation.history[index])
+			) {
+				return [relationId, relation];
+			}
+			return [relationId, { ...relation, source, target, history }];
+		})
+	);
+	return changed ? { ...store, relations } : store;
 }
 
 export function parseMemoryRelationStore(content: string): MemoryRelationStore | null {
@@ -481,7 +529,7 @@ function parseMemoryRelationEndpoint(value: unknown): MemoryRelationEndpoint | n
 	) {
 		return null;
 	}
-	return {
+	const endpoint: MemoryRelationEndpoint = {
 		candidateId: value.candidateId,
 		candidatePath: value.candidatePath,
 		reviewPath: value.reviewPath,
@@ -493,6 +541,30 @@ function parseMemoryRelationEndpoint(value: unknown): MemoryRelationEndpoint | n
 		effectiveValue: value.effectiveValue,
 		observedAt: value.observedAt
 	};
+	if (value.evidenceQuote !== undefined) {
+		if (!isBoundedString(value.evidenceQuote, 24_000)) {
+			return null;
+		}
+		endpoint.evidenceQuote = value.evidenceQuote;
+	}
+	if (value.category !== undefined) {
+		if (typeof value.category !== "string" || !MEMORY_CATEGORIES.includes(value.category as never)) {
+			return null;
+		}
+		endpoint.category = value.category as MemoryAssertion["category"];
+	}
+	if (value.confidence !== undefined) {
+		if (
+			typeof value.confidence !== "number" ||
+			!Number.isFinite(value.confidence) ||
+			value.confidence < 0 ||
+			value.confidence > 1
+		) {
+			return null;
+		}
+		endpoint.confidence = value.confidence;
+	}
+	return endpoint;
 }
 
 function parseMemoryRelationEvent(value: unknown): MemoryRelationEvent | null {

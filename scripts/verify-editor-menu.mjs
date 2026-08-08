@@ -613,7 +613,7 @@ try {
 	assert(await openEditorMenu(page) === 1, "失败分支右键菜单项不是唯一实例");
 	await clickTranscriptionMenuItem(page);
 	await waitForTask(page, "failure.wav", "failed");
-	await waitForNotice(page, "转写失败");
+	await waitForNotice(page, "转写未完成");
 	const failureTask = await page.evaluate((id) => window.app.plugins.plugins[id].taskCenter.getTasks()
 		.find((task) => task.targetPath === "failure.wav"), pluginId);
 	assert(failureTask?.status === "failed" && failureTask.error, "本地 mock 失败未记录到任务中心");

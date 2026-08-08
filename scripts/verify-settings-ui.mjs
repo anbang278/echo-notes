@@ -81,6 +81,21 @@ body.${MOBILE_SHELL_CLASS} .modal.mod-settings .vertical-tab-content {
 body.${MOBILE_SHELL_CLASS} .modal.mod-settings .vertical-tab-content {
 	padding: 24px 16px !important;
 }
+
+body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:has(.echo-notes-task-center) {
+	position: fixed !important;
+	inset: 0 !important;
+	z-index: var(--layer-popover) !important;
+	display: flex !important;
+	width: 100vw !important;
+	max-width: none !important;
+	transform: none !important;
+}
+
+body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:has(.echo-notes-task-center) > .workspace-tabs {
+	width: 100% !important;
+	max-width: none !important;
+}
 `;
 
 const VIEWPORTS = [
@@ -423,40 +438,39 @@ async function openSettings(page) {
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
 }
 
-async function captureGettingStartedWelcomeLayouts(page) {
+async function captureGettingStartedInitialLayouts(page) {
 	const results = [];
 	for (const viewport of VIEWPORTS) {
 		for (const theme of THEMES) {
 			await setViewportMode(page, viewport, theme);
-			const metrics = await page.evaluate((requireStackedTags) => {
-				const shell = document.querySelector(".echo-notes-getting-started-modal-shell");
-				const content = document.querySelector(".echo-notes-getting-started-modal");
-				const tags = [...(content?.querySelectorAll(".echo-notes-getting-started-tag") ?? [])];
-				const firstTagRect = tags[0]?.getBoundingClientRect();
-				const secondTagRect = tags[1]?.getBoundingClientRect();
+			const metrics = await page.evaluate(() => {
+				const taskCenter = document.querySelector(".echo-notes-task-center");
+				const guide = taskCenter?.querySelector(".echo-notes-getting-started-guide");
+				const steps = [...(guide?.querySelectorAll(".echo-notes-getting-started-progress-step") ?? [])];
+				const guideRect = guide?.getBoundingClientRect();
 				return {
 					innerWidth: window.innerWidth,
 					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-					contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
-					shellFits: Boolean(shell) && shell.getBoundingClientRect().width <= window.innerWidth - 8,
-					tagCount: tags.length,
-					tagsFit: tags.every((tag) => tag.scrollWidth <= tag.clientWidth + 1),
-					tagsStacked: Boolean(
-						firstTagRect && secondTagRect && secondTagRect.top >= firstTagRect.bottom - 1
-					),
-					requireStackedTags
+					taskCenterOverflow: taskCenter
+						? taskCenter.scrollWidth - taskCenter.clientWidth
+						: Number.POSITIVE_INFINITY,
+					guideOverflow: guide ? guide.scrollWidth - guide.clientWidth : Number.POSITIVE_INFINITY,
+					guideFits: Boolean(guideRect) && guideRect.left >= -1 && guideRect.right <= window.innerWidth + 1,
+					stepCount: steps.length,
+					stepsFit: steps.every((step) => step.scrollWidth <= step.clientWidth + 1),
+					modalCount: document.querySelectorAll(".echo-notes-getting-started-modal-shell").length
 				};
-			}, viewport.mobileShell);
+			});
 			const context = `getting-started/${viewport.name}/${theme}`;
 			assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
 			assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
-			assert(metrics.contentOverflow <= 1, `${context} 欢迎内容出现横向溢出`);
-			assert(metrics.shellFits, `${context} 欢迎弹窗超出 viewport`);
-			assert(metrics.tagCount === 3 && metrics.tagsFit, `${context} 三个引导标签布局不完整`);
-			assert(metrics.tagsStacked === metrics.requireStackedTags, `${context} 引导标签响应式布局不正确`);
-			const fileName = `getting-started-welcome-${viewport.name}-${theme}.png`;
+			assert(metrics.taskCenterOverflow <= 1, `${context} 任务中心出现横向溢出`);
+			assert(metrics.guideOverflow <= 1 && metrics.guideFits, `${context} 新人边栏超出可视区域`);
+			assert(metrics.stepCount === 3 && metrics.stepsFit, `${context} 三阶段边栏布局不完整`);
+			assert(metrics.modalCount === 0, `${context} 仍出现新人弹窗`);
+			const fileName = `getting-started-initial-${viewport.name}-${theme}.png`;
 			const screenshotPath = path.join(OUTPUT_DIR, fileName);
-			await page.locator(".echo-notes-getting-started-modal-shell").screenshot({ path: screenshotPath });
+			await page.locator(".echo-notes-task-center").screenshot({ path: screenshotPath });
 			assert((await stat(screenshotPath)).size > 5_000, `${fileName} 截图可能为空白`);
 			results.push({ viewport: viewport.name, theme, fileName, metrics });
 		}
@@ -464,7 +478,7 @@ async function captureGettingStartedWelcomeLayouts(page) {
 	return results;
 }
 
-async function captureGettingStartedTaskCenterLayouts(page) {
+async function captureGettingStartedGuideLayouts(page, phase) {
 	const results = [];
 	for (const viewport of VIEWPORTS) {
 		for (const theme of THEMES) {
@@ -472,30 +486,33 @@ async function captureGettingStartedTaskCenterLayouts(page) {
 			const taskCenter = page.locator(".echo-notes-task-center");
 			await taskCenter.waitFor({ state: "visible" });
 			const metrics = await page.evaluate(() => {
-				const content = document.querySelector(".echo-notes-task-center");
-				const checklist = content?.querySelector(".echo-notes-getting-started-checklist");
-				const steps = [...(checklist?.querySelectorAll(".echo-notes-getting-started-step") ?? [])];
-				const buttons = [...(checklist?.querySelectorAll("button") ?? [])];
-				const checklistRect = checklist?.getBoundingClientRect();
+				const content = document.querySelector(".echo-notes-getting-started-guide");
+				const steps = [...(content?.querySelectorAll(".echo-notes-getting-started-progress-step") ?? [])];
+				const buttons = [...(content?.querySelectorAll("button") ?? [])];
+				const contentRect = content?.getBoundingClientRect();
 				return {
 					innerWidth: window.innerWidth,
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
 					contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
-					checklistOverflow: checklist ? checklist.scrollWidth - checklist.clientWidth : Number.POSITIVE_INFINITY,
+					contentFits: Boolean(contentRect) && contentRect.left >= -1 && contentRect.right <= window.innerWidth + 1,
 					stepCount: steps.length,
 					stepsFit: steps.every((step) => step.scrollWidth <= step.clientWidth + 1),
 					buttonsFit: buttons.every((button) => {
 						const rect = button.getBoundingClientRect();
-						return Boolean(checklistRect && rect.left >= checklistRect.left - 1 && rect.right <= checklistRect.right + 1);
-					})
+						return Boolean(contentRect && rect.left >= contentRect.left - 1 && rect.right <= contentRect.right + 1);
+					}),
+					hotkeyRowsFit: [...(content?.querySelectorAll(".echo-notes-getting-started-hotkey-row") ?? [])]
+						.every((row) => row.scrollWidth <= row.clientWidth + 1)
 				};
 			});
-			const context = `task-center/${viewport.name}/${theme}`;
+			const context = `getting-started-${phase}/${viewport.name}/${theme}`;
 			assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
-			assert(metrics.contentOverflow <= 1, `${context} 任务中心出现横向溢出`);
-			assert(metrics.checklistOverflow <= 1, `${context} 新人清单出现横向溢出`);
-			assert(metrics.stepCount === 3 && metrics.stepsFit, `${context} 新人步骤布局不完整`);
-			assert(metrics.buttonsFit, `${context} 新人清单按钮超出边界`);
-			const fileName = `task-center-getting-started-${viewport.name}-${theme}.png`;
+			assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+			assert(metrics.contentOverflow <= 1, `${context} 新人边栏内容出现横向溢出`);
+			assert(metrics.contentFits, `${context} 新人边栏超出 viewport`);
+			assert(metrics.stepCount === 3 && metrics.stepsFit, `${context} 三阶段进度布局不完整`);
+			assert(metrics.buttonsFit && metrics.hotkeyRowsFit, `${context} 控件超出新人边栏`);
+			const fileName = `getting-started-${phase}-${viewport.name}-${theme}.png`;
 			const screenshotPath = path.join(OUTPUT_DIR, fileName);
 			await taskCenter.screenshot({ path: screenshotPath });
 			assert((await stat(screenshotPath)).size > 5_000, `${fileName} 截图可能为空白`);
@@ -507,7 +524,14 @@ async function captureGettingStartedTaskCenterLayouts(page) {
 
 async function inspectSettingsSpotlight(
 	page,
-	{ targetName, stepLabel, actionLabel, actionDisabled = false, expectFocus = true }
+	{
+		targetName,
+		stepLabel,
+		actionLabel,
+		actionDisabled = false,
+		secondaryActionLabel = null,
+		expectFocus = true
+	}
 ) {
 	const layer = page.locator(".echo-notes-settings-spotlight-layer");
 	await layer.waitFor({ state: "visible" });
@@ -553,7 +577,9 @@ async function inspectSettingsSpotlight(
 			const popover = spotlightLayer?.querySelector(".echo-notes-settings-spotlight-popover");
 			const target = document.querySelector(`[data-echo-notes-guide-target="${expectedTargetName}"]`);
 			const action = popover?.querySelector(".echo-notes-settings-spotlight-action");
+			const secondaryAction = popover?.querySelector(".echo-notes-settings-spotlight-secondary-action");
 			const close = popover?.querySelector(".echo-notes-settings-spotlight-close");
+			const footerButtons = [...(popover?.querySelectorAll(".echo-notes-settings-spotlight-footer button") ?? [])];
 			const description = popover?.querySelector(".echo-notes-settings-spotlight-description");
 			const describedElement = description?.id
 				? document.querySelector(`[aria-describedby~="${description.id}"]`)
@@ -620,6 +646,12 @@ async function inspectSettingsSpotlight(
 				viewport: { width: window.innerWidth, height: window.innerHeight },
 				actionLabel: action?.textContent?.trim(),
 				actionDisabled: action?.hasAttribute("disabled") ?? false,
+				secondaryActionLabel: secondaryAction?.textContent?.trim() ?? null,
+				footerButtonCount: footerButtons.length,
+				footerButtonsFit: footerButtons.every((button) => (
+					button.scrollWidth <= button.clientWidth + 1 &&
+					button.getBoundingClientRect().right <= (popoverRect?.right ?? Number.NEGATIVE_INFINITY) + 1
+				)),
 				closeVisible: Boolean(close && close.getBoundingClientRect().width > 0),
 				descriptionLinked: Boolean(describedElement && description && describedElement.getAttribute("aria-describedby")?.split(/\s+/).includes(description.id)),
 				focusInside: Boolean(
@@ -650,6 +682,12 @@ async function inspectSettingsSpotlight(
 	);
 	assert(metrics.actionLabel === actionLabel, `${context} 操作标签不正确`);
 	assert(metrics.actionDisabled === actionDisabled, `${context} 操作可用状态不正确`);
+	assert(metrics.secondaryActionLabel === secondaryActionLabel, `${context} 次操作标签不正确`);
+	assert(
+		metrics.footerButtonCount === (secondaryActionLabel ? 2 : 1),
+		`${context} 页脚按钮数量不正确`
+	);
+	assert(metrics.footerButtonsFit, `${context} 页脚按钮文字裁切或溢出`);
 	assert(metrics.closeVisible, `${context} 缺少可见关闭按钮`);
 	assert(metrics.descriptionLinked, `${context} aria-describedby 关系无效`);
 	if (expectFocus) {
@@ -657,6 +695,29 @@ async function inspectSettingsSpotlight(
 	}
 	assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
 	return metrics;
+}
+
+async function verifySettingsSpotlightFocusOrder(page, targetName) {
+	const target = page.locator(`[data-echo-notes-guide-target="${targetName}"] input[type="password"]`);
+	await target.focus();
+	for (const expectedSelector of [
+		".echo-notes-settings-spotlight-secondary-action",
+		".echo-notes-settings-spotlight-action",
+		".echo-notes-settings-spotlight-close"
+	]) {
+		await page.keyboard.press("Tab");
+		assert(
+			await page.locator(expectedSelector).evaluate((element) => element === document.activeElement),
+			`Spotlight 焦点未按预期移动到 ${expectedSelector}`
+		);
+	}
+	await page.keyboard.press("Shift+Tab");
+	assert(
+		await page.locator(".echo-notes-settings-spotlight-action").evaluate(
+			(element) => element === document.activeElement
+		),
+		"Spotlight Shift+Tab 未返回主操作"
+	);
 }
 
 async function captureSettingsSpotlightLayouts(page, phase, expectation) {
@@ -679,216 +740,236 @@ async function captureSettingsSpotlightLayouts(page, phase, expectation) {
 	return results;
 }
 
+
 async function verifyGettingStarted(page) {
-	const modal = page.locator(".echo-notes-getting-started-modal-shell");
-	await modal.waitFor({ state: "visible" });
+	const guide = page.locator(".echo-notes-getting-started-guide");
+	await guide.waitFor({ state: "visible" });
 	const semantics = await page.evaluate((pluginId) => {
-		const shell = document.querySelector(".echo-notes-getting-started-modal-shell");
-		const title = shell?.querySelector(".modal-title");
-		const closeButton = shell?.querySelector(".modal-close-button");
+		const section = document.querySelector(".echo-notes-getting-started-guide");
+		const title = section?.querySelector(".echo-notes-getting-started-guide-title");
+		const toggle = section?.querySelector(".echo-notes-getting-started-guide-toggle");
 		const plugin = window.app.plugins.plugins[pluginId];
 		return {
 			modalCount: document.querySelectorAll(".echo-notes-getting-started-modal-shell").length,
 			title: title?.textContent?.trim(),
-			labelledBy: shell?.getAttribute("aria-labelledby"),
+			labelledBy: section?.getAttribute("aria-labelledby"),
 			titleId: title?.id,
-			copy: shell?.querySelector(".echo-notes-getting-started-copy")?.textContent?.trim(),
-			tags: [...(shell?.querySelectorAll(".echo-notes-getting-started-tag") ?? [])]
-				.map((tag) => tag.textContent?.trim()),
-			closeVisible: Boolean(closeButton && closeButton.getBoundingClientRect().width > 0),
+			copy: section?.querySelector(".echo-notes-getting-started-guide-copy")?.textContent?.trim(),
+			steps: [...(section?.querySelectorAll(".echo-notes-getting-started-progress-step-copy > span:first-child") ?? [])]
+				.map((step) => step.textContent?.trim()),
+			expanded: toggle?.getAttribute("aria-expanded"),
+			inRightSidebar: Boolean(section?.closest(".mod-right-split")),
+			mainLeafCount: document.querySelectorAll(".workspace-split.mod-root .workspace-leaf").length,
 			status: plugin.settings.gettingStartedState.status,
-			firstShownAt: plugin.settings.gettingStartedState.firstShownAt ?? null
-		};
-	}, PLUGIN_ID);
-	assert(semantics.modalCount === 1, "首次启用只能显示一个欢迎 Modal");
-	assert(semantics.title === "把一段录音变成一份 AI 笔记", "欢迎 Modal 标题不正确");
-	assert(semantics.labelledBy === semantics.titleId && Boolean(semantics.titleId), "欢迎 Modal 的 ARIA 标题关系无效");
-	assert(semantics.copy?.includes("Obsidian SecretStorage"), "欢迎 Modal 缺少隐私与密钥说明");
-	assert(
-		JSON.stringify(semantics.tags) === JSON.stringify(["配置转写", "配置分析", "处理录音"]),
-		"欢迎 Modal 的三步标签不正确"
-	);
-	assert(semantics.closeVisible, "欢迎 Modal 缺少可见关闭按钮");
-	assert(semantics.status === "in-progress" && semantics.firstShownAt, "首次展示状态未在打开 Modal 时持久化");
-
-	for (let index = 0; index < 6; index += 1) {
-		await page.keyboard.press("Tab");
-		const focusInside = await page.evaluate(() => {
-			const shell = document.querySelector(".echo-notes-getting-started-modal-shell");
-			return Boolean(shell && shell.contains(document.activeElement));
-		});
-		assert(focusInside, "欢迎 Modal 的 Tab 焦点逃离弹窗");
-	}
-
-	const welcomeLayouts = await captureGettingStartedWelcomeLayouts(page);
-	await setViewportMode(page, VIEWPORTS[0], "light");
-	await modal.getByRole("button", { name: "开始设置", exact: true }).click();
-	await modal.waitFor({ state: "detached" });
-	const taskCenter = page.locator(".echo-notes-task-center");
-	await taskCenter.waitFor({ state: "visible" });
-	let checklistState = await page.evaluate((pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		const snapshot = plugin.getGettingStartedChecklistSnapshot();
-		return {
-			status: plugin.settings.gettingStartedState.status,
-			progress: snapshot.progress,
-			guideExpanded: snapshot.guideExpanded,
-			action: snapshot.processingAction,
-			actionLabel: snapshot.processingActionLabel,
+			schemaVersion: plugin.settings.gettingStartedState.schemaVersion,
 			stateJson: JSON.stringify(plugin.settings.gettingStartedState)
 		};
 	}, PLUGIN_ID);
-	assert(checklistState.status === "in-progress" && checklistState.guideExpanded, "开始设置后新人清单未展开");
-	assert(checklistState.progress.completedSteps === 0, "缺少配置的新安装不应提前完成步骤");
+	assert(semantics.modalCount === 0, "首次启用不应显示新人弹窗");
+	assert(semantics.title === "开始使用 Echo Notes", "新人边栏标题不正确");
+	assert(semantics.labelledBy === semantics.titleId && Boolean(semantics.titleId), "新人边栏 ARIA 标题关系无效");
+	assert(semantics.copy?.includes("Obsidian SecretStorage"), "新人边栏缺少密钥存储说明");
 	assert(
-		checklistState.action === "open-recording-settings" && checklistState.actionLabel === "打开录音控制",
-		"离线模式无音频时第三步操作不正确"
+		JSON.stringify(semantics.steps) === JSON.stringify(["第一次转写", "快捷转写与分析", "记忆沉淀"]),
+		"新人边栏三阶段标签不正确"
 	);
-	assert(!/api.?key|secret|sk-/i.test(checklistState.stateJson), "新人状态包含密钥或 Secret 字段");
-	const trustModal = page.locator(".modal-container.mod-confirmation").filter({ hasText: "你是否信任这个仓库的作者" });
-	if (await trustModal.count()) {
-		await trustModal.getByRole("button", { name: "信任仓库作者并启用插件", exact: true }).click();
-		await trustModal.waitFor({ state: "detached" });
-	}
-	if (await page.locator(".modal.mod-settings").count()) {
+	assert(semantics.expanded === "true", "未完成新人边栏首次打开时应展开");
+	assert(semantics.inRightSidebar && semantics.mainLeafCount > 0, "新人指引未在右侧栏打开或主编辑区不可用");
+	assert(semantics.status === "in-progress" && semantics.schemaVersion === 3, "新人状态未迁移到 schema v3");
+	assert(!/api.?key|secret|sk-/i.test(semantics.stateJson), "新人状态包含密钥或 Secret 字段");
+
+	const trustButton = page.locator(".modal-container.mod-confirmation:visible")
+		.getByRole("button", { name: "信任仓库作者并启用插件", exact: true });
+	if (await trustButton.count()) {
+		await trustButton.click();
+		await page.waitForFunction((pluginId) => Boolean(window.app.plugins.plugins[pluginId]), PLUGIN_ID);
 		await page.evaluate(() => window.app.setting.close());
 		await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+		await guide.waitFor({ state: "visible" });
 	}
-	const blockingModals = await page.evaluate(() => [...document.querySelectorAll(".modal-container")]
-		.filter((container) => container.getBoundingClientRect().width > 0)
-		.map((container) => ({
-			classes: container.className,
-			text: container.textContent?.trim().slice(0, 500)
-		})));
-	assert(blockingModals.length === 0, `开始设置后仍有阻塞 Modal：${JSON.stringify(blockingModals)}`);
+	const blockingConfirmations = await page.locator(".modal-container.mod-confirmation:visible").allTextContents();
+	assert(blockingConfirmations.length === 0, `新人边栏被意外确认框阻塞：${blockingConfirmations.join(" | ")}`);
+	const initialLayouts = await captureGettingStartedInitialLayouts(page);
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await guide.getByRole("heading", { name: "配置转写服务", exact: true }).waitFor({ state: "visible" });
+	assert(await guide.getByText("0/3", { exact: true }).isVisible(), "新人边栏初始章节进度不正确");
+	assert((await page.locator(".echo-notes-getting-started-checklist").count()) === 0, "任务中心旧新人清单仍存在");
 
-	await taskCenter.locator(".echo-notes-getting-started-step").filter({ hasText: "转写服务可用" })
-		.getByRole("button").click();
+	await guide.getByRole("button", { name: "去配置", exact: true }).click();
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
-	assert(
-		(await page.locator('[data-settings-stage="transcription"]').getAttribute("aria-selected")) === "true",
-		"转写配置跳转未定位到录音转写阶段"
-	);
-	assert(
-		(await getActivePanel(page).getByRole("tab", { name: "转写服务", exact: true }).getAttribute("aria-selected")) === "true",
-		"转写配置跳转未定位到转写服务分类"
-	);
 	await inspectSettingsSpotlight(page, {
 		targetName: "transcription-provider",
 		stepLabel: "1/2",
 		actionLabel: "下一步"
 	});
-	const previousProviderTarget = await page
-		.locator('[data-echo-notes-guide-target="transcription-provider"]')
-		.elementHandle();
-	assert(previousProviderTarget, "转写 Provider 重绘前缺少引导锚点");
-	const transcriptionProvider = page.locator('[data-echo-notes-guide-target="transcription-provider"] select');
-	const nextProvider = await transcriptionProvider.evaluate((select) => {
-		if (!(select instanceof HTMLSelectElement)) {
-			return null;
-		}
-		return [...select.options].find((option) => option.value !== select.value)?.value ?? null;
-	});
-	assert(nextProvider, "转写 Provider 缺少可用于重绘验证的候选项");
-	await transcriptionProvider.selectOption(nextProvider);
-	await page.waitForFunction((previousTarget) => {
-		const layers = document.querySelectorAll(".echo-notes-settings-spotlight-layer");
-		const target = document.querySelector('[data-echo-notes-guide-target="transcription-provider"]');
-		return Boolean(
-			previousTarget &&
-			!previousTarget.isConnected &&
-			target &&
-			target !== previousTarget &&
-			layers.length === 1 &&
-			target.classList.contains("is-echo-notes-spotlight-target")
-		);
-	}, previousProviderTarget);
-	await previousProviderTarget.dispose();
-	await inspectSettingsSpotlight(page, {
-		targetName: "transcription-provider",
-		stepLabel: "1/2",
-		actionLabel: "下一步"
-	});
-	for (let index = 0; index < 5; index += 1) {
-		await page.keyboard.press("Tab");
-		const focusState = await page.evaluate(() => {
-			const target = document.querySelector('[data-echo-notes-guide-target="transcription-provider"]');
-			const popover = document.querySelector(".echo-notes-settings-spotlight-popover");
-			const active = document.activeElement;
-			return {
-				inside: Boolean(
-					active &&
-					((target?.contains(active) ?? false) || (popover?.contains(active) ?? false))
-				),
-				tag: active?.tagName ?? null,
-				classes: active instanceof HTMLElement ? active.className : null,
-				text: active?.textContent?.trim().slice(0, 120) ?? null,
-				connected: active?.isConnected ?? false,
-				layerCount: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
-				targetHighlighted: target?.classList.contains("is-echo-notes-spotlight-target") ?? false
-			};
-		});
-		assert(
-			focusState.inside,
-			`Spotlight 的 Tab 焦点逃离目标与提示卡（第 ${index + 1} 次）：${JSON.stringify(focusState)}`
-		);
-	}
-	const providerSpotlightLayouts = await captureSettingsSpotlightLayouts(page, "provider", {
+	const providerSpotlightLayouts = await captureSettingsSpotlightLayouts(page, "provider-v2", {
 		targetName: "transcription-provider",
 		stepLabel: "1/2",
 		actionLabel: "下一步"
 	});
 	await setViewportMode(page, VIEWPORTS[0], "light");
+	await page.keyboard.press("Escape");
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	assert(await page.locator(".modal.mod-settings").isVisible(), "Escape 不应关闭设置窗口");
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await guide.getByRole("heading", { name: "配置转写服务", exact: true }).waitFor({ state: "visible" });
+
+	await guide.getByRole("button", { name: "去配置", exact: true }).click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "transcription-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
 	await page.locator(".echo-notes-settings-spotlight-action").click();
 	await inspectSettingsSpotlight(page, {
 		targetName: "transcription-api-key",
 		stepLabel: "2/2",
-		actionLabel: "完成"
+		actionLabel: "返回新人指引",
+		secondaryActionLabel: "留在设置"
 	});
-	const apiKeySpotlightLayouts = await captureSettingsSpotlightLayouts(page, "api-key", {
+	const apiKeySpotlightLayouts = await captureSettingsSpotlightLayouts(page, "api-key-v2", {
 		targetName: "transcription-api-key",
 		stepLabel: "2/2",
-		actionLabel: "完成"
+		actionLabel: "返回新人指引",
+		secondaryActionLabel: "留在设置"
 	});
 	await setViewportMode(page, VIEWPORTS[0], "light");
-	await page.emulateMedia({ reducedMotion: "reduce" });
-	const reducedMotionState = await page.evaluate(() => ({
-		maskTransition: getComputedStyle(document.querySelector(".echo-notes-settings-spotlight-mask")).transitionDuration,
-		popoverTransition: getComputedStyle(document.querySelector(".echo-notes-settings-spotlight-popover")).transitionDuration
-	}));
-	assert(reducedMotionState.maskTransition === "0s", "reduced-motion 下遮罩仍有过渡动画");
-	assert(reducedMotionState.popoverTransition === "0s", "reduced-motion 下提示卡仍有过渡动画");
-	await page.emulateMedia({ reducedMotion: "no-preference" });
-	await page.keyboard.press("Escape");
-	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
-	const escapeCleanupState = await page.evaluate(() => {
-		const input = document.querySelector('[data-echo-notes-guide-target="transcription-api-key"] input[type="password"]');
+	await verifySettingsSpotlightFocusOrder(page, "transcription-api-key");
+	const stayInSettingsBefore = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const target = document.querySelector('[data-echo-notes-guide-target="transcription-api-key"]');
+		const scrollContainer = document.querySelector(".modal.mod-settings .vertical-tab-content-container");
 		return {
-			settingsVisible: Boolean(document.querySelector(".modal.mod-settings")),
-			introVisible: Boolean(document.querySelector(".echo-notes-settings-intro")),
-			inputFound: Boolean(input),
-			describedBy: input?.getAttribute("aria-describedby") ?? null
+			activeStage: plugin.settingTab?.activeSettingsStage,
+			activeSection: plugin.settingTab?.activeTranscriptionSettingsSection,
+			targetTop: target?.getBoundingClientRect().top,
+			scrollTop: scrollContainer?.scrollTop
 		};
-	});
+	}, PLUGIN_ID);
+	await page.getByRole("button", { name: "留在设置", exact: true }).click();
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	assert(await page.locator(".modal.mod-settings").isVisible(), "留在设置后设置窗口被意外关闭");
+	const stayInSettingsAfter = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const target = document.querySelector('[data-echo-notes-guide-target="transcription-api-key"]');
+		const scrollContainer = document.querySelector(".modal.mod-settings .vertical-tab-content-container");
+		return {
+			activeGuide: plugin.settingTab?.activeSettingsGuide ?? null,
+			activeStage: plugin.settingTab?.activeSettingsStage,
+			activeSection: plugin.settingTab?.activeTranscriptionSettingsSection,
+			targetTop: target?.getBoundingClientRect().top,
+			scrollTop: scrollContainer?.scrollTop,
+			targetHighlighted: target?.classList.contains("is-echo-notes-spotlight-target") ?? false
+		};
+	}, PLUGIN_ID);
 	assert(
-		escapeCleanupState.describedBy === null &&
-		(await page.locator(".is-echo-notes-spotlight-target").count()) === 0,
-		`Escape 退出后未完整清理 Spotlight：${JSON.stringify(escapeCleanupState)}`
+		stayInSettingsAfter.activeGuide === null &&
+		stayInSettingsAfter.activeStage === stayInSettingsBefore.activeStage &&
+		stayInSettingsAfter.activeSection === stayInSettingsBefore.activeSection &&
+		Math.abs((stayInSettingsAfter.targetTop ?? 0) - (stayInSettingsBefore.targetTop ?? 0)) <= 1 &&
+		Math.abs((stayInSettingsAfter.scrollTop ?? 0) - (stayInSettingsBefore.scrollTop ?? 0)) <= 1 &&
+		!stayInSettingsAfter.targetHighlighted,
+		`留在设置未保持当前位置或未清理 Spotlight：${JSON.stringify({
+			before: stayInSettingsBefore,
+			after: stayInSettingsAfter
+		})}`
 	);
-	if (escapeCleanupState.settingsVisible) {
-		assert(escapeCleanupState.introVisible && escapeCleanupState.inputFound, "Escape 退出后设置页状态不完整");
-		await page.locator(".echo-notes-settings-intro-copy").getByRole("button", { name: "新人指引", exact: true }).click();
-	}
-	await taskCenter.waitFor({ state: "visible" });
-	assert((await page.locator(".echo-notes-settings-spotlight-layer").count()) === 0, "返回任务中心后仍残留 Spotlight");
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await guide.getByRole("heading", { name: "配置转写服务", exact: true }).waitFor({ state: "visible" });
+	assert((await page.locator(".echo-notes-settings-spotlight-layer").count()) === 0, "退出设置后仍残留 Spotlight");
 
-	await taskCenter.locator(".echo-notes-getting-started-step").filter({ hasText: "AI 分析可用" })
-		.getByRole("button").click();
-	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		await plugin.saveApiKey(plugin.settings.offlineTranscription.provider, "ui-test-transcription-key");
+		plugin.__gettingStartedOriginalRecorderCheck = plugin.isOfficialAudioRecorderEnabled;
+		plugin.isOfficialAudioRecorderEnabled = () => false;
+		plugin.settings.gettingStartedState = {
+			schemaVersion: 3,
+			status: "in-progress",
+			step: "recorder",
+			practiceStage: "idle",
+			chapters: {
+				first: { outcome: "pending" },
+				shortcut: { outcome: "pending" },
+				memory: { outcome: "pending" }
+			},
+			firstShownAt: Date.now()
+		};
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	await guide.getByRole("heading", { name: "启用 Obsidian 核心录音机", exact: true }).waitFor({ state: "visible" });
+	assert(await guide.getByRole("button", { name: "立即启用", exact: true }).isVisible(), "核心录音机步骤缺少启用操作");
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.isOfficialAudioRecorderEnabled = () => null;
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	assert(await guide.getByRole("button", { name: "打开 core plugins", exact: true }).isVisible(), "核心录音机内部 API 缺失时未提供设置降级入口");
+	assert(await guide.getByRole("button", { name: "我已手动开启", exact: true }).isVisible(), "核心录音机状态不可读时未提供手动确认");
+	assert(await guide.getByRole("button", { name: "重新检测", exact: true }).isVisible(), "核心录音机状态不可读时未提供重新检测");
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.isOfficialAudioRecorderEnabled = plugin.__gettingStartedOriginalRecorderCheck;
+		delete plugin.__gettingStartedOriginalRecorderCheck;
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			step: "first-practice",
+			practiceStage: "idle",
+			experienceNotePath: undefined,
+			recorderManuallyConfirmedAt: Date.now()
+		};
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	await guide.getByRole("heading", { name: "任务一：完成第一次转写", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("button", { name: "跳过此阶段", exact: true }).click();
 	assert(
-		(await page.locator('[data-settings-stage="analysis"]').getAttribute("aria-selected")) === "true",
-		"AI 分析配置跳转未定位到 AI 分析阶段"
+		await guide.getByText("跳过后不会生成本阶段的新人产物，但会解锁下一阶段。之后仍可再学一次。", { exact: true }).isVisible(),
+		"第一次点击跳过未显示边栏内确认"
 	);
+	await guide.getByRole("button", { name: "取消", exact: true }).click();
+	assert(await guide.getByRole("button", { name: "跳过此阶段", exact: true }).isVisible(), "取消跳过后未恢复阶段操作");
+	const firstPracticeLayouts = await captureGettingStartedGuideLayouts(page, "first-practice");
+	await setViewportMode(page, VIEWPORTS[0], "light");
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			step: "analysis",
+			practiceStage: "idle",
+			chapters: {
+				...plugin.settings.gettingStartedState.chapters,
+				first: { outcome: "completed" }
+			},
+			experienceNotePath: "Echo Notes 首次体验.md",
+			firstAudioPath: "Recordings/first.webm",
+			firstTranscriptPath: "Recordings/first.transcript.md",
+			firstSuccessfulTranscriptionAt: Date.now(),
+			firstChapterAcknowledgedAt: Date.now()
+		};
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	await guide.getByRole("heading", { name: "配置 AI 分析", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("button", { name: "去配置", exact: true }).click();
+	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+	await page.waitForTimeout(100);
+	const analysisGuideState = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		return {
+			activeGuide: plugin.settingTab?.activeSettingsGuide ?? null,
+			activeStage: plugin.settingTab?.activeSettingsStage ?? null,
+			analysisEnabled: plugin.settings.analysisEnabled,
+			layerCount: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
+			enableTargetCount: document.querySelectorAll('[data-echo-notes-guide-target="analysis-enabled"]').length
+		};
+	}, PLUGIN_ID);
+	assert(analysisGuideState.layerCount === 1, `AI 分析配置引导未建立：${JSON.stringify(analysisGuideState)}`);
 	await inspectSettingsSpotlight(page, {
 		targetName: "analysis-enabled",
 		stepLabel: "准备步骤",
@@ -896,10 +977,25 @@ async function verifyGettingStarted(page) {
 		actionDisabled: true
 	});
 	await page.locator('[data-echo-notes-guide-target="analysis-enabled"] .checkbox-container').click();
-	await page.waitForFunction(() => {
-		const target = document.querySelector('[data-echo-notes-guide-target="analysis-provider"]');
-		return target?.classList.contains("is-echo-notes-spotlight-target");
+	await inspectSettingsSpotlight(page, {
+		targetName: "analysis-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
 	});
+	await page.locator(".echo-notes-settings-spotlight-mask").evaluateAll((masks) => {
+		const visibleMask = masks.find((mask) => {
+			const rect = mask.getBoundingClientRect();
+			return rect.width > 0 && rect.height > 0;
+		}) ?? masks[0];
+		visibleMask?.click();
+	});
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	assert(await page.locator(".modal.mod-settings").isVisible(), "点击 Spotlight 遮罩不应关闭设置窗口");
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await guide.getByRole("heading", { name: "配置 AI 分析", exact: true }).waitFor({ state: "visible" });
+
+	await guide.getByRole("button", { name: "去配置", exact: true }).click();
 	await inspectSettingsSpotlight(page, {
 		targetName: "analysis-provider",
 		stepLabel: "1/2",
@@ -909,252 +1005,373 @@ async function verifyGettingStarted(page) {
 	await inspectSettingsSpotlight(page, {
 		targetName: "analysis-api-key",
 		stepLabel: "2/2",
-		actionLabel: "完成"
+		actionLabel: "返回新人指引",
+		secondaryActionLabel: "留在设置"
 	});
-	await page.locator(".echo-notes-settings-spotlight-close").click();
+	await page.keyboard.press("Escape");
 	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
-	assert(
-		await page.locator('[data-echo-notes-guide-target="analysis-api-key"] input[type="password"]')
-			.evaluate((input) => document.activeElement === input),
-		"关闭 Spotlight 后未将焦点恢复到当前配置控件"
-	);
-	await page.locator(".echo-notes-settings-intro-copy").getByRole("button", { name: "新人指引", exact: true }).click();
-	await taskCenter.waitFor({ state: "visible" });
-
-	checklistState = await page.evaluate(async (pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		plugin.settings.analysisEnabled = true;
-		const enabledTemplate = plugin.settings.analysisTemplates.find((template) => template.enabled) ?? plugin.settings.analysisTemplates[0];
-		enabledTemplate.enabled = true;
-		await plugin.saveApiKey(plugin.settings.offlineTranscription.provider, "ui-test-transcription-key");
-		await plugin.saveAnalysisApiKey("ui-test-analysis-key");
-		await plugin.saveSettings();
-		const snapshot = plugin.getGettingStartedChecklistSnapshot();
-		return {
-			progress: snapshot.progress,
-			stateJson: JSON.stringify(plugin.settings.gettingStartedState),
-			plainApiKey: plugin.settings.apiKey ?? null,
-			plainAnalysisApiKey: plugin.settings.analysisApiKey ?? null
-		};
-	}, PLUGIN_ID);
-	assert(checklistState.progress.completedSteps === 2, "转写与分析配置可用后应完成前两步");
-	assert(checklistState.plainApiKey === null && checklistState.plainAnalysisApiKey === null, "API Key 进入普通设置");
-	assert(!checklistState.stateJson.includes("ui-test"), "API Key 进入新人状态");
-	await taskCenter.getByText("2/3", { exact: true }).waitFor({ state: "visible" });
-
-	const completedTranscriptionStep = taskCenter.locator(".echo-notes-getting-started-step")
-		.filter({ hasText: "转写服务可用" });
-	assert(
-		(await completedTranscriptionStep.getByRole("button").textContent())?.trim() === "查看配置",
-		"已完成转写步骤未显示“查看配置”"
-	);
-	await completedTranscriptionStep.getByRole("button").click();
-	await inspectSettingsSpotlight(page, {
-		targetName: "transcription-provider",
-		stepLabel: "1/2",
-		actionLabel: "下一步"
-	});
-	await page.locator(".echo-notes-settings-spotlight-mask.is-top").click({ position: { x: 2, y: 2 } });
-	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
-	await page.locator(".echo-notes-settings-intro-copy").getByRole("button", { name: "新人指引", exact: true }).click();
-	await taskCenter.waitFor({ state: "visible" });
-
-	const completedAnalysisStep = taskCenter.locator(".echo-notes-getting-started-step")
-		.filter({ hasText: "AI 分析可用" });
-	assert(
-		(await completedAnalysisStep.getByRole("button").textContent())?.trim() === "查看配置",
-		"已完成分析步骤未显示“查看配置”"
-	);
-	await completedAnalysisStep.getByRole("button").click();
-	await inspectSettingsSpotlight(page, {
-		targetName: "analysis-provider",
-		stepLabel: "1/2",
-		actionLabel: "下一步"
-	});
+	assert(await page.locator(".modal.mod-settings").isVisible(), "API Key 步骤按 Escape 不应关闭设置窗口");
 	await page.evaluate(() => window.app.setting.close());
-	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
 	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
-	await taskCenter.waitFor({ state: "visible" });
+	await guide.getByRole("heading", { name: "配置 AI 分析", exact: true }).waitFor({ state: "visible" });
 
-	const declarativeCleanupState = await page.evaluate(async (pluginId) => {
+	const conflictCommandInfo = await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
-		const settingTab = plugin.settingTab;
-		const settingEl = document.createElement("div");
-		document.body.appendChild(settingEl);
-		const definition = settingTab.getSettingDefinitions()[0];
-		const cleanup = definition.render({ settingEl });
-		const hostEl = settingEl.querySelector(".echo-notes-settings-definition-host");
-		settingTab.showDestination("transcription-service", { guide: "provider-api-key" });
-		await new Promise((resolve) => window.setTimeout(resolve, 50));
-		const layerBeforeCleanup = document.querySelectorAll(".echo-notes-settings-spotlight-layer").length;
-		cleanup();
-		const state = {
-			layerBeforeCleanup,
-			layerAfterCleanup: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
-			hostConnected: hostEl?.isConnected ?? false,
-			guideActive: Boolean(settingTab.activeSettingsGuide)
+		await plugin.saveAnalysisApiKey("ui-test-analysis-key");
+		plugin.settings.analysisEnabled = true;
+		const template = plugin.settings.analysisTemplates.find((candidate) => candidate.enabled) ?? plugin.settings.analysisTemplates[0];
+		template.enabled = true;
+		const manager = window.app.hotkeyManager;
+		for (const commandId of [
+			"audio-recorder:start",
+			"audio-recorder:stop",
+			`${pluginId}:transcribe-all-audio-files-in-current-note`
+		]) {
+			manager.setHotkeys(commandId, []);
+		}
+		const conflictCommand = Object.entries(window.app.commands.commands)
+			.find(([commandId]) => !commandId.includes("audio-recorder") && !commandId.includes(pluginId));
+		if (conflictCommand) {
+			manager.setHotkeys(conflictCommand[0], [{ modifiers: ["Ctrl", "Shift"], key: "R" }]);
+		}
+		await manager.save();
+		plugin.settings.officialRecorderStartHotkey = null;
+		plugin.settings.officialRecorderStopHotkey = null;
+		plugin.settings.transcribeAllAudioHotkey = null;
+		delete plugin.settings.gettingStartedState.hotkeysManuallyConfirmedAt;
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+		return conflictCommand
+			? {
+				id: conflictCommand[0],
+				label: conflictCommand[1]?.name ?? conflictCommand[0],
+				hotkeys: manager.getHotkeys(conflictCommand[0])
+			}
+			: null;
+	}, PLUGIN_ID);
+	await guide.getByRole("heading", { name: "配置三组快捷键", exact: true }).waitFor({ state: "visible" });
+	assert(
+		await guide.getByText(
+			"Mac 统一推荐：Control+L 开始录音，Control+S 停止录音，Control+Z 转写。",
+			{ exact: true }
+		).isVisible(),
+		"Mac 新人快捷键推荐提示缺失"
+	);
+	const recommendedHotkeyLabels = await guide
+		.locator(".echo-notes-getting-started-hotkey-capture")
+		.allTextContents();
+	assert(
+		JSON.stringify(recommendedHotkeyLabels) === JSON.stringify(["Ctrl+L", "Ctrl+S", "Ctrl+Z"]),
+		`Mac 新人快捷键未按统一组合预填：${JSON.stringify(recommendedHotkeyLabels)}`
+	);
+	const hotkeyLayouts = await captureGettingStartedGuideLayouts(page, "hotkeys");
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	const captureButtons = guide.locator(".echo-notes-getting-started-hotkey-capture");
+	const captureHotkey = async (index, hotkey) => {
+		await captureButtons.nth(index).click();
+		await page.waitForFunction(() => document.activeElement?.classList.contains("is-recording"));
+		await page.keyboard.press(hotkey);
+	};
+	await captureHotkey(0, "Control+Shift+R");
+	if (conflictCommandInfo) {
+		const conflictLocator = guide.locator(".echo-notes-getting-started-hotkey-conflict");
+		const conflictText = await conflictLocator.count() > 0 ? await conflictLocator.first().textContent() : null;
+		const conflictDebug = await page.evaluate(({ pluginId, commandId }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			const taskCenterView = window.app.workspace.getLeavesOfType("echo-notes-task-center")[0]?.view;
+			const draft = taskCenterView?.gettingStartedGuide?.hotkeyDraft ?? null;
+			return {
+				draft,
+				conflicts: draft ? plugin.getGettingStartedHotkeyConflicts(draft) : null,
+				commandHotkeys: window.app.hotkeyManager.getHotkeys(commandId)
+			};
+		}, { pluginId: PLUGIN_ID, commandId: conflictCommandInfo.id });
+		assert(
+			conflictText?.includes(conflictCommandInfo.label),
+			`快捷键草稿未实时显示全局冲突：${JSON.stringify({ conflictCommandInfo, conflictText, conflictDebug })}`
+		);
+		assert(
+			await conflictLocator.first().getAttribute("role") === "status" &&
+			await conflictLocator.first().getAttribute("aria-live") === "polite",
+			"新人快捷键冲突提示缺少可访问状态播报"
+		);
+		assert(
+			await guide.getByRole("button", { name: "保存并继续", exact: true }).isDisabled(),
+			"新人快捷键与其他命令冲突时保存按钮仍可用"
+		);
+		await page.evaluate(async ({ pluginId, commandId }) => {
+			window.app.hotkeyManager.setHotkeys(commandId, []);
+			await window.app.hotkeyManager.save();
+			window.app.plugins.plugins[pluginId].notifyGettingStartedChanged();
+		}, { pluginId: PLUGIN_ID, commandId: conflictCommandInfo.id });
+		await conflictLocator.waitFor({ state: "detached" });
+	}
+	await captureHotkey(1, "Control+Shift+R");
+	assert(await guide.getByText("三组快捷键不能重复，请重新录入。", { exact: true }).isVisible(), "重复快捷键未被阻止");
+	assert(await guide.getByRole("button", { name: "保存并继续", exact: true }).isDisabled(), "重复快捷键时保存按钮仍可用");
+	await captureHotkey(1, "Control+Shift+S");
+	await captureHotkey(2, "Control+Shift+T");
+	assert(
+		await guide.getByRole("button", { name: "保存并继续", exact: true }).isEnabled(),
+		"合法新人快捷键组合未恢复保存能力"
+	);
+	await page.evaluate(() => {
+		window.app.hotkeyManager.__echoNotesOriginalSave = window.app.hotkeyManager.save;
+		window.app.hotkeyManager.save = async () => {
+			throw new Error("模拟快捷键批量保存失败");
 		};
-		settingEl.remove();
-		settingTab.closeSettingsGuide();
-		return state;
+	});
+	await guide.getByRole("button", { name: "保存并继续", exact: true }).click();
+	await page.waitForTimeout(100);
+	const rollbackState = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const commandIds = [
+			"audio-recorder:start",
+			"audio-recorder:stop",
+			`${pluginId}:transcribe-all-audio-files-in-current-note`
+		];
+		return {
+			managerHotkeys: commandIds.map((commandId) => window.app.hotkeyManager.getHotkeys(commandId)),
+			settingsHotkeys: [
+				plugin.settings.officialRecorderStartHotkey,
+				plugin.settings.officialRecorderStopHotkey,
+				plugin.settings.transcribeAllAudioHotkey
+			]
+		};
 	}, PLUGIN_ID);
 	assert(
-		declarativeCleanupState.layerBeforeCleanup === 1 &&
-		declarativeCleanupState.layerAfterCleanup === 0 &&
-		!declarativeCleanupState.hostConnected &&
-		!declarativeCleanupState.guideActive,
-		`声明式设置宿主销毁后未清理 Spotlight：${JSON.stringify(declarativeCleanupState)}`
+		rollbackState.managerHotkeys.every((hotkeys) => hotkeys.length === 0) &&
+		rollbackState.settingsHotkeys.every((hotkey) => hotkey === null),
+		`快捷键批量保存失败后未完整回滚：${JSON.stringify(rollbackState)}`
+	);
+	await page.evaluate(() => {
+		window.app.hotkeyManager.save = window.app.hotkeyManager.__echoNotesOriginalSave;
+		delete window.app.hotkeyManager.__echoNotesOriginalSave;
+	});
+	await guide.getByRole("button", { name: "保存并继续", exact: true }).click();
+	await guide.getByRole("heading", { name: "任务二：快捷转写并生成 AI 分析", exact: true }).waitFor({ state: "visible" });
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			step: "shortcut-practice",
+			practiceStage: "waiting-for-shortcut-audio",
+			shortcutPracticeStartedAt: Date.now()
+		};
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	assert(await guide.getByText("等待你用快捷键开始和停止录音", { exact: true }).isVisible(), "快捷键实操等待状态不正确");
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			practiceStage: "waiting-for-shortcut-transcription",
+			shortcutAudioPath: "Recordings/shortcut.webm"
+		};
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	assert(
+		await guide.getByText(
+			"录音已保存，请按 Ctrl+Shift+T 转写当前笔记全部音频",
+			{ exact: true }
+		).isVisible(),
+		"录音保存后未显示具体转写快捷键提示"
 	);
 
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
-		plugin.settings.transcriptionMode = "realtime";
-		await plugin.saveApiKey("volcengine-agentplan", "ui-test-realtime-key");
+		plugin.settings.memoryInitialized = true;
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			step: "memory",
+			practiceStage: "idle",
+			chapters: {
+				first: { outcome: "completed" },
+				shortcut: { outcome: "completed" },
+				memory: { outcome: "pending" }
+			},
+			shortcutAudioPath: "Recordings/shortcut.webm",
+			shortcutTranscriptPath: "getting-started-ui.transcript.md",
+			memorySourceTranscriptPath: "getting-started-ui.transcript.md",
+			firstSuccessfulAnalysisAt: Date.now(),
+			shortcutChapterAcknowledgedAt: Date.now()
+		};
+		if (!window.app.vault.getAbstractFileByPath("getting-started-ui.transcript.md")) {
+			await window.app.vault.create("getting-started-ui.transcript.md", "# UI 验证转写稿\n\n无敏感内容。\n");
+		}
+		await plugin.saveMemoryApiKey("");
 		await plugin.saveSettings();
-		await plugin.openSettingsDestination("transcription-service", { guide: "provider-api-key" });
+		plugin.notifyGettingStartedChanged();
 	}, PLUGIN_ID);
+	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("button", { name: "配置记忆模型", exact: true }).click();
 	await inspectSettingsSpotlight(page, {
-		targetName: "transcription-provider",
+		targetName: "memory-provider",
 		stepLabel: "1/2",
 		actionLabel: "下一步"
 	});
-	const realtimeGuideState = await page.evaluate(() => {
-		const target = document.querySelector('[data-echo-notes-guide-target="transcription-provider"]');
-		return {
-			providerDisabled: target?.querySelector("select")?.hasAttribute("disabled") ?? false,
-			title: document.querySelector(".echo-notes-settings-spotlight-title")?.textContent?.trim(),
-			description: document.querySelector(".echo-notes-settings-spotlight-description")?.textContent?.trim()
-		};
+	await page.locator(".echo-notes-settings-spotlight-close").click();
+	await page.locator(".echo-notes-settings-spotlight-layer").waitFor({ state: "detached" });
+	assert(await page.locator(".modal.mod-settings").isVisible(), "Spotlight 关闭按钮不应关闭设置窗口");
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
+
+	await guide.getByRole("button", { name: "配置记忆模型", exact: true }).click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "memory-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
 	});
-	assert(realtimeGuideState.providerDisabled, "实时转写 Spotlight 未保持固定 Provider 禁用状态");
-	assert(realtimeGuideState.title === "确认实时转写 Provider", "实时转写 Spotlight 标题不正确");
-	assert(
-		realtimeGuideState.description?.includes("固定使用火山引擎 AgentPlan"),
-		"实时转写 Spotlight 未解释固定 AgentPlan Provider"
-	);
+	await page.evaluate(() => window.app.setting.close());
+	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
+
+	await guide.getByRole("button", { name: "配置记忆模型", exact: true }).click();
+	await inspectSettingsSpotlight(page, {
+		targetName: "memory-provider",
+		stepLabel: "1/2",
+		actionLabel: "下一步"
+	});
 	await page.locator(".echo-notes-settings-spotlight-action").click();
 	await inspectSettingsSpotlight(page, {
-		targetName: "transcription-api-key",
+		targetName: "memory-api-key",
 		stepLabel: "2/2",
-		actionLabel: "完成"
+		actionLabel: "返回新人指引",
+		secondaryActionLabel: "留在设置"
 	});
-	await page.locator(".echo-notes-settings-spotlight-close").click();
-	await page.evaluate(() => window.app.setting.close());
+	await page.getByRole("button", { name: "返回新人指引", exact: true }).click();
 	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
+	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
-		plugin.settings.transcriptionMode = "offline";
+		await plugin.saveMemoryApiKey("ui-test-memory-key");
 		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
 	}, PLUGIN_ID);
-	await taskCenter.waitFor({ state: "visible" });
-	const taskCenterLayouts = await captureGettingStartedTaskCenterLayouts(page);
+	await guide.getByRole("button", { name: "沉淀第一份记忆", exact: true }).waitFor({ state: "visible" });
+	await page.waitForFunction(() => document.querySelectorAll(".notice").length === 0, undefined, { timeout: 10_000 });
+	const memoryLayouts = await captureGettingStartedGuideLayouts(page, "memory");
+	await setViewportMode(page, VIEWPORTS[0], "light");
 
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
-		await plugin.recordGettingStartedSuccess("transcription");
-	}, PLUGIN_ID);
-	let milestoneState = await page.evaluate((pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		return { ...plugin.settings.gettingStartedState };
-	}, PLUGIN_ID);
-	assert(milestoneState.status === "in-progress", "成功转写后不应提前完成新人流程");
-	assert(Boolean(milestoneState.firstSuccessfulTranscriptionAt), "成功转写里程碑未保存");
-	assert(!milestoneState.firstSuccessfulAnalysisAt, "成功转写后不应伪造分析里程碑");
-
-	await page.evaluate(async (pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		await plugin.recordGettingStartedSuccess("analysis");
-	}, PLUGIN_ID);
-	await taskCenter.getByRole("status").getByText("首次转写与 AI 分析已完成", { exact: true })
-		.waitFor({ state: "visible" });
-	milestoneState = await page.evaluate((pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		plugin.taskCenter.upsertTask({
-			id: "transcription:getting-started-test",
-			kind: "transcription",
-			title: "getting-started-test.m4a",
-			status: "success",
-			stage: "转写完成",
-			targetPath: "getting-started-test.m4a",
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			status: "completed",
+			step: "completed",
+			practiceStage: "completed",
+			chapters: {
+				first: { outcome: "completed" },
+				shortcut: { outcome: "completed" },
+				memory: { outcome: "completed" }
+			},
+			firstSuccessfulMemoryAt: Date.now(),
+			memoryCandidatePath: "Echo Memory/Candidates/first.md",
 			completedAt: Date.now()
-		});
-		plugin.clearFinishedTaskCenterTasks();
-		return {
-			state: { ...plugin.settings.gettingStartedState },
-			taskCount: plugin.getTaskCenterTasks().length
 		};
-	}, PLUGIN_ID);
-	assert(milestoneState.state.status === "completed", "AI 分析成功写入后新人流程未完成");
-	assert(Boolean(milestoneState.state.firstSuccessfulAnalysisAt && milestoneState.state.completedAt), "分析成功时间未保存");
-	assert(milestoneState.taskCount === 0, "测试任务未清理");
-	assert(milestoneState.state.status === "completed", "清除已结束任务导致新人进度倒退");
-	await page.waitForFunction((pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		return plugin.getGettingStartedChecklistSnapshot().guideExpanded === false;
-	}, PLUGIN_ID, { timeout: 6_000 });
-	assert(
-		(await taskCenter.locator(".echo-notes-getting-started-steps").count()) === 0,
-		"完成状态未自动收起"
-	);
-
-	await page.evaluate(async (pluginId) => {
-		await window.app.commands.executeCommandById(`${pluginId}:open-getting-started`);
-	}, PLUGIN_ID);
-	await taskCenter.locator(".echo-notes-getting-started-steps").waitFor({ state: "visible" });
-
-	await page.evaluate(async (pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		plugin.settings.gettingStartedState = { schemaVersion: 1, status: "not-started" };
 		await plugin.saveSettings();
-		await plugin.maybeShowGettingStartedWelcome();
+		plugin.notifyGettingStartedChanged();
 	}, PLUGIN_ID);
-	await modal.waitFor({ state: "visible" });
-	await page.keyboard.press("Escape");
-	await modal.waitFor({ state: "detached" });
-	const dismissedState = await page.evaluate(async (pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		await plugin.recordGettingStartedSuccess("transcription");
-		return { ...plugin.settings.gettingStartedState };
-	}, PLUGIN_ID);
-	assert(dismissedState.status === "dismissed", "Escape 未持久抑制欢迎 Modal");
-	assert(!dismissedState.firstSuccessfulTranscriptionAt, "已暂缓的新人流程仍记录后台里程碑");
-
-	await page.evaluate(async (pluginId) => {
-		await window.app.plugins.disablePlugin(pluginId);
-		await window.app.plugins.enablePluginAndSave(pluginId);
-	}, PLUGIN_ID);
-	await page.waitForFunction((pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		return plugin?.settings?.gettingStartedState?.status === "dismissed";
-	}, PLUGIN_ID);
-	assert((await modal.count()) === 0, "已暂缓用户在插件重载后再次自动看到欢迎 Modal");
-
-	await page.evaluate(async (pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		const legacySettings = { ...plugin.settings };
-		delete legacySettings.gettingStartedState;
-		await plugin.saveData(legacySettings);
-		await window.app.plugins.disablePlugin(pluginId);
-		await window.app.plugins.enablePluginAndSave(pluginId);
-	}, PLUGIN_ID);
-	await page.waitForFunction((pluginId) => {
-		const plugin = window.app.plugins.plugins[pluginId];
-		return plugin?.settings?.gettingStartedState?.status === "dismissed";
-	}, PLUGIN_ID);
-	assert((await modal.count()) === 0, "已有安装迁移后不应自动显示欢迎 Modal");
-
+	assert(await guide.getByText("3/3", { exact: true }).isVisible(), "完成摘要章节进度不正确");
+	assert(
+		(await guide.getByRole("button", { name: "展开新人指引", exact: true }).getAttribute("aria-expanded")) === "false",
+		"三阶段完成后新人边栏未默认折叠"
+	);
 	await page.evaluate(async (pluginId) => {
 		await window.app.commands.executeCommandById(`${pluginId}:open-getting-started`);
 	}, PLUGIN_ID);
-	await taskCenter.locator(".echo-notes-getting-started-steps").waitFor({ state: "visible" });
+	await guide.getByRole("heading", { name: "三阶段新人旅程已结束", exact: true }).waitFor({ state: "visible" });
+	assert(
+		(await guide.getByRole("button", { name: "收起新人指引", exact: true }).getAttribute("aria-expanded")) === "true",
+		"新人指引命令未重新展开完成摘要"
+	);
+	await guide.getByRole("button", { name: /第一次转写/ }).click();
+	await guide.getByRole("heading", { name: "第一次转写已完成", exact: true }).waitFor({ state: "visible" });
+	assert(await guide.getByRole("button", { name: "再学一次", exact: true }).isVisible(), "已完成阶段缺少再学一次操作");
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.gettingStartedState = {
+			...plugin.settings.gettingStartedState,
+			chapters: {
+				...plugin.settings.gettingStartedState.chapters,
+				first: { outcome: "skipped", skippedAt: Date.now() }
+			}
+		};
+		await plugin.saveSettings();
+		plugin.notifyGettingStartedChanged();
+	}, PLUGIN_ID);
+	await guide.getByRole("heading", { name: "第一次转写已跳过", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("button", { name: "再学一次", exact: true }).click();
+	await guide.getByText("正在复习：第一次转写", { exact: true }).waitFor({ state: "visible" });
+	assert(await guide.getByRole("button", { name: "结束本次复习", exact: true }).isVisible(), "复习状态缺少退出操作");
+	await guide.getByRole("button", { name: "结束本次复习", exact: true }).click();
+	await guide.getByRole("heading", { name: "第一次转写已跳过", exact: true }).waitFor({ state: "visible" });
+	assert((await page.locator(".echo-notes-getting-started-checklist").count()) === 0, "任务中心仍渲染旧新人清单");
+	assert((await page.locator(".echo-notes-getting-started-modal-shell").count()) === 0, "完成阶段仍出现新人弹窗");
+
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
 		plugin.settings.analysisEnabled = false;
+		plugin.settings.gettingStartedState = {
+			schemaVersion: 3,
+			status: "not-started",
+			step: "transcription",
+			practiceStage: "idle",
+			chapters: {
+				first: { outcome: "pending" },
+				shortcut: { outcome: "pending" },
+				memory: { outcome: "pending" }
+			}
+		};
 		await plugin.saveSettings();
+		await plugin.maybeOpenGettingStartedGuide();
 	}, PLUGIN_ID);
+	await guide.getByRole("button", { name: "稍后", exact: true }).click();
+	await guide.waitFor({ state: "detached" });
+	const dismissedState = await page.evaluate((pluginId) => ({
+		...window.app.plugins.plugins[pluginId].settings.gettingStartedState
+	}), PLUGIN_ID);
+	assert(dismissedState.status === "dismissed", "稍后操作未持久停止自动提醒");
+	await page.evaluate(async (pluginId) => {
+		await window.app.plugins.plugins[pluginId].maybeOpenGettingStartedGuide();
+	}, PLUGIN_ID);
+	assert((await page.locator(".echo-notes-getting-started-guide").count()) === 0, "已稍后的新人边栏被自动重新打开");
+	await page.evaluate(async (pluginId) => {
+		await window.app.commands.executeCommandById(`${pluginId}:open-getting-started`);
+	}, PLUGIN_ID);
+	await guide.waitFor({ state: "visible" });
+	const resumedState = await page.evaluate((pluginId) => ({
+		...window.app.plugins.plugins[pluginId].settings.gettingStartedState
+	}), PLUGIN_ID);
+	assert(resumedState.status === "in-progress", "新人指引命令未恢复已稍后的流程");
+	await guide.getByRole("button", { name: "跳过此阶段", exact: true }).click();
+	await guide.getByRole("button", { name: "确认跳过", exact: true }).click();
+	await guide.getByRole("heading", { name: "配置 AI 分析", exact: true }).waitFor({ state: "visible" });
+	const skippedFirstState = await page.evaluate((pluginId) => ({
+		...window.app.plugins.plugins[pluginId].settings.gettingStartedState
+	}), PLUGIN_ID);
+	assert(skippedFirstState.chapters.first.outcome === "skipped", "确认跳过后未持久化第一阶段状态");
+	assert(
+		await guide.getByText("1/3", { exact: true }).isVisible(),
+		"跳过阶段未计入新人旅程进度"
+	);
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.analysisEnabled = false;
+		plugin.settings.memoryInitialized = false;
+		plugin.settings.memoryEnabled = false;
+		await plugin.saveSettings();
+		plugin.settingTab?.showDestination("transcription-service");
+	}, PLUGIN_ID);
+
 	return {
-		welcomeLayouts,
-		taskCenterLayouts,
+		initialLayouts,
+		guideLayouts: [...firstPracticeLayouts, ...hotkeyLayouts, ...memoryLayouts],
 		spotlightLayouts: [...providerSpotlightLayouts, ...apiKeySpotlightLayouts]
 	};
 }
@@ -1442,7 +1659,7 @@ async function verifyIntroduction(page) {
 }
 
 function getActivePanel(page) {
-	return page.locator(".echo-notes-settings-panel:not([hidden])");
+	return page.locator(".echo-notes-settings-panel:not([hidden]):visible");
 }
 
 async function getActiveSetting(page, name) {
@@ -1511,6 +1728,107 @@ async function setSettingToggle(page, name, enabled) {
 			`${name} 重绘后的开关状态不正确`
 		);
 	}
+}
+
+async function verifySettingsHotkeyConflicts(page) {
+	await reopenSettings(page);
+	const setup = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const manager = window.app.hotkeyManager;
+		const targetCommandId = "audio-recorder:start";
+		const conflictCommand = Object.entries(window.app.commands.commands)
+			.find(([commandId]) => commandId !== targetCommandId && !commandId.includes("audio-recorder"));
+		if (!conflictCommand) {
+			throw new Error("找不到用于设置页快捷键冲突验收的命令");
+		}
+		const originalTargetHotkeys = manager.getHotkeys(targetCommandId) ?? [];
+		const originalConflictHotkeys = manager.getHotkeys(conflictCommand[0]) ?? [];
+		const originalSetting = plugin.settings.officialRecorderStartHotkey;
+		const originalTranscriptionMode = plugin.settings.transcriptionMode;
+		const originalActiveSettingsStage = plugin.settingTab.activeSettingsStage;
+		const originalActiveTranscriptionSettingsSection = plugin.settingTab.activeTranscriptionSettingsSection;
+		const originalActiveAnalysisSettingsSection = plugin.settingTab.activeAnalysisSettingsSection;
+		manager.setHotkeys(targetCommandId, []);
+		manager.setHotkeys(conflictCommand[0], [{ modifiers: ["Ctrl", "Shift"], key: "R" }]);
+		await manager.save();
+		plugin.settings.officialRecorderStartHotkey = null;
+		plugin.settings.transcriptionMode = "offline";
+		await plugin.saveSettings();
+		plugin.settingTab.showDestination("transcription-recording");
+		return {
+			targetCommandId,
+			conflictCommandId: conflictCommand[0],
+			conflictLabel: conflictCommand[1]?.name ?? conflictCommand[0],
+			originalTargetHotkeys,
+			originalConflictHotkeys,
+			originalSetting,
+			originalTranscriptionMode,
+			originalActiveSettingsStage,
+			originalActiveTranscriptionSettingsSection,
+			originalActiveAnalysisSettingsSection
+		};
+	}, PLUGIN_ID);
+	await page.evaluate((pluginId) => {
+		window.app.plugins.plugins[pluginId].settingTab.showDestination("transcription-recording");
+	}, PLUGIN_ID);
+
+	const settingItem = await getActiveSetting(page, "Obsidian 核心插件录音机开启快捷键");
+	const input = settingItem.locator('input[type="text"]');
+	const saveButton = settingItem.getByRole("button", { name: "保存", exact: true });
+	const status = settingItem.locator('.echo-notes-hotkey-validation[role="status"]');
+	await input.fill("Ctrl+Shift+R");
+	assert(await saveButton.isDisabled(), "设置页快捷键与其他命令冲突时保存按钮仍可用");
+	assert(
+		(await status.getAttribute("aria-live")) === "polite" &&
+		(await status.textContent())?.includes(setup.conflictLabel),
+		"设置页快捷键冲突提示不明确或缺少可访问状态播报"
+	);
+	const bypassResult = await page.evaluate(async ({ pluginId, targetCommandId }) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const manager = window.app.hotkeyManager;
+		const beforeManager = manager.getHotkeys(targetCommandId) ?? [];
+		const beforeSetting = plugin.settings.officialRecorderStartHotkey;
+		const saved = await plugin.setOfficialAudioRecorderStartHotkey({ modifiers: ["Ctrl", "Shift"], key: "R" });
+		return {
+			saved,
+			beforeManager,
+			afterManager: manager.getHotkeys(targetCommandId) ?? [],
+			beforeSetting,
+			afterSetting: plugin.settings.officialRecorderStartHotkey
+		};
+	}, { pluginId: PLUGIN_ID, targetCommandId: setup.targetCommandId });
+	assert(
+		bypassResult.saved === false &&
+		JSON.stringify(bypassResult.beforeManager) === JSON.stringify(bypassResult.afterManager) &&
+		JSON.stringify(bypassResult.beforeSetting) === JSON.stringify(bypassResult.afterSetting),
+		`设置页单项保存绕过了冲突校验：${JSON.stringify(bypassResult)}`
+	);
+
+	await page.evaluate(async (commandId) => {
+		window.app.hotkeyManager.setHotkeys(commandId, []);
+		await window.app.hotkeyManager.save();
+	}, setup.conflictCommandId);
+	await input.fill("Ctrl+Shift+Y");
+	assert(await saveButton.isEnabled(), "合法设置页快捷键未恢复保存能力");
+	await saveButton.click();
+	await page.waitForFunction((pluginId) => (
+		window.app.plugins.plugins[pluginId].settings.officialRecorderStartHotkey?.key === "Y"
+	), PLUGIN_ID);
+
+	await page.evaluate(async ({ pluginId, setup }) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const manager = window.app.hotkeyManager;
+		manager.setHotkeys(setup.targetCommandId, setup.originalTargetHotkeys);
+		manager.setHotkeys(setup.conflictCommandId, setup.originalConflictHotkeys);
+		await manager.save();
+		plugin.settings.officialRecorderStartHotkey = setup.originalSetting;
+		plugin.settings.transcriptionMode = setup.originalTranscriptionMode;
+		await plugin.saveSettings();
+		plugin.settingTab.activeSettingsStage = setup.originalActiveSettingsStage;
+		plugin.settingTab.activeTranscriptionSettingsSection = setup.originalActiveTranscriptionSettingsSection;
+		plugin.settingTab.activeAnalysisSettingsSection = setup.originalActiveAnalysisSettingsSection;
+		plugin.settingTab.display();
+	}, { pluginId: PLUGIN_ID, setup });
 }
 
 async function getTemplateGroupState(page) {
@@ -1655,6 +1973,126 @@ async function verifyTabs(page) {
 			JSON.stringify(["aliyun-bailian", "siliconflow", "mosi", "ollama", "lm-studio"]),
 		"离线转写 Provider 的成员或顺序不正确"
 	);
+	await selectSettingOption(page, "Provider", "siliconflow");
+	const transcriptionAdvanced = activePanel.locator(
+		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+	).first();
+	assert(await transcriptionAdvanced.getAttribute("open") === null, "转写高级配置应默认折叠");
+	assert(
+		await activePanel.getByText("当前 provider 能力", { exact: true }).isVisible(),
+		"当前 Provider 能力应在基础配置中可见"
+	);
+	assert(await (await getActiveSetting(page, "转写模型")).isVisible(), "转写模型应在基础配置中可见");
+	assert(await (await getActiveSetting(page, "转写配置自检")).isVisible(), "转写配置自检应在基础配置中可见");
+	const serviceOrder = await activePanel.locator('.echo-notes-settings-section-panel:not([hidden])').evaluate((panel) => (
+		[...panel.children]
+			.map((element) => {
+				if (element.matches(".setting-item")) {
+					return element.querySelector(".setting-item-name")?.textContent?.trim() ?? "";
+				}
+				if (element.matches(".echo-notes-provider-capability")) {
+					return "当前 provider 能力";
+				}
+				if (element.matches(".echo-notes-settings-advanced")) {
+					return "高级配置";
+				}
+				return "";
+			})
+			.filter(Boolean)
+	));
+	const orderIndex = (label) => serviceOrder.findIndex((item) => item.includes(label));
+	assert(
+		orderIndex("Provider") < orderIndex("API 密钥") &&
+		orderIndex("API 密钥") < orderIndex("转写模型") &&
+		orderIndex("转写模型") < orderIndex("转写配置自检") &&
+		orderIndex("转写配置自检") < orderIndex("当前 provider 能力") &&
+		orderIndex("当前 provider 能力") < orderIndex("高级配置"),
+		`转写服务设置顺序不符合信息架构：${JSON.stringify(serviceOrder)}`
+	);
+	assert(
+		JSON.stringify(await getSettingOptionValues(page, "转写模型")) ===
+			JSON.stringify(["FunAudioLLM/SenseVoiceSmall", "TeleAI/TeleSpeechASR", "__custom__"]),
+		"SiliconFlow 转写模型选项不完整"
+	);
+	for (const advancedSettingName of ["Base URL", "默认转写语言", "自定义语言代码"]) {
+		const advancedSetting = await getActiveSetting(page, advancedSettingName);
+		assert(!(await advancedSetting.isVisible()), `${advancedSettingName} 应在高级配置折叠时隐藏`);
+	}
+	assert((await activePanel.getByText("硅基流动注册链接", { exact: true }).count()) === 0, "Provider 注册入口不应再单独占用设置行");
+	assert(
+		(await activePanel.getByText("自定义转写模型", { exact: true }).count()) === 0,
+		"使用官方模型时不应显示自定义模型输入框"
+	);
+	const officialTranscriptionModel = await page.evaluate(
+		(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
+		PLUGIN_ID
+	);
+	await selectSettingOption(page, "转写模型", "__custom__");
+	const customModelSetting = await getActiveSetting(page, "自定义转写模型");
+	assert(await customModelSetting.isVisible(), "选择自定义模型后应在基础配置中就地显示模型 ID 输入框");
+	assert(
+		(await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
+			PLUGIN_ID
+		)) === officialTranscriptionModel,
+		"选择自定义模型时不应覆盖当前有效模型"
+	);
+	const customModelInput = customModelSetting.locator('input[type="text"]');
+	await customModelInput.fill(" ");
+	await customModelInput.blur();
+	await customModelSetting.getByText("模型 ID 不能为空。", { exact: true }).waitFor({ state: "visible" });
+	assert(
+		(await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
+			PLUGIN_ID
+		)) === officialTranscriptionModel,
+		"无效自定义模型不应写入设置"
+	);
+	await customModelInput.fill("custom/test-asr");
+	await customModelInput.blur();
+	await customModelSetting.getByText("已保存", { exact: true }).waitFor({ state: "visible" });
+	assert(
+		(await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
+			PLUGIN_ID
+		)) === "custom/test-asr",
+		"合法自定义模型未保存"
+	);
+	await selectSettingOption(page, "转写模型", "FunAudioLLM/SenseVoiceSmall");
+	assert(
+		(await activePanel.getByText("自定义转写模型", { exact: true }).count()) === 0,
+		"切回官方模型后应隐藏自定义模型输入框"
+	);
+
+	await selectSettingOption(page, "Provider", "mosi");
+	let fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
+	assert(await fixedTranscriptionModel.isDisabled(), "MOSI 固定模型应不可编辑");
+	await setSettingToggle(page, "说话人分离", false);
+	fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
+	assert(
+		await fixedTranscriptionModel.inputValue() === "moss-transcribe",
+		"关闭 MOSI 说话人分离后固定模型不正确"
+	);
+	await setSettingToggle(page, "说话人分离", true);
+	fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
+	assert(
+		await fixedTranscriptionModel.inputValue() === "moss-transcribe-diarize",
+		"开启 MOSI 说话人分离后固定模型不正确"
+	);
+
+	await selectSettingOption(page, "转写模式", "realtime");
+	fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
+	assert(
+		await fixedTranscriptionModel.isDisabled() &&
+		await fixedTranscriptionModel.inputValue() === "doubao-seed-asr-2.0",
+		"AgentPlan 实时转写固定模型应在基础配置中只读展示"
+	);
+	await selectSettingOption(page, "转写模式", "offline");
+	await selectSettingOption(page, "Provider", "siliconflow");
+	await transcriptionAdvanced.locator("summary").click();
+	for (const advancedSettingName of ["Base URL", "默认转写语言", "自定义语言代码"]) {
+		assert(await (await getActiveSetting(page, advancedSettingName)).isVisible(), `${advancedSettingName} 应在展开高级配置后显示`);
+	}
 
 	await outputTab.click();
 	await selectSettingOption(page, "输出目录策略", "custom-folder");
@@ -1693,10 +2131,16 @@ async function verifyTabs(page) {
 	);
 	await selectSettingOption(page, "记忆 provider", "siliconflow");
 	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
+	assert(await (await getActiveSetting(page, "记忆模型")).isVisible(), "记忆模型应在基础配置中可见");
 	await memoryProcessingTab.click();
 	await setSettingToggle(page, "长文本分块提取", false);
 	assert((await activePanel.getByText("记忆分块字符数", { exact: true }).count()) === 0, "关闭记忆分块后不应显示分块字符数");
 	await setSettingToggle(page, "长文本分块提取", true);
+	const memoryAdvanced = activePanel.locator(
+		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+	).first();
+	assert(await memoryAdvanced.getAttribute("open") === null, "记忆分块高级配置应默认折叠");
+	await memoryAdvanced.locator("summary").click();
 	await activePanel.getByText("记忆分块字符数", { exact: true }).waitFor({ state: "visible" });
 
 	await analysisTab.click();
@@ -1729,12 +2173,41 @@ async function verifyTabs(page) {
 		(await getSettingTextValue(page, "分析模型")) === "Qwen/Qwen3.5-4B",
 		"硅基流动默认分析模型不正确"
 	);
+	assert(await (await getActiveSetting(page, "分析模型")).isVisible(), "分析模型应在基础配置中可见");
+	let analysisAdvanced = activePanel.locator(
+		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+	).first();
+	assert(await analysisAdvanced.getAttribute("open") === null, "分析高级配置应默认折叠");
+	assert(!(await (await getActiveSetting(page, "分析 base URL")).isVisible()), "分析 Base URL 应在高级配置折叠时隐藏");
+	assert(!(await (await getActiveSetting(page, "分析配置自检")).isVisible()), "分析配置自检应在高级配置折叠时隐藏");
+
+	await selectSettingOption(page, "分析 provider", "volcengine-agentplan");
+	const agentPlanAnalysisModel = await getActiveSetting(page, "分析模型");
+	assert(
+		await agentPlanAnalysisModel.isVisible() && (await agentPlanAnalysisModel.locator("select").count()) === 1,
+		"AgentPlan 分析模型应在基础配置中使用下拉框展示"
+	);
 
 	await selectSettingOption(page, "分析 provider", "ollama");
+	analysisAdvanced = activePanel.locator(
+		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+	).first();
+	assert(await analysisAdvanced.getAttribute("open") === null, "分析高级配置应在 Provider 重绘后保持默认折叠");
+	assert(await (await getActiveSetting(page, "分析模型")).isVisible(), "Ollama 分析模型应在基础配置中可见");
+	await analysisAdvanced.locator("summary").click();
 	await activePanel.getByText("分析 base URL", { exact: true }).waitFor({ state: "visible" });
+	assert(await (await getActiveSetting(page, "分析配置自检")).isVisible(), "展开高级配置后应显示分析配置自检");
 	assert(await modelTab.getAttribute("aria-selected") === "true", "分析 Provider 重绘后应保留模型配置分类");
 
 	await processingTab.click();
+	const processingOrder = await activePanel.locator('.echo-notes-settings-section-panel:not([hidden])').evaluate((panel) => (
+		[...panel.querySelectorAll(":scope > .setting-item .setting-item-name")].map((element) => element.textContent?.trim() ?? "")
+	));
+	assert(
+		processingOrder.findIndex((item) => item.includes("AI 分析前脱敏")) <
+		processingOrder.findIndex((item) => item.includes("长文本分块分析")),
+		`AI 分析处理策略顺序不符合隐私优先：${JSON.stringify(processingOrder)}`
+	);
 	await setSettingToggle(page, "长文本分块分析", false);
 	await activePanel.getByText("AI 分析前脱敏 transcript", { exact: true }).waitFor({ state: "visible" });
 	assert(await processingTab.getAttribute("aria-selected") === "true", "长文本开关重绘后应保留处理策略分类");
@@ -1743,6 +2216,11 @@ async function verifyTabs(page) {
 		"关闭长文本分块后不应显示分块字符数"
 	);
 	await setSettingToggle(page, "长文本分块分析", true);
+	const analysisProcessingAdvanced = activePanel.locator(
+		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+	).first();
+	assert(await analysisProcessingAdvanced.getAttribute("open") === null, "分析分块高级配置应默认折叠");
+	await analysisProcessingAdvanced.locator("summary").click();
 	await activePanel.getByText("分析分块字符数", { exact: true }).waitFor({ state: "visible" });
 
 	await modelTab.click();
@@ -2498,6 +2976,7 @@ async function verifyMemoryReview(page) {
 	const activeRelation = Object.values(activeStore.relations)[0];
 	assert(activeRelation.status === "active", "确认后的记忆关系未处于生效状态");
 	assert(activeRelation.history.length === 1, "确认关系未写入首个历史事件");
+	assert(!activeState.relationContent.includes("evidenceQuote"), "新关系 JSON 仍持久化了原文证据");
 	assert(activeState.soulContent.includes("- **近期目标**：完成关系模型"), "替代关系的来源断言未进入画像");
 	assert(!activeState.soulContent.includes("- **近期目标**：完成候选审核"), "替代关系的目标断言仍作为事实留在画像");
 	assert(activeState.soulContent.includes(activeRelation.id), "画像未记录关系 ID");
@@ -2523,6 +3002,31 @@ async function verifyMemoryReview(page) {
 	assert(JSON.stringify(activeState.candidateContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.content)), "确认关系改写了原始候选包");
 	assert(JSON.stringify(activeState.reviewContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.reviewContent)), "确认关系改写了审核 sidecar");
 	assert(await page.evaluate((reviewPath) => !window.app.vault.getAbstractFileByPath(reviewPath), setup.unreviewedReviewPath), "确认关系意外补建了未审核 sidecar");
+
+	const legacyCleanupState = await page.evaluate(async ({ pluginId, candidatePath }) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const relationFile = window.app.vault.getAbstractFileByPath("Echo Memory/99 系统/echo-memory-relations.json");
+		const legacyStore = JSON.parse(await window.app.vault.read(relationFile));
+		const relation = Object.values(legacyStore.relations)[0];
+		relation.source.evidenceQuote = "旧关系来源原文证据";
+		relation.target.evidenceQuote = "旧关系目标原文证据";
+		for (const event of relation.history) {
+			event.source.evidenceQuote = "旧历史来源原文证据";
+			event.target.evidenceQuote = "旧历史目标原文证据";
+		}
+		await window.app.vault.modify(relationFile, `${JSON.stringify(legacyStore, null, 2)}\n`);
+		const candidateFile = window.app.vault.getAbstractFileByPath(candidatePath);
+		const context = await plugin.memoryService.getMemoryRelationContext(plugin.settings, candidateFile);
+		const sanitizedContent = await window.app.vault.read(relationFile);
+		return {
+			sanitizedContent,
+			schemaVersion: JSON.parse(sanitizedContent).schemaVersion,
+			approvedEvidenceCount: context.approvedEndpoints.filter((endpoint) => endpoint.evidenceQuote).length
+		};
+	}, { pluginId: PLUGIN_ID, candidatePath: setup.candidates[1].path });
+	assert(!legacyCleanupState.sanitizedContent.includes("evidenceQuote"), "读取旧关系文件后未惰性清理原文证据");
+	assert(legacyCleanupState.schemaVersion === 1, "旧关系惰性清理意外升级了 schema version");
+	assert(legacyCleanupState.approvedEvidenceCount > 0, "关系编辑上下文未继续从当前批准候选包读取原文证据");
 
 	const relationItem = modal.locator(".echo-notes-memory-relation-item").filter({ hasText: activeRelation.id });
 	await relationItem.locator('input[type="text"]').fill("旧目标重新生效");
@@ -2660,7 +3164,7 @@ async function verifyMemoryReview(page) {
 		return layouts;
 	}
 
-	async function setViewportMode(page, viewport, theme) {
+async function setViewportMode(page, viewport, theme) {
 	await page.setViewportSize({ width: viewport.width, height: viewport.height });
 	await page.evaluate(
 		({ mobileShellClass, mobileShell, nextTheme }) => {
@@ -2676,6 +3180,461 @@ async function verifyMemoryReview(page) {
 		},
 		{ mobileShellClass: MOBILE_SHELL_CLASS, mobileShell: viewport.mobileShell, nextTheme: theme }
 	);
+}
+
+async function inspectNamedSettingControls(page, settingNames) {
+	return getActivePanel(page).evaluate((panel, expectedNames) => {
+		const activeSection = panel.querySelector(".echo-notes-settings-section-panel:not([hidden])");
+		const expectedFieldHeight = Number.parseFloat(
+			getComputedStyle(activeSection ?? panel).getPropertyValue("--input-height")
+		) || 30;
+		return expectedNames.map((name) => {
+			const settingItem = [...(activeSection?.querySelectorAll(".setting-item") ?? [])].find(
+				(item) => item.querySelector(".setting-item-name")?.textContent?.trim() === name
+			);
+			const control = settingItem?.querySelector(":scope > .setting-item-control");
+			const interactive = control?.querySelector(":scope > input, :scope > select, :scope > button, :scope > .checkbox-container");
+			const field = control?.querySelector(
+				':scope > input[type="text"], :scope > input[type="password"], ' +
+				':scope > input[type="number"], :scope > input[type="url"], ' +
+				':scope > input[type="search"], :scope > select'
+			);
+			const feedback = control?.querySelector(":scope > .echo-notes-inline-validation");
+			const controlRect = control?.getBoundingClientRect();
+			const interactiveRect = interactive?.getBoundingClientRect();
+			const fieldRect = field?.getBoundingClientRect();
+			const feedbackRect = feedback?.getBoundingClientRect();
+			return {
+				name,
+				found: Boolean(settingItem && control && interactive),
+				controlRight: controlRect?.right ?? 0,
+				controlWidth: controlRect?.width ?? 0,
+				interactiveRight: interactiveRect?.right ?? 0,
+				interactiveWidth: interactiveRect?.width ?? 0,
+				interactiveHeight: interactiveRect?.height ?? 0,
+				interactiveTag: interactive?.tagName ?? "",
+				isUniformField: Boolean(field),
+				hasUniformFieldClass: field?.classList.contains("echo-notes-settings-field") ?? false,
+				fieldWidth: fieldRect?.width ?? 0,
+				fieldHeight: fieldRect?.height ?? 0,
+				expectedFieldHeight,
+				feedbackCount: control?.querySelectorAll(":scope > .echo-notes-inline-validation").length ?? 0,
+				feedbackBelowControl: Boolean(
+					interactiveRect && feedbackRect && feedbackRect.top >= interactiveRect.bottom - 1
+				),
+				feedbackTextAlign: feedback ? getComputedStyle(feedback).textAlign : null
+			};
+		});
+	}, settingNames);
+}
+
+function assertAlignedControlGroup(metrics, context) {
+	assert(metrics.every((metric) => metric.found), `${context} 缺少控件：${JSON.stringify(metrics)}`);
+	const rightEdges = metrics.map((metric) => metric.controlRight);
+	assert(
+		Math.max(...rightEdges) - Math.min(...rightEdges) <= 1.5,
+		`${context} 控制列右边界未对齐：${JSON.stringify(metrics)}`
+	);
+	for (const metric of metrics) {
+		assert(
+			Math.abs(metric.controlWidth - 320) <= 1.5,
+			`${context}/${metric.name} 桌面控制列宽度不是 320px：${metric.controlWidth}`
+		);
+		assert(
+			Math.abs(metric.interactiveRight - metric.controlRight) <= 1.5,
+			`${context}/${metric.name} 控件未贴齐控制列右边界`
+		);
+		if (metric.isUniformField) {
+			assert(metric.hasUniformFieldClass, `${context}/${metric.name} 缺少统一字段 class`);
+			assert(
+				Math.abs(metric.fieldWidth - metric.controlWidth) <= 1.5,
+				`${context}/${metric.name} 单字段未占满控制列`
+			);
+			assert(
+				Math.abs(metric.fieldHeight - metric.expectedFieldHeight) <= 1,
+				`${context}/${metric.name} 字段高度不是 ${metric.expectedFieldHeight}px：${metric.fieldHeight}`
+			);
+		}
+	}
+}
+
+async function verifyApiKeyFeedback(page, settingName, context) {
+	const settingItem = await getActiveSetting(page, settingName);
+	const inspect = () => settingItem.evaluate((item) => {
+		const control = item.querySelector(":scope > .setting-item-control");
+		const input = control?.querySelector(':scope > input[type="password"]');
+		const feedback = control?.querySelector(":scope > .echo-notes-secret-save-status");
+		const inputRect = input?.getBoundingClientRect();
+		const feedbackRect = feedback?.getBoundingClientRect();
+		return {
+			statusCount: item.querySelectorAll(".echo-notes-secret-save-status").length,
+			inlineFeedbackCount: item.querySelectorAll(".echo-notes-inline-validation").length,
+			statusInDescription: Boolean(item.querySelector(".setting-item-description .echo-notes-secret-save-status")),
+			statusInControl: Boolean(feedback && feedback.parentElement === control),
+			statusAfterInput: Boolean(input && feedback && input.nextElementSibling === feedback),
+			statusBelowInput: Boolean(inputRect && feedbackRect && feedbackRect.top >= inputRect.bottom - 1),
+			role: feedback?.getAttribute("role") ?? null,
+			ariaLive: feedback?.getAttribute("aria-live") ?? null,
+			textAlign: feedback ? getComputedStyle(feedback).textAlign : null,
+			inputWidth: inputRect?.width ?? 0,
+			inputHeight: inputRect?.height ?? 0,
+			controlWidth: control?.getBoundingClientRect().width ?? 0,
+			hasUniformFieldClass: input?.classList.contains("echo-notes-settings-field") ?? false,
+			statusText: feedback?.textContent?.trim() ?? ""
+		};
+	});
+	const metrics = await inspect();
+	assert(
+		metrics.statusCount === 1 && metrics.inlineFeedbackCount === 1,
+		`${context} API key 应只有一个反馈节点：${JSON.stringify(metrics)}`
+	);
+	assert(!metrics.statusInDescription && metrics.statusInControl, `${context} API key 反馈必须位于控制列`);
+	assert(metrics.statusAfterInput && metrics.statusBelowInput, `${context} API key 反馈必须位于输入框下方`);
+	assert(metrics.role === "status" && metrics.ariaLive === "polite", `${context} API key 反馈 ARIA 不完整`);
+	assert(metrics.textAlign === "right", `${context} API key 桌面反馈应右对齐`);
+	assert(metrics.hasUniformFieldClass, `${context} API key 输入框缺少统一字段 class`);
+
+	const input = settingItem.locator('.setting-item-control > input[type="password"]');
+	const feedback = settingItem.locator(".echo-notes-secret-save-status");
+	await input.fill(`sk-echo-notes-ui-${context}`);
+	await input.blur();
+	await feedback.filter({ hasText: "已安全保存" }).waitFor({ state: "visible" });
+	const savedMetrics = await inspect();
+	assert(savedMetrics.statusText === "已安全保存", `${context} API key 未显示安全保存状态`);
+	assert(
+		Math.abs(savedMetrics.inputWidth - metrics.inputWidth) <= 1 &&
+		Math.abs(savedMetrics.inputHeight - metrics.inputHeight) <= 1 &&
+		Math.abs(savedMetrics.controlWidth - metrics.controlWidth) <= 1,
+		`${context} API key 保存状态改变了字段尺寸：${JSON.stringify({ metrics, savedMetrics })}`
+	);
+
+	await input.fill("");
+	await input.blur();
+	await feedback.filter({ hasText: "已清除" }).waitFor({ state: "visible" });
+	const clearedMetrics = await inspect();
+	assert(clearedMetrics.statusText === "已清除", `${context} API key 测试值未清除`);
+	assert(
+		Math.abs(clearedMetrics.inputWidth - metrics.inputWidth) <= 1 &&
+		Math.abs(clearedMetrics.inputHeight - metrics.inputHeight) <= 1,
+		`${context} API key 清除状态改变了字段尺寸`
+	);
+	return { initial: metrics, saved: savedMetrics, cleared: clearedMetrics };
+}
+
+async function verifyApiKeyLink(page, settingName, context) {
+	const settingItem = await getActiveSetting(page, settingName);
+	const link = settingItem.locator(".echo-notes-settings-api-key-link");
+	assert((await link.count()) === 1, `${context} 应显示一个 API key 获取入口`);
+	await link.focus();
+	const metrics = await settingItem.evaluate((item) => {
+		const description = item.querySelector(".setting-item-description");
+		const row = description?.querySelector(":scope > .echo-notes-settings-api-key-link-row");
+		const linkEl = row?.querySelector(":scope > .echo-notes-settings-api-key-link");
+		const icon = linkEl?.querySelector(".echo-notes-settings-api-key-link-icon");
+		const rowRect = row?.getBoundingClientRect();
+		const linkRect = linkEl?.getBoundingClientRect();
+		const linkStyle = linkEl ? getComputedStyle(linkEl) : null;
+		return {
+			label: linkEl?.textContent?.trim() ?? "",
+			href: linkEl?.getAttribute("href") ?? "",
+			target: linkEl?.getAttribute("target") ?? null,
+			rel: linkEl?.getAttribute("rel") ?? "",
+			rowDisplay: row ? getComputedStyle(row).display : null,
+			linkDisplay: linkStyle?.display ?? null,
+			whiteSpace: linkStyle?.whiteSpace ?? null,
+			borderWidth: Number.parseFloat(linkStyle?.borderTopWidth ?? "0"),
+			focusOutlineWidth: Number.parseFloat(linkStyle?.outlineWidth ?? "0"),
+			focusOutlineStyle: linkStyle?.outlineStyle ?? null,
+			focused: document.activeElement === linkEl,
+			rowOnlyContainsLink: row?.children.length === 1 && row.firstElementChild === linkEl,
+			rowContainsLink: Boolean(rowRect && linkRect && linkRect.left >= rowRect.left - 1 && linkRect.right <= rowRect.right + 1),
+			linkOverflow: linkEl ? linkEl.scrollWidth - linkEl.clientWidth : Number.POSITIVE_INFINITY,
+			iconAriaHidden: icon?.getAttribute("aria-hidden") ?? null,
+			hasExternalLinkIcon: Boolean(icon?.querySelector("svg"))
+		};
+	});
+	assert(metrics.label === "获取硅基流动 API key", `${context} API key 入口文案不正确`);
+	assert(metrics.href === "https://cloud.siliconflow.cn/i/uTf2euFF", `${context} API key 入口 URL 不正确`);
+	assert(metrics.target === "_blank" && metrics.rel.split(/\s+/).includes("noopener") && metrics.rel.split(/\s+/).includes("noreferrer"), `${context} API key 外链安全属性不完整`);
+	assert(metrics.rowDisplay === "block" && metrics.rowOnlyContainsLink, `${context} API key 入口未使用独立操作行`);
+	assert(metrics.linkDisplay === "inline-flex" && metrics.whiteSpace === "nowrap", `${context} API key 入口样式不完整`);
+	assert(metrics.borderWidth >= 1 && metrics.rowContainsLink && metrics.linkOverflow <= 1, `${context} API key 入口边框或尺寸异常`);
+	assert(metrics.iconAriaHidden === "true" && metrics.hasExternalLinkIcon, `${context} API key 入口缺少可访问的外链图标`);
+	assert(metrics.focused && metrics.focusOutlineStyle !== "none" && metrics.focusOutlineWidth >= 1, `${context} API key 入口焦点样式不可见`);
+	return metrics;
+}
+
+async function verifySettingsControlAlignment(page) {
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	const groupResults = [];
+	const stageSpecs = [
+		{
+			stage: "transcription",
+			section: "转写服务",
+			providerName: "Provider",
+			providerValue: "siliconflow",
+			apiKeyName: "API 密钥（API key）",
+			basicNames: ["Provider", "API 密钥（API key）", "转写模型", "转写配置自检"],
+			advancedNames: ["Base URL", "默认转写语言", "自定义语言代码"]
+		},
+		{
+			stage: "analysis",
+			section: "模型配置",
+			providerName: "分析 provider",
+			providerValue: "siliconflow",
+			apiKeyName: "分析 API key",
+			basicNames: ["分析 provider", "分析 API key", "分析模型"],
+			advancedNames: ["分析 base URL", "分析配置自检"]
+		},
+		{
+			stage: "memory",
+			section: "模型配置",
+			providerName: "记忆 provider",
+			providerValue: "siliconflow",
+			apiKeyName: "记忆 API key",
+			basicNames: ["记忆 provider", "记忆 API key", "记忆模型"],
+			advancedNames: ["记忆 base URL", "记忆配置自检"]
+		}
+	];
+
+	for (const spec of stageSpecs) {
+		await page.locator(`[data-settings-stage="${spec.stage}"]`).click();
+		if (spec.stage === "analysis") {
+			await setSettingToggle(page, "启用 AI 纪要分析", true);
+		}
+		await getActivePanel(page).getByRole("tab", { name: spec.section, exact: true }).click();
+		await selectSettingOption(page, spec.providerName, spec.providerValue);
+		const basicMetrics = await inspectNamedSettingControls(page, spec.basicNames);
+		assertAlignedControlGroup(basicMetrics, `${spec.stage}/基础配置`);
+		const feedbackMetrics = await verifyApiKeyFeedback(page, spec.apiKeyName, spec.stage);
+		const apiKeyLinkMetrics = await verifyApiKeyLink(page, spec.apiKeyName, spec.stage);
+
+		const advanced = getActivePanel(page).locator(
+			'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+		).first();
+		if ((await advanced.getAttribute("open")) === null) {
+			await advanced.locator("summary").click();
+		}
+		const advancedMetrics = await inspectNamedSettingControls(page, spec.advancedNames);
+		assertAlignedControlGroup(advancedMetrics, `${spec.stage}/高级配置`);
+		const allFieldMetrics = [...basicMetrics, ...advancedMetrics].filter((metric) => metric.isUniformField);
+		assert(
+			Math.max(...allFieldMetrics.map((metric) => metric.fieldWidth)) -
+			Math.min(...allFieldMetrics.map((metric) => metric.fieldWidth)) <= 1,
+			`${spec.stage} 基础配置与高级配置字段宽度不一致`
+		);
+		assert(
+			Math.max(...allFieldMetrics.map((metric) => metric.fieldHeight)) -
+			Math.min(...allFieldMetrics.map((metric) => metric.fieldHeight)) <= 1,
+			`${spec.stage} 基础配置与高级配置字段高度不一致`
+		);
+		groupResults.push({
+			stage: spec.stage,
+			basicMetrics,
+			advancedMetrics,
+			feedbackMetrics,
+			apiKeyLinkMetrics
+		});
+	}
+
+	return groupResults;
+}
+
+async function inspectActiveSectionFields(page) {
+	return getActivePanel(page).evaluate((panel) => {
+		const activeSection = panel.querySelector(".echo-notes-settings-section-panel:not([hidden])");
+		const eligibleFields = [...(activeSection?.querySelectorAll(
+			'.setting-item-control > input[type="text"], ' +
+			'.setting-item-control > input[type="password"], ' +
+			'.setting-item-control > input[type="number"], ' +
+			'.setting-item-control > input[type="url"], ' +
+			'.setting-item-control > input[type="search"], ' +
+			'.setting-item-control > select'
+		) ?? [])].filter((field) => field.getBoundingClientRect().width > 0);
+		const expectedFieldHeight = Number.parseFloat(
+			getComputedStyle(activeSection ?? panel).getPropertyValue("--input-height")
+		) || 30;
+		return {
+			panelWidth: panel.getBoundingClientRect().width,
+			sectionOverflow: activeSection
+				? activeSection.scrollWidth - activeSection.clientWidth
+				: Number.POSITIVE_INFINITY,
+			expectedFieldHeight,
+			fields: eligibleFields.map((field) => {
+				const control = field.parentElement;
+				const fieldRect = field.getBoundingClientRect();
+				const controlRect = control?.getBoundingClientRect();
+				const settingItem = field.closest(".setting-item");
+				return {
+					name: settingItem?.querySelector(".setting-item-name")?.textContent?.trim() ?? "未命名字段",
+					tag: field.tagName,
+					type: field instanceof HTMLInputElement ? field.type : null,
+					hasUniformFieldClass: field.classList.contains("echo-notes-settings-field"),
+					fieldWidth: fieldRect.width,
+					fieldHeight: fieldRect.height,
+					controlWidth: controlRect?.width ?? 0,
+					leftDelta: controlRect ? fieldRect.left - controlRect.left : Number.POSITIVE_INFINITY,
+					rightDelta: controlRect ? controlRect.right - fieldRect.right : Number.POSITIVE_INFINITY
+				};
+			})
+		};
+	});
+}
+
+async function verifyAllCategorizedFields(page) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		await setViewportMode(page, viewport, "light");
+		const viewportHeights = [];
+		for (const stage of SCREENSHOT_STAGES) {
+			await page.locator(`[data-settings-stage="${stage.id}"]`).click();
+			const tabs = getActivePanel(page).locator('.echo-notes-settings-section-tabs [role="tab"]');
+			const sectionNames = (await tabs.allTextContents()).map((name) => name.trim());
+			for (const sectionName of sectionNames) {
+				await getActivePanel(page).getByRole("tab", { name: sectionName, exact: true }).click();
+				await getActivePanel(page).locator(
+					'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+				).evaluateAll((detailsElements) => {
+					for (const details of detailsElements) {
+						details.open = true;
+					}
+				});
+				const metrics = await inspectActiveSectionFields(page);
+				const context = `${stage.id}/${sectionName}/${viewport.name}`;
+				assert(metrics.sectionOverflow <= 1, `${context} 分类面板出现横向溢出`);
+				for (const field of metrics.fields) {
+					assert(field.hasUniformFieldClass, `${context}/${field.name} 缺少统一字段 class`);
+					assert(
+						Math.abs(field.fieldHeight - metrics.expectedFieldHeight) <= 1,
+						`${context}/${field.name} 字段高度异常：${field.fieldHeight}`
+					);
+					assert(
+						Math.abs(field.fieldWidth - field.controlWidth) <= 1.5 &&
+						Math.abs(field.leftDelta) <= 1.5 && Math.abs(field.rightDelta) <= 1.5,
+						`${context}/${field.name} 未占满控制区：${JSON.stringify(field)}`
+					);
+					if (metrics.panelWidth > 561) {
+						assert(
+							Math.abs(field.fieldWidth - 320) <= 1.5,
+							`${context}/${field.name} 宽屏字段不是 320px：${field.fieldWidth}`
+						);
+					}
+					viewportHeights.push(field.fieldHeight);
+				}
+				results.push({ viewport: viewport.name, stage: stage.id, section: sectionName, ...metrics });
+			}
+		}
+		assert(viewportHeights.length > 0, `${viewport.name} 未测量到任何配置字段`);
+		assert(
+			Math.max(...viewportHeights) - Math.min(...viewportHeights) <= 1,
+			`${viewport.name} 分类面板字段高度不一致：${JSON.stringify(viewportHeights)}`
+		);
+	}
+	return results;
+}
+
+async function inspectCompositeControl(page, settingName) {
+	const settingItem = await getActiveSetting(page, settingName);
+	return settingItem.evaluate((item) => {
+		const control = item.querySelector(":scope > .setting-item-control");
+		const panel = item.closest(".echo-notes-settings-panel");
+		const controlRect = control?.getBoundingClientRect();
+		const children = [...(control?.querySelectorAll(":scope > input, :scope > select, :scope > button") ?? [])];
+		const childRects = children.map((child) => child.getBoundingClientRect());
+		const field = children.find((child) => child.matches("input, select"));
+		const button = children.find((child) => child.matches("button"));
+		const fieldRect = field?.getBoundingClientRect();
+		const buttonRect = button?.getBoundingClientRect();
+		const expectedFieldHeight = Number.parseFloat(
+			getComputedStyle(item).getPropertyValue("--input-height")
+		) || 30;
+		return {
+			markedComposite: control?.classList.contains("echo-notes-settings-control-composite") ?? false,
+			childCount: children.length,
+			compactLayout: (panel?.getBoundingClientRect().width ?? Number.POSITIVE_INFINITY) <= 560,
+			fieldMarkedUniform: field?.classList.contains("echo-notes-settings-field") ?? false,
+			fieldWidth: fieldRect?.width ?? 0,
+			fieldHeight: fieldRect?.height ?? 0,
+			expectedFieldHeight,
+			controlWidth: controlRect?.width ?? 0,
+			fieldFillsControl: Boolean(
+				fieldRect && controlRect &&
+				Math.abs(fieldRect.left - controlRect.left) <= 1 &&
+				Math.abs(fieldRect.right - controlRect.right) <= 1
+			),
+			buttonBelowField: Boolean(fieldRect && buttonRect && buttonRect.top >= fieldRect.bottom - 1),
+			buttonLeftDelta: buttonRect && controlRect ? buttonRect.left - controlRect.left : Number.POSITIVE_INFINITY,
+			buttonRightDelta: buttonRect && controlRect ? controlRect.right - buttonRect.right : Number.POSITIVE_INFINITY,
+			controlOverflow: control ? control.scrollWidth - control.clientWidth : Number.POSITIVE_INFINITY,
+			childrenFit: childRects.every((rect) => Boolean(
+				controlRect &&
+				rect.left >= controlRect.left - 1 &&
+				rect.right <= controlRect.right + 1 &&
+				rect.top >= controlRect.top - 1 &&
+				rect.bottom <= controlRect.bottom + 1
+			)),
+			childrenOverlap: childRects.some((rect, index) => childRects.slice(index + 1).some((candidate) => !(
+				rect.right <= candidate.left + 1 ||
+				candidate.right <= rect.left + 1 ||
+				rect.bottom <= candidate.top + 1 ||
+				candidate.bottom <= rect.top + 1
+			)))
+		};
+	});
+}
+
+async function verifyCompositeControlLayouts(page) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		await setViewportMode(page, viewport, "light");
+		await page.locator('[data-settings-stage="transcription"]').click();
+		await selectSettingOption(page, "转写模式", "realtime");
+		await getActivePanel(page).getByRole("tab", { name: "录音控制", exact: true }).click();
+		const microphone = await inspectCompositeControl(page, "麦克风");
+		assert(
+			microphone.markedComposite && microphone.childCount === 2,
+			`${viewport.name} 麦克风控件未使用复合控制列`
+		);
+		assert(
+			microphone.controlOverflow <= 1 && microphone.childrenFit && !microphone.childrenOverlap,
+			`${viewport.name} 麦克风控件溢出或重叠：${JSON.stringify(microphone)}`
+		);
+		assert(
+			microphone.fieldMarkedUniform && microphone.fieldFillsControl && microphone.buttonBelowField &&
+			Math.abs(microphone.fieldHeight - microphone.expectedFieldHeight) <= 1,
+			`${viewport.name} 麦克风字段尺寸或按钮位置不正确：${JSON.stringify(microphone)}`
+		);
+		assert(
+			microphone.compactLayout
+				? Math.abs(microphone.buttonLeftDelta) <= 1.5
+				: Math.abs(microphone.buttonRightDelta) <= 1.5,
+			`${viewport.name} 麦克风辅助按钮对齐不正确：${JSON.stringify(microphone)}`
+		);
+
+		await selectSettingOption(page, "转写模式", "offline");
+		const hotkey = await inspectCompositeControl(page, "Obsidian 核心插件录音机开启快捷键");
+		assert(
+			hotkey.markedComposite && hotkey.childCount === 2,
+			`${viewport.name} 快捷键未使用复合控制列`
+		);
+		assert(
+			hotkey.controlOverflow <= 1 && hotkey.childrenFit && !hotkey.childrenOverlap,
+			`${viewport.name} 快捷键控件溢出或重叠：${JSON.stringify(hotkey)}`
+		);
+		assert(
+			hotkey.fieldMarkedUniform && hotkey.fieldFillsControl && hotkey.buttonBelowField &&
+			Math.abs(hotkey.fieldHeight - hotkey.expectedFieldHeight) <= 1,
+			`${viewport.name} 快捷键字段尺寸或按钮位置不正确：${JSON.stringify(hotkey)}`
+		);
+		assert(
+			hotkey.compactLayout
+				? Math.abs(hotkey.buttonLeftDelta) <= 1.5
+				: Math.abs(hotkey.buttonRightDelta) <= 1.5,
+			`${viewport.name} 快捷键辅助按钮对齐不正确：${JSON.stringify(hotkey)}`
+		);
+		results.push({ viewport: viewport.name, microphone, hotkey });
+	}
+	return results;
 }
 
 async function inspectLayout(page, providerSettingName) {
@@ -2970,8 +3929,12 @@ try {
 	await verifyDeclarativeSettingsCompatibility(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
+	await verifySettingsHotkeyConflicts(page);
 	await reopenSettings(page);
 	await page.locator('[data-settings-stage="transcription"]').click();
+	const controlAlignmentLayouts = await verifySettingsControlAlignment(page);
+	const categorizedFieldLayouts = await verifyAllCategorizedFields(page);
+	const compositeControlLayouts = await verifyCompositeControlLayouts(page);
 	const screenshots = await captureViewports(page);
 	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
 	await verifyMemoryInitialization(page);
@@ -2995,6 +3958,11 @@ try {
 			keyboardNavigation: true,
 			ariaRelationships: true,
 			renderStatePersistence: true,
+			settingsControlAlignment: true,
+			settingsCategorizedFieldSizing: true,
+			settingsFeedbackSemantics: true,
+			settingsApiKeyLinks: true,
+			settingsCompositeControls: true,
 			templateGrouping: true,
 			memoryInitialization: true,
 			memoryCheckpointResume: true,
@@ -3002,15 +3970,18 @@ try {
 			memoryRelations: true,
 			memoryAggregations: true,
 			memoryContextPackages: true,
-			gettingStartedWelcome: true,
-			gettingStartedChecklist: true,
+			gettingStartedSidebar: true,
+			gettingStartedNoModal: true,
 			gettingStartedSettingsSpotlight: true,
-			gettingStartedMigration: true,
+			gettingStartedDismissal: true,
 			runtimeErrors: pageErrors.length
 		},
-		gettingStartedWelcomeLayouts: gettingStartedLayouts.welcomeLayouts,
-		gettingStartedTaskCenterLayouts: gettingStartedLayouts.taskCenterLayouts,
+		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
+		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
+		controlAlignmentLayouts,
+		categorizedFieldLayouts,
+		compositeControlLayouts,
 		screenshots,
 		templateLayouts,
 		memoryReviewLayouts,
@@ -3024,7 +3995,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；新人欢迎截图：${gettingStartedLayouts.welcomeLayouts.length} 张；新人侧栏截图：${gettingStartedLayouts.taskCenterLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；新人边栏初始截图：${gettingStartedLayouts.initialLayouts.length} 张；新人阶段截图：${gettingStartedLayouts.guideLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);
