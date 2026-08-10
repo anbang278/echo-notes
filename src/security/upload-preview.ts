@@ -42,14 +42,14 @@ export function buildTranscriptionUploadPreview(
 		{ label: "音频文件", value: audioFile.name },
 		{ label: "Vault 路径", value: audioFile.path },
 		{ label: "文件大小", value: formatFileSize(audioFile.stat.size) },
-		{ label: "转写 Provider", value: settings.provider },
+		{ label: "转写服务商", value: settings.provider },
 		{ label: "转写 Base URL", value: settings.baseUrl || "未配置" },
 		{ label: "转写模型", value: settings.model || "未配置" }
 	];
 
 	if (settings.analysisEnabled) {
 		rows.push(
-			{ label: "AI 分析 Provider", value: settings.analysisProvider },
+			{ label: "AI 分析服务商", value: settings.analysisProvider },
 			{ label: "AI 分析 Base URL", value: settings.analysisBaseUrl || "未配置" },
 			{ label: "AI 分析模型", value: settings.analysisModel || "未配置" }
 		);

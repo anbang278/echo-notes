@@ -8,6 +8,7 @@ import {
 	Platform,
 	Plugin,
 	Setting,
+	setIcon,
 	TFile,
 	type Hotkey,
 	type MarkdownFileInfo
@@ -67,6 +68,7 @@ import {
 } from "./getting-started/getting-started-files";
 import { selectGettingStartedTranscript } from "./getting-started/getting-started-transcript-picker";
 import { getTaskFailureNotice } from "./task-center/task-center-copy";
+import { clearStatusIndicator, renderStatusIndicator } from "./ui/status-indicator";
 import {
 	acknowledgeFirstGettingStartedChapter,
 	acknowledgeShortcutGettingStartedChapter,
@@ -1401,7 +1403,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const internalPlugins = this.getInternalPlugins();
 		const internalPlugin = this.getInternalPlugin(AUDIO_RECORDER_PLUGIN_ID);
 		if (!internalPlugins || !internalPlugin) {
-			new Notice("当前 Obsidian 版本未暴露核心插件录音机内部 API，请到 core plugins 手动开启 Audio recorder。");
+			new Notice("当前 Obsidian 版本未暴露核心插件录音机内部 API，请到核心插件设置中手动开启“录音机”。");
 			return false;
 		}
 
@@ -1417,7 +1419,7 @@ export default class EchoNotesPlugin extends Plugin {
 			} else if (!enabled && typeof internalPlugins.disablePlugin === "function") {
 				await internalPlugins.disablePlugin(AUDIO_RECORDER_PLUGIN_ID);
 			} else {
-				new Notice("无法切换 Obsidian 核心插件录音机，请到 core plugins 手动调整 Audio recorder。");
+				new Notice("无法切换 Obsidian 核心插件录音机，请到核心插件设置中手动调整“录音机”。");
 				return false;
 			}
 		} catch (error) {
@@ -1965,7 +1967,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const hotkeyManager = this.getHotkeyManager();
 		const commands = (this.app as unknown as AppWithInternals).commands?.commands;
 		if (!commands || typeof hotkeyManager?.setHotkeys !== "function" || typeof hotkeyManager?.save !== "function") {
-			new Notice("当前 Obsidian 版本未暴露快捷键内部 API，请到 Obsidian 快捷键设置中手动修改 Audio recorder。");
+			new Notice("当前 Obsidian 版本未暴露快捷键内部 API，请到 Obsidian 快捷键设置中手动修改“录音机”。");
 			return false;
 		}
 		const result = await saveHotkeyAssignments(
@@ -3165,7 +3167,7 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		if (!(this.app.vault.adapter instanceof FileSystemAdapter)) {
-			new Notice("实时录音仅支持本地文件系统 vault。");
+			new Notice("实时录音仅支持本地文件系统 Vault。");
 			return;
 		}
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -3449,7 +3451,7 @@ export default class EchoNotesPlugin extends Plugin {
 				traceId: recording.streamingState.traceId,
 				completedAt: Date.now(),
 				retry: {
-					label: "使用离线 Provider 重试",
+					label: "使用离线服务商重试",
 					run: () => this.retryTranscriptionTask(
 						recording.audioFile.path,
 						recording.sourceNote.path,
@@ -3565,14 +3567,15 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		if (!recording) {
-			this.realtimeStatusEl.empty();
+			clearStatusIndicator(this.realtimeStatusEl);
 			this.realtimeStatusEl.hide();
 			return;
 		}
 		const elapsed = Math.max(0, Math.round((Date.now() - recording.startedAt) / 1000));
-		this.realtimeStatusEl.setText(
-			`Echo Notes ${formatSegmentTimestamp(elapsed)} · ${recording.streamingState.connectionStatus ?? "连接中"}`
-		);
+		renderStatusIndicator(this.realtimeStatusEl, {
+			tone: "running",
+			text: `Echo Notes ${formatSegmentTimestamp(elapsed)} · ${recording.streamingState.connectionStatus ?? "连接中"}`
+		}, setIcon);
 		this.realtimeStatusEl.show();
 	}
 
@@ -3788,7 +3791,7 @@ class TranscriptionUploadConfirmModal extends Modal {
 		this.titleEl.setText("确认上传音频");
 
 		contentEl.createEl("p", {
-			text: "Echo Notes 将把以下音频发送给你配置的转写 provider。确认后才会开始上传。"
+			text: "Echo Notes 将把以下音频发送给你配置的转写服务商。确认后才会开始上传。"
 		});
 
 		const preview = buildTranscriptionUploadPreview(

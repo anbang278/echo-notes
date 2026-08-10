@@ -105,7 +105,7 @@ export function renderMemoryCandidate(candidate: MemoryCandidatePackage, reviewP
 		`# 记忆候选 · ${candidate.source.transcriptTitle}`,
 		"",
 		`来源：[[${candidate.source.transcriptPath}]]`,
-		`Provider：${candidate.provider} · 模型：${candidate.model}`,
+		`服务商：${candidate.provider} · 模型：${candidate.model}`,
 		...(candidate.rejectedAssertionCount
 			? [`证据校验拒绝：${candidate.rejectedAssertionCount} 条`]
 			: []),
@@ -156,7 +156,7 @@ export function parseMemoryCandidate(content: string): MemoryCandidatePackage {
 		!Array.isArray(parsed.source.analysisTemplateIds) ||
 		!parsed.source.analysisTemplateIds.every((value) => typeof value === "string")
 	) {
-		throw new Error("候选包来源或 Provider 元数据无效。");
+		throw new Error("候选包来源或服务商元数据无效。");
 	}
 
 	for (const assertion of parsed.assertions) {

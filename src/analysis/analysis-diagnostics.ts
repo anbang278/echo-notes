@@ -32,14 +32,14 @@ export function diagnoseAnalysisProviderSettings(
 	const model = settings.analysisModel.trim();
 
 	if (!apiKey.trim()) {
-		items.push({ severity: "error", title: "分析 API Key 缺失", detail: "请先配置当前分析 Provider 的 API Key。" });
+		items.push({ severity: "error", title: "分析 API Key 缺失", detail: "请先配置当前分析服务商的 API Key。" });
 	}
 	if (!baseUrl) {
-		items.push({ severity: "error", title: "分析 Base URL 缺失", detail: "请填写分析 Provider 的基础地址。" });
+		items.push({ severity: "error", title: "分析 Base URL 缺失", detail: "请填写分析服务商的基础地址。" });
 	} else if (!isValidHttpUrl(baseUrl)) {
 		items.push({ severity: "error", title: "分析 Base URL 格式无效", detail: "地址必须以 http:// 或 https:// 开头。" });
 	} else if (/example\.(com|org|net)/i.test(baseUrl)) {
-		items.push({ severity: "error", title: "分析 Base URL 仍是示例地址", detail: "请替换为真实分析 Provider 地址。" });
+		items.push({ severity: "error", title: "分析 Base URL 仍是示例地址", detail: "请替换为真实分析服务商地址。" });
 	} else if (isInsecureRemoteBaseUrl(baseUrl)) {
 		items.push({ severity: "error", title: "分析地址使用未加密 HTTP", detail: "远程分析地址必须使用 HTTPS；localhost 和局域网地址请确认后再使用。" });
 	}
@@ -83,7 +83,7 @@ export function diagnoseAnalysisProviderSettings(
 		});
 	}
 	if (estimatedCharacters !== undefined && estimatedCharacters > 120000) {
-		items.push({ severity: "warning", title: "转写稿可能过长", detail: `当前约 ${estimatedCharacters} 个字符，单次分析可能超出 Provider 上下文限制，建议启用分块分析。` });
+		items.push({ severity: "warning", title: "转写稿可能过长", detail: `当前约 ${estimatedCharacters} 个字符，单次分析可能超出服务商上下文限制，建议启用分块分析。` });
 	}
 	if (estimatedCharacters !== undefined && estimatedCharacters > 0) {
 		items.push({
@@ -93,7 +93,7 @@ export function diagnoseAnalysisProviderSettings(
 		});
 	}
 	if (items.length === 0) {
-		items.push({ severity: "info", title: "分析配置未发现阻塞问题", detail: "这是本地检查，不会调用 Provider。" });
+		items.push({ severity: "info", title: "分析配置未发现阻塞问题", detail: "这是本地检查，不会调用服务商。" });
 	}
 
 	return {

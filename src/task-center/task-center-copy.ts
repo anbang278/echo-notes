@@ -1,4 +1,7 @@
+import type { GettingStartedStatus } from "../getting-started/getting-started-state";
 import type { EchoNotesTask, EchoNotesTaskKind, EchoNotesTaskStatus } from "./task-center-store";
+
+export type TaskCenterSection = "guide" | "tasks";
 
 export interface TaskFailureGuidance {
 	causedBy: string;
@@ -45,6 +48,40 @@ export function getTaskNextStep(task: EchoNotesTask): string {
 	return task.kind === "memory" ? "点击“立即审核”确认候选记忆" : "打开输出文件查看结果";
 }
 
+export function getDefaultTaskCenterSection(status: GettingStartedStatus): TaskCenterSection {
+	return status === "not-started" || status === "in-progress" ? "guide" : "tasks";
+}
+
+export function getTaskPathDisplayName(path: string): string {
+	const normalized = path.replace(/\\/g, "/");
+	return normalized.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+export function formatTaskDetailsForClipboard(task: EchoNotesTask): string {
+	const lines = [
+		`任务：${task.title}`,
+		`类型：${getKindLabel(task.kind)}`,
+		`状态：${getTaskStatusLabel(task.status)}`,
+		`阶段：${task.stage}`,
+		`服务商：${task.provider ?? "未记录"}`,
+		`模型：${task.model ?? "未记录"}`,
+		`目标：${task.targetPath}`
+	];
+	if (task.sourcePath) {
+		lines.push(`完整来源路径：${task.sourcePath}`);
+	}
+	if (task.outputPath) {
+		lines.push(`完整输出路径：${task.outputPath}`);
+	}
+	if (task.traceId) {
+		lines.push(`Trace ID：${task.traceId}`);
+	}
+	if (task.error) {
+		lines.push(`错误：${task.error}`);
+	}
+	return lines.join("\n");
+}
+
 export function getTaskFailureGuidance(kind: EchoNotesTaskKind, error: string): TaskFailureGuidance {
 	const normalized = error.toLocaleLowerCase();
 	if (normalized.includes("api key") || normalized.includes("apikey") || error.includes("密钥") || error.includes("API Key")) {
@@ -61,8 +98,8 @@ export function getTaskFailureGuidance(kind: EchoNotesTaskKind, error: string): 
 	}
 	if (error.includes("格式不支持") || normalized.includes("unsupported") || error.includes("仅支持")) {
 		return {
-			causedBy: "当前文件或运行环境不满足该 Provider 的输入要求。",
-			nextStep: "确认音频格式、Vault 类型和设备支持范围，必要时切换到兼容的离线 Provider。"
+			causedBy: "当前文件或运行环境不满足该服务商的输入要求。",
+			nextStep: "确认音频格式、Vault 类型和设备支持范围，必要时切换到兼容的离线服务商。"
 		};
 	}
 	return {
@@ -84,5 +121,18 @@ function getKindLabel(kind: EchoNotesTaskKind): string {
 			return "AI 分析";
 		case "memory":
 			return "记忆提取";
+	}
+}
+
+function getTaskStatusLabel(status: EchoNotesTaskStatus): string {
+	switch (status) {
+		case "running":
+			return "进行中";
+		case "success":
+			return "成功";
+		case "failed":
+			return "失败";
+		case "skipped":
+			return "已跳过";
 	}
 }

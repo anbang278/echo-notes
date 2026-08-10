@@ -238,10 +238,14 @@ import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagn
 import { splitAnalysisText, estimateAnalysisTextTokens } from "../src/analysis/analysis-chunking";
 import {
 	filterTaskCenterTasks,
+	formatTaskDetailsForClipboard,
+	getDefaultTaskCenterSection,
 	getTaskFailureGuidance,
 	getTaskFailureNotice,
+	getTaskPathDisplayName,
 	getTaskNextStep
 } from "../src/task-center/task-center-copy";
+import { getStatusIndicatorDefinition } from "../src/ui/status-indicator";
 import { analyzeChunkSequence } from "../src/analysis/analysis-chunked-service";
 import {
 	ANALYSIS_CHECKPOINT_RESULT_MAX_CHARACTERS,
@@ -823,7 +827,56 @@ assert.deepEqual(
 	["memory:test"]
 );
 assert.match(getTaskNextStep(taskCenterFixtures[1]), /立即审核/);
+assert.equal(getDefaultTaskCenterSection("not-started"), "guide");
+assert.equal(getDefaultTaskCenterSection("in-progress"), "guide");
+assert.equal(getDefaultTaskCenterSection("dismissed"), "tasks");
+assert.equal(getDefaultTaskCenterSection("completed"), "tasks");
+assert.equal(getTaskPathDisplayName("Echo Memory/02 记忆候选/访谈录音.md"), "访谈录音.md");
+assert.equal(getTaskPathDisplayName("访谈录音.md"), "访谈录音.md");
+assert.match(formatTaskDetailsForClipboard(taskCenterFixtures[1]), /服务商：未记录/);
+assert.match(formatTaskDetailsForClipboard(taskCenterFixtures[1]), /完整输出路径：Echo Memory\/02 记忆候选\/访谈录音\.md/);
+assert.deepEqual(getStatusIndicatorDefinition("running"), { icon: "loader-circle", label: "进行中" });
+assert.deepEqual(getStatusIndicatorDefinition("success"), { icon: "circle-check", label: "成功" });
+assert.deepEqual(getStatusIndicatorDefinition("failed"), { icon: "circle-x", label: "失败" });
+assert.deepEqual(getStatusIndicatorDefinition("warning"), { icon: "triangle-alert", label: "警告" });
+
+const taskCenterViewSource = readFileSync("src/task-center/task-center-view.ts", "utf8");
+const gettingStartedGuideSource = readFileSync("src/getting-started/getting-started-guide.ts", "utf8");
+const settingsTabSource = readFileSync("src/settings/settings-tab.ts", "utf8");
+assert.match(taskCenterViewSource, /echo-notes-task-center-tabs/, "任务中心必须提供新人指引与任务列表分区");
+assert.match(taskCenterViewSource, /echo-notes-task-details/, "任务中心技术元数据必须进入折叠详情");
+assert.match(taskCenterViewSource, /renderStatusIndicator/, "任务中心状态必须使用共享状态组件");
+assert.match(gettingStartedGuideSource, /renderStatusIndicator/, "新人指引状态必须使用共享状态组件");
+assert.match(settingsTabSource, /renderStatusIndicator/, "设置反馈必须使用共享状态组件");
+assert.match(
+	gettingStartedGuideSource,
+	/echo-notes-getting-started-hotkey-conflict[\s\S]{0,300}tone: "warning"/,
+	"新人快捷键冲突必须使用共享警告状态"
+);
+assert.match(
+	settingsTabSource,
+	/echo-notes-hotkey-validation[\s\S]{0,900}tone: "failed"/,
+	"设置页快捷键校验必须使用共享失败状态"
+);
+assert.doesNotMatch(settingsTabSource, /validationEl\.toggleClass\("is-error"/, "设置页不应保留纯颜色快捷键错误状态");
+assert.doesNotMatch(taskCenterViewSource, /renderMeta\(metaEl, "Provider"/, "任务中心应使用“服务商”");
+assert.doesNotMatch(gettingStartedGuideSource, /选择离线转写 Provider|选择 Provider|Provider 与 API Key|core plugins|Core plugin|Hotkeys 设置|打开 hotkeys/);
+assert.doesNotMatch(settingsTabSource, /\.setName\("Provider"\)|分析 provider|记忆 provider|当前 provider 能力|API key|Core plugin|Hotkeys/);
+
+const manifestVersion = JSON.parse(readFileSync("manifest.json", "utf8")) as { version: string };
+const packageVersion = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
+const packageLockVersion = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
+	version: string;
+	packages: Record<string, { version?: string }>;
+};
+const versionsMap = JSON.parse(readFileSync("versions.json", "utf8")) as Record<string, string>;
+assert.equal(manifestVersion.version, "0.4.13");
+assert.equal(packageVersion.version, "0.4.13");
+assert.equal(packageLockVersion.version, "0.4.13");
+assert.equal(packageLockVersion.packages[""]?.version, "0.4.13");
+assert.equal(versionsMap["0.4.13"], "1.11.4");
 const mainSource = readFileSync("src/main.ts", "utf8");
+assert.match(mainSource, /renderStatusIndicator\(this\.realtimeStatusEl/, "实时录音状态必须使用共享状态组件");
 assert.doesNotMatch(
 	mainSource,
 	/applyConfiguredTranscribeAllAudioHotkey/,
@@ -3959,8 +4012,8 @@ assert.ok(
 	unsupportedLanguageDiagnostics.items.some(
 		(item) =>
 			item.severity === "warning" &&
-			item.title === "当前 Provider 不支持语言参数" &&
-			/不会传给当前 Provider/.test(item.detail)
+			item.title === "当前服务商不支持语言参数" &&
+			/不会传给当前服务商/.test(item.detail)
 		)
 );
 const mosiDiagnostics = diagnoseTranscriptionProviderSettings(
@@ -5222,7 +5275,7 @@ assert.match(workAnalysisBlock, /\[echo_notes_analysis_provider:: deepseek\]/);
 assert.match(workAnalysisBlock, /\[echo_notes_analysis_model:: deepseek-chat\]/);
 assert.match(workAnalysisBlock, /\[echo_notes_analysis_generated_at:: \d{4}-\d{2}-\d{2}T.*Z\]/);
 assert.match(workAnalysisBlock, /\[echo_notes_analysis_trace_id:: trace-1\]/);
-assert.match(workAnalysisBlock, /Provider：deepseek/);
+assert.match(workAnalysisBlock, /服务商：deepseek/);
 assert.match(workAnalysisBlock, /模型：deepseek-chat/);
 assert.match(workAnalysisBlock, /Trace ID：trace-1/);
 assert.match(workAnalysisBlock, /^### 工作纪要$/m);

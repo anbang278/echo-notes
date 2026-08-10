@@ -11,6 +11,9 @@ const PROJECT_BRANDS = [
 	"Audio recorder",
 	"Task Center",
 	"SecretStorage",
+	"API Key",
+	"Base URL",
+	"Vault",
 	"Dataview",
 	"LinkOnly"
 ];

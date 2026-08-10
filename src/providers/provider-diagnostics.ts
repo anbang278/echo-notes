@@ -49,7 +49,7 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "error",
 			title: "API Key 缺失",
-			detail: "请先配置当前转写 Provider 的 API Key。API Key 会保存到 Obsidian SecretStorage。"
+			detail: "请先配置当前转写服务商的 API Key。API Key 会保存到 Obsidian SecretStorage。"
 		});
 	}
 
@@ -61,7 +61,7 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "error",
 			title: "AgentPlan 仅支持桌面端",
-			detail: "Obsidian 移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头，请在桌面端使用该 Provider。"
+			detail: "Obsidian 移动端无法在 WebSocket 握手阶段写入 AgentPlan 鉴权请求头，请在桌面端使用该服务商。"
 		});
 	}
 	if (
@@ -80,7 +80,7 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "error",
 			title: "Base URL 缺失",
-			detail: "请填写当前转写 Provider 的 Base URL。"
+			detail: "请填写当前转写服务商的 Base URL。"
 		});
 	} else if (!isValidProviderUrl(trimmedBaseUrl, capability.endpointShape)) {
 		items.push({
@@ -96,7 +96,7 @@ export function diagnoseTranscriptionProviderSettings(
 			items.push({
 				severity: "error",
 				title: "Base URL 仍是示例地址",
-				detail: "请把示例地址替换成真实 Provider 地址，否则无法完成转写。"
+				detail: "请把示例地址替换成真实服务商地址，否则无法完成转写。"
 			});
 		}
 
@@ -153,15 +153,15 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "info",
 			title: "模型不在推荐列表中",
-			detail: `当前模型为 ${trimmedModel}；该 Provider 推荐模型：${capability.recommendedModels.join("、")}。如果你确认 Provider 支持当前模型，可以忽略此提示。`
+			detail: `当前模型为 ${trimmedModel}；该服务商推荐模型：${capability.recommendedModels.join("、")}。如果你确认服务商支持当前模型，可以忽略此提示。`
 		});
 	}
 
 	if (settings.language && settings.language !== "auto" && !capability.supportsLanguage) {
 		items.push({
 			severity: "warning",
-			title: "当前 Provider 不支持语言参数",
-			detail: "默认转写语言不会传给当前 Provider，实际仍由模型自动识别。建议保持 auto，或切换到支持语言参数的 Provider。"
+			title: "当前服务商不支持语言参数",
+			detail: "默认转写语言不会传给当前服务商，实际仍由模型自动识别。建议保持 auto，或切换到支持语言参数的服务商。"
 		});
 	}
 
@@ -169,7 +169,7 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "info",
 			title: "OpenAI-compatible 音频端点",
-			detail: "插件会调用 {Base URL}/audio/transcriptions。并非所有 OpenAI-compatible Provider 都实现了音频转写接口。"
+			detail: "插件会调用 {Base URL}/audio/transcriptions。并非所有 OpenAI-compatible 服务商都实现了音频转写接口。"
 		});
 	}
 	if (capability.endpointShape === "agentplan-asr-websocket") {
@@ -217,7 +217,7 @@ export function diagnoseTranscriptionProviderSettings(
 			detail:
 				providerId === "volcengine-agentplan"
 					? "AgentPlan 使用单条优化双流 WebSocket 持续发送麦克风 PCM；停止录音后等待最终二遍识别结果。"
-					: "该 Provider 当前不会自动分段。超过能力表限制的大文件会在上传前被阻止。"
+					: "该服务商当前不会自动分段。超过能力表限制的大文件会在上传前被阻止。"
 		});
 	}
 
@@ -225,7 +225,7 @@ export function diagnoseTranscriptionProviderSettings(
 		items.push({
 			severity: "info",
 			title: "基础配置未发现明显问题",
-			detail: "这是本地配置自检，不会上传音频，也不会真实调用 Provider。"
+			detail: "这是本地配置自检，不会上传音频，也不会真实调用服务商。"
 		});
 	}
 

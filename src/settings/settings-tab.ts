@@ -23,6 +23,11 @@ import {
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
 import { diagnoseMemoryProviderSettings } from "../memory/memory-provider";
 import { getSanitizedErrorMessage } from "../security/redaction";
+import {
+	clearStatusIndicator,
+	renderStatusIndicator,
+	type StatusIndicatorTone
+} from "../ui/status-indicator";
 import { SettingsSpotlight, type SettingsSpotlightStep } from "./settings-spotlight";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
@@ -309,7 +314,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		headingEl.id = headingId;
 		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
 		conceptEl.createSpan({
-			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
+			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
 		});
 		const readmeLinkEl = conceptEl.createEl("a", {
 			cls: "echo-notes-settings-intro-link echo-notes-settings-intro-inline-action",
@@ -640,7 +645,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderTranscriptionAutomationSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("手动转写前确认上传")
-			.setDesc("开启后，手动转写会先显示 provider、base URL、模型和文件大小；自动化转写会跳过需要确认的上传，避免后台发送音频。")
+			.setDesc("开启后，手动转写会先显示服务商、Base URL、模型和文件大小；自动化转写会跳过需要确认的上传，避免后台发送音频。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.confirmBeforeTranscription)
@@ -664,7 +669,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别 Markdown 音频链接")
-			.setDesc("监听笔记变更，发现新增音频链接后将音频后台上传到当前转写 provider，并自动生成转写稿和补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
+			.setDesc("监听笔记变更，发现新增音频链接后将音频后台上传到当前转写服务商，并自动生成转写稿和补充链接。带有 Echo Notes 隐私标记的笔记会跳过自动化。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioLink)
@@ -676,7 +681,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("自动识别新音频文件")
-			.setDesc("监听 vault 新增音频文件，并在后台上传到当前转写 provider 以自动生成 transcript；该模式没有来源笔记隐私标记，也不会回写来源笔记。")
+			.setDesc("监听 Vault 新增音频文件，并在后台上传到当前转写服务商以自动生成转写稿；该模式没有来源笔记隐私标记，也不会回写来源笔记。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.autoTranscribeOnAudioCreated)
@@ -705,7 +710,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				this.isGettingStartedOfflineTranscriptionGuide()
 					? "新人体验固定检查离线转写配置，不会自动更改你当前选择的转写模式。"
-					: "实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 vault 中已有的音频文件。"
+					: "实时转写由 Echo Notes 直接采集麦克风并持续写入转写稿；离线转写用于 Vault 中已有的音频文件。"
 			)
 			.addDropdown((dropdown) =>
 				dropdown
@@ -763,11 +768,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderBasicHeading(containerEl, "连接配置");
 
 		const providerSetting = new Setting(containerEl)
-			.setName("Provider")
+			.setName("服务商")
 			.setDesc(
 				isRealtime
 					? "实时转写目前固定使用火山引擎 AgentPlan。"
-					: "选择用于 vault 中已有音频文件转写的服务商。"
+					: "选择用于 Vault 中已有音频文件转写的服务商。"
 			)
 			.addDropdown((dropdown) => {
 				if (isRealtime) {
@@ -797,10 +802,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const apiKey = this.plugin.getApiKey(config.provider);
 		const apiKeyDescription = createFragment();
-		apiKeyDescription.appendText("按 provider 隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+		apiKeyDescription.appendText("按服务商隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
 		this.appendProviderSignupLink(apiKeyDescription, config.provider);
 		const apiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlan ? "AgentPlan 专属 API key" : "API 密钥（API key）")
+			.setName(isAgentPlan ? "AgentPlan 专属 API Key" : "API Key")
 			.setDesc(apiKeyDescription);
 		apiKeySetting.settingEl.dataset.echoNotesGuideTarget = "transcription-api-key";
 		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
@@ -865,7 +870,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			if (isChoosingCustomModel) {
 				const customModelSetting = new Setting(containerEl)
 					.setName("自定义转写模型")
-					.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的 provider API key。");
+					.setDesc("填写后会覆盖上方官方模型选择；切回官方模型不会删除曾使用过的服务商 API Key。");
 				customModelSetting.addText((text) => {
 					text
 						.setPlaceholder("例如未来新增的 organization/model-ID")
@@ -994,7 +999,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (!isRealtime && !isAgentPlan) {
 			new Setting(advancedEl)
 				.setName("自定义语言代码")
-				.setDesc("填写当前离线 provider 支持的语言代码；清空不会改变当前语言。")
+				.setDesc("填写当前离线服务商支持的语言代码；清空不会改变当前语言。")
 				.addText((text) => {
 					const customLanguage = Object.prototype.hasOwnProperty.call(
 						TRANSCRIPTION_LANGUAGE_LABELS,
@@ -1066,7 +1071,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("启用 Obsidian 核心插件录音机")
-			.setDesc(`控制 Obsidian Core plugin：Audio recorder。当前状态：${status}。`)
+			.setDesc(`控制 Obsidian 核心插件“录音机”。当前状态：${status}。`)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(recorderEnabled === true)
@@ -1121,10 +1126,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const hotkeySetting = new Setting(containerEl)
 			.setName(name)
 			.setDesc(`${description} 支持 Ctrl+L、Control + L、Cmd+Shift+P 等写法；无效输入不会保存。`);
-		const validationEl = hotkeySetting.descEl.createDiv({
-			cls: "echo-notes-hotkey-validation",
-			attr: { role: "status", "aria-live": "polite" }
-		});
+		const validationEl = hotkeySetting.descEl.createDiv({ cls: "echo-notes-hotkey-validation" });
 		const validateDraft = (): EchoNotesHotkeySetting | undefined => {
 			const hotkey = parseHotkeyInput(draftValue);
 			let error = "";
@@ -1136,8 +1138,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					error = `快捷键冲突：已被 ${conflicts.join("、")} 使用，请更换组合键。`;
 				}
 			}
-			validationEl.setText(error);
-			validationEl.toggleClass("is-error", Boolean(error));
+			if (error) {
+				renderStatusIndicator(validationEl, {
+					tone: "failed",
+					text: error,
+					live: "polite"
+				}, setIcon);
+			} else {
+				clearStatusIndicator(validationEl);
+			}
 			setSaveDisabled(Boolean(error));
 			return error ? undefined : hotkey;
 		};
@@ -1224,7 +1233,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderAnalysisModelSettings(containerEl: HTMLElement): void {
 		this.renderBasicHeading(containerEl, "模型配置");
 		const analysisProviderSetting = new Setting(containerEl)
-			.setName("分析 provider")
+			.setName("分析服务商")
 			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
@@ -1246,12 +1255,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const analysisApiKeyDescription = createFragment();
 		analysisApiKeyDescription.appendText(
 			isAgentPlanAnalysis
-				? "必须使用 AgentPlan 控制台创建的专属 API key，并与其他用途的密钥隔离保存。"
-				: "用于调用当前分析 provider，按 provider 隔离保存到 Obsidian SecretStorage。"
+				? "必须使用 AgentPlan 控制台创建的专属 API Key，并与其他用途的密钥隔离保存。"
+				: "用于调用当前分析服务商，按服务商隔离保存到 Obsidian SecretStorage。"
 		);
 		this.appendProviderSignupLink(analysisApiKeyDescription, this.plugin.settings.analysisProvider);
 		const analysisApiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API key" : "分析 API key")
+			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API Key" : "分析 API Key")
 			.setDesc(analysisApiKeyDescription);
 		analysisApiKeySetting.settingEl.dataset.echoNotesGuideTarget = "analysis-api-key";
 		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
@@ -1311,11 +1320,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const advancedEl = this.renderAdvancedSection(containerEl, "高级配置（Base URL 与自检）", () => undefined);
 		const baseUrlSetting = new Setting(advancedEl)
-			.setName("分析 base URL")
+			.setName("分析 Base URL")
 			.setDesc(
 				isAgentPlanAnalysis
 					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
-					: "OpenAI-compatible chat completions 基础地址。请确认所选 provider 支持 {base URL}/chat/completions。"
+					: "OpenAI-compatible chat completions 基础地址。请确认所选服务商支持 {Base URL}/chat/completions。"
 			);
 		baseUrlSetting.addText((text) => {
 			text
@@ -1333,7 +1342,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(advancedEl)
 			.setName("分析配置自检")
-			.setDesc("本地检查分析 API key、base URL、HTTPS 和模型；不会发送转写稿，也不会调用 provider。")
+			.setDesc("本地检查分析 API Key、Base URL、HTTPS 和模型；不会发送转写稿，也不会调用服务商。")
 			.addButton((button) =>
 				button.setButtonText("检查分析配置").onClick(() => {
 					const result = diagnoseAnalysisProviderSettings(this.plugin.settings, this.plugin.getAnalysisApiKey());
@@ -1345,7 +1354,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderAnalysisProcessingSettings(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("AI 分析前脱敏 transcript")
-			.setDesc("仅在发送给分析模型前遮盖敏感信息，vault 中的原始 transcript 不会被改写。")
+			.setDesc("仅在发送给分析模型前遮盖敏感信息，Vault 中的原始转写稿不会被改写。")
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.redactTranscriptBeforeAnalysis)
@@ -1423,7 +1432,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				this.plugin.settings.memoryInitialized
 					? "目录已由初始化清单锁定；如需迁移，请移动整个目录并同步修改插件数据。"
-					: "初始化时将在 vault 内创建会议、候选、实体、user 和系统目录。"
+					: "初始化时将在 Vault 内创建会议、候选、实体、用户和系统目录。"
 			)
 			.addText((text) => {
 				text
@@ -1472,8 +1481,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderMemoryModelSettings(containerEl: HTMLElement): void {
 		this.renderBasicHeading(containerEl, "模型配置");
 		const providerSetting = new Setting(containerEl)
-			.setName("记忆 provider")
-			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的 provider、API key、base URL 或模型。")
+			.setName("记忆服务商")
+			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的服务商、API Key、Base URL 或模型。")
 			.addDropdown((dropdown) => Object.entries(ANALYSIS_PROVIDER_LABELS)
 				.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 				.setValue(this.plugin.settings.memoryProvider)
@@ -1489,10 +1498,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		providerSetting.settingEl.dataset.echoNotesGuideTarget = "memory-provider";
 
 		const apiKeyDescription = createFragment();
-		apiKeyDescription.appendText("按 provider 隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
+		apiKeyDescription.appendText("按服务商隔离保存在 Obsidian SecretStorage，不会写入插件配置或记忆文件。");
 		this.appendProviderSignupLink(apiKeyDescription, this.plugin.settings.memoryProvider);
 		const apiKeySetting = new Setting(containerEl)
-			.setName("记忆 API key")
+			.setName("记忆 API Key")
 			.setDesc(apiKeyDescription);
 		apiKeySetting.settingEl.dataset.echoNotesGuideTarget = "memory-api-key";
 		const statusEl = this.createSecretSaveStatus(apiKeySetting, this.plugin.getMemoryApiKey());
@@ -1539,7 +1548,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const advancedEl = this.renderAdvancedSection(containerEl, "高级配置（Base URL 与自检）", () => undefined);
 		const baseUrlSetting = new Setting(advancedEl)
-			.setName("记忆 base URL")
+			.setName("记忆 Base URL")
 			.setDesc("OpenAI-compatible chat completions 基础地址。");
 		baseUrlSetting.addText((text) => {
 				text
@@ -1557,7 +1566,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		new Setting(advancedEl)
 			.setName("记忆配置自检")
-			.setDesc("本地检查独立 API key、base URL、HTTPS 和模型；不会发送会议内容。")
+			.setDesc("本地检查独立 API Key、Base URL、HTTPS 和模型；不会发送会议内容。")
 			.addButton((button) => button.setButtonText("检查记忆配置").onClick(() => {
 				const result = diagnoseMemoryProviderSettings({
 					provider: this.plugin.settings.memoryProvider,
@@ -1791,7 +1800,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		);
 		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
 		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
-		headerEl.createDiv({ cls: "echo-notes-provider-capability-title", text: "当前 provider 能力" });
+		headerEl.createDiv({ cls: "echo-notes-provider-capability-title", text: "当前服务商能力" });
 		headerEl.createDiv({
 			cls: "echo-notes-provider-capability-meta",
 			text: `上传方式：${getUploadModeLabel(capability.uploadMode)}；接口形态：${getEndpointShapeLabel(capability.endpointShape)}`
@@ -1824,7 +1833,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private renderProviderDiagnostics(containerEl: HTMLElement): void {
 		new Setting(containerEl)
 			.setName("转写配置自检")
-			.setDesc("本地检查 API key、base URL、模型和 provider 能力限制；不会上传音频，也不会真实调用服务商接口。")
+			.setDesc("本地检查 API Key、Base URL、模型和服务商能力限制；不会上传音频，也不会真实调用服务商接口。")
 			.addButton((button) =>
 				button
 					.setButtonText("检查转写配置")
@@ -1997,7 +2006,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				focusSelector = ".checkbox-container";
 				stepLabel = "准备步骤";
 				title = "先开启 AI 分析";
-				description = "开启后将显示 Provider 和 API key 配置，本指引会自动继续下一步。";
+				description = "开启后将显示服务商和 API Key 配置，本指引会自动继续下一步。";
 				actionLabel = "开启后继续";
 				actionDisabled = true;
 				break;
@@ -2008,17 +2017,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				focusSelector = "select";
 				stepLabel = "1/2";
 				if (isAnalysis) {
-					title = "选择 AI 分析 Provider";
-					description = "选择用于把转写稿生成 AI 笔记的服务商。不同 Provider 使用独立 API key。";
+					title = "选择 AI 分析服务商";
+					description = "选择用于把转写稿生成 AI 笔记的服务商。不同服务商使用独立 API Key。";
 				} else if (isMemory) {
-					title = "选择记忆提取 Provider";
-					description = "选择用于提取候选记忆的服务商。记忆 API key 与转写、分析配置相互隔离。";
+					title = "选择记忆提取服务商";
+					description = "选择用于提取候选记忆的服务商。记忆 API Key 与转写、分析配置相互隔离。";
 				} else if (this.getSelectedTranscriptionMode() === "realtime") {
-					title = "确认实时转写 Provider";
-					description = "实时转写目前固定使用火山引擎 AgentPlan，无需修改；下一步填写专属 API key。";
+					title = "确认实时转写服务商";
+					description = "实时转写目前固定使用火山引擎 AgentPlan，无需修改；下一步填写专属 API Key。";
 				} else {
-					title = "选择转写 Provider";
-					description = "选择用于处理音频文件的转写服务商。不同 Provider 使用独立 API key。";
+					title = "选择转写服务商";
+					description = "选择用于处理音频文件的转写服务商。不同服务商使用独立 API Key。";
 				}
 				actionLabel = "下一步";
 				break;
@@ -2029,8 +2038,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				focusSelector = 'input[type="password"]';
 				stepLabel = "2/2";
 				title = isAnalysis
-					? "填写分析 API key"
-					: isMemory ? "填写记忆 API key" : "填写转写 API key";
+					? "填写分析 API Key"
+					: isMemory ? "填写记忆 API Key" : "填写转写 API Key";
 				description = "在所选服务商后台创建并粘贴密钥。密钥只保存在 Obsidian SecretStorage，不会写入插件设置文件。";
 				actionLabel = "返回新人指引";
 				secondaryActionLabel = "留在设置";
@@ -2085,8 +2094,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const statusEl = setting.controlEl.createDiv({
 			cls: "echo-notes-inline-validation echo-notes-secret-save-status"
 		});
-		statusEl.setAttribute("role", "status");
-		statusEl.setAttribute("aria-live", "polite");
 		this.setSecretSaveStatus(statusEl, apiKey ? "saved" : "empty");
 		return statusEl;
 	}
@@ -2106,9 +2113,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		validationEl.setAttribute("aria-live", "polite");
 		const renderValidation = (value: string): boolean => {
 			const message = validate?.(value);
-			validationEl.removeClass("is-success");
-			validationEl.toggleClass("is-error", Boolean(message));
-			validationEl.setText(message ?? (value.trim() ? "修改将在失焦后保存" : ""));
+			if (message) {
+				renderStatusIndicator(validationEl, { tone: "failed", text: message, live: "polite" }, setIcon);
+			} else if (value.trim()) {
+				renderStatusIndicator(validationEl, {
+					tone: "neutral",
+					text: "修改将在失焦后保存",
+					live: "polite"
+				}, setIcon);
+			} else {
+				clearStatusIndicator(validationEl);
+			}
 			return !message;
 		};
 		const commit = (): void => {
@@ -2125,12 +2140,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				if (feedbackEl) {
 					return;
 				}
-				validationEl.removeClass("is-error");
-				validationEl.setText(value ? "已保存" : "已清除");
+				renderStatusIndicator(validationEl, {
+					tone: "success",
+					text: value ? "已保存" : "已清除",
+					live: "polite"
+				}, setIcon);
 			}).catch((error) => {
-				validationEl.removeClass("is-success");
-				validationEl.addClass("is-error");
-				validationEl.setText(`保存失败：${getSanitizedErrorMessage(error)}`);
+				renderStatusIndicator(validationEl, {
+					tone: "failed",
+					text: `保存失败：${getSanitizedErrorMessage(error)}`,
+					live: "polite"
+				}, setIcon);
 			});
 		};
 		const schedule = (delay: number): void => {
@@ -2172,23 +2192,26 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private setSecretSaveStatus(statusEl: HTMLElement, status: "empty" | "saved" | "cleared" | "failed"): void {
-		statusEl.removeClass("is-success", "is-error");
+		let tone: StatusIndicatorTone;
+		let text: string;
 		switch (status) {
 			case "saved":
-				statusEl.addClass("is-success");
-				statusEl.setText("已安全保存");
+				tone = "success";
+				text = "已安全保存";
 				break;
 			case "cleared":
-				statusEl.addClass("is-success");
-				statusEl.setText("已清除");
+				tone = "success";
+				text = "已清除";
 				break;
 			case "failed":
-				statusEl.addClass("is-error");
-				statusEl.setText("保存失败");
+				tone = "failed";
+				text = "保存失败";
 				break;
 			default:
-				statusEl.setText("未保存 API key");
+				tone = "neutral";
+				text = "未保存 API Key";
 		}
+		renderStatusIndicator(statusEl, { tone, text, live: "polite" }, setIcon);
 	}
 
 	private applyOfflineProviderDefaults(provider: OfflineTranscriptionProviderId): void {
@@ -2281,26 +2304,26 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.getSelectedTranscriptionMode()
 		);
 		if (!capability.supportsLanguage) {
-			return "默认 ASR 转写语言。当前 provider 不支持语言参数，此设置不会传给 provider，仍由模型自动识别。";
+			return "默认 ASR 转写语言。当前服务商不支持语言参数，此设置不会传给服务商，仍由模型自动识别。";
 		}
 
-		return "默认 ASR 转写语言。支持语言参数的 provider 会随请求发送该值；auto 表示由 provider 自动识别。";
+		return "默认 ASR 转写语言。支持语言参数的服务商会随请求发送该值；auto 表示由服务商自动识别。";
 	}
 
 	private appendProviderSignupLink(desc: DocumentFragment, provider: string): void {
 		const linkConfig = provider === "volcengine-agentplan"
 			? {
-				text: "获取 AgentPlan API key",
+				text: "获取 AgentPlan API Key",
 				href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan"
 			}
 			: provider === "mosi"
 				? {
-					text: "打开 MOSI API key 管理",
+					text: "打开 MOSI API Key 管理",
 					href: "https://platform.mosi.cn/app/api-keys"
 				}
 				: provider === "siliconflow"
 					? {
-						text: "获取硅基流动 API key",
+						text: "获取硅基流动 API Key",
 						href: "https://cloud.siliconflow.cn/i/uTf2euFF"
 					}
 					: null;
@@ -2532,9 +2555,11 @@ class ProviderDiagnosticsModal extends Modal {
 		contentEl.addClass("echo-notes-provider-diagnostics-modal");
 		this.titleEl.setText("转写配置自检");
 
-		contentEl.createEl("p", {
+		const summaryEl = contentEl.createDiv({ cls: "echo-notes-provider-diagnostics-summary" });
+		renderStatusIndicator(summaryEl, {
+			tone: this.canAttemptTranscription ? "success" : "failed",
 			text: `${this.providerLabel}：${this.canAttemptTranscription ? "未发现阻塞性问题。" : "存在需要先处理的问题。"}`
-		});
+		}, setIcon);
 
 		const listEl = contentEl.createDiv({ cls: "echo-notes-provider-diagnostics-list" });
 		for (const item of this.items) {
@@ -2542,10 +2567,11 @@ class ProviderDiagnosticsModal extends Modal {
 				cls: `echo-notes-provider-diagnostics-item is-${item.severity}`
 			});
 			const headerEl = itemEl.createDiv({ cls: "echo-notes-provider-diagnostics-header" });
-			headerEl.createSpan({
-				cls: "echo-notes-provider-diagnostics-badge",
+			const statusEl = headerEl.createSpan({ cls: "echo-notes-provider-diagnostics-badge" });
+			renderStatusIndicator(statusEl, {
+				tone: getDiagnosticStatusTone(item.severity),
 				text: getDiagnosticSeverityLabel(item.severity)
-			});
+			}, setIcon);
 			headerEl.createSpan({ cls: "echo-notes-provider-diagnostics-title", text: item.title });
 			itemEl.createDiv({ cls: "echo-notes-provider-diagnostics-detail", text: item.detail });
 		}
@@ -2575,6 +2601,10 @@ function getDiagnosticSeverityLabel(severity: ProviderDiagnosticSeverity): strin
 		default:
 			return "提示";
 	}
+}
+
+function getDiagnosticStatusTone(severity: ProviderDiagnosticSeverity): StatusIndicatorTone {
+	return severity === "error" ? "failed" : severity === "warning" ? "warning" : "neutral";
 }
 
 function validateBaseUrl(value: string): string | undefined {

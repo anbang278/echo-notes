@@ -161,7 +161,7 @@ export function getProviderCapabilitySummary(capability: ProviderCapability): st
 		? `单次音频上限：${formatProviderCapabilityBytes(capability.maxAudioBytes)}`
 		: capability.maxBase64DataUrlBytes
 			? `单次编码输入上限：${formatProviderCapabilityBytes(capability.maxBase64DataUrlBytes)}`
-			: "单次音频上限：由 Provider 决定";
+			: "单次音频上限：由服务商决定";
 	const longAudioSummary =
 		capability.agentPlanConnectionMode === "realtime"
 			? "实时音频：单连接持续发送"
@@ -204,6 +204,6 @@ function createOpenAICompatibleCapability(recommendedModels: string[]): Provider
 		uploadMode: "multipart",
 		endpointShape: "openai-audio",
 		recommendedModels,
-		notes: ["按 OpenAI-compatible `/audio/transcriptions` 接口调用；实际可用性取决于该 Provider 是否实现音频端点。"]
+		notes: ["按 OpenAI-compatible `/audio/transcriptions` 接口调用；实际可用性取决于该服务商是否实现音频端点。"]
 	};
 }

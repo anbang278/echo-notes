@@ -313,7 +313,7 @@ export function prepareAnalysisCheckpointResult(result: AnalysisResult): Analysi
 	const provider = result.provider.trim();
 	const model = result.model.trim();
 	if (!provider || !model) {
-		throw new Error("无法保存缺少 Provider 或模型的分析分块结果。");
+		throw new Error("无法保存缺少服务商或模型的分析分块结果。");
 	}
 	return {
 		text,

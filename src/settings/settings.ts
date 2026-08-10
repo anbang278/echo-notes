@@ -1057,7 +1057,7 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		sourceTranscriptLabel: "来源转写稿：",
 		analysisHeading: "分析结果",
 		analysisGeneratedAtLabel: "生成时间：",
-		analysisProviderLabel: "Provider：",
+		analysisProviderLabel: "服务商：",
 		analysisModelLabel: "模型：",
 		analysisTraceIdLabel: "Trace ID："
 	},

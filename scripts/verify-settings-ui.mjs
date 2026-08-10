@@ -39,7 +39,7 @@ const OUTPUT_DIR = path.resolve(
 const README_URL = "https://github.com/anbang278/echo-notes/blob/main/README.zh-CN.md";
 const EXPECTED_TITLE = "记录行动，构建面向未来的 AI Memory";
 const EXPECTED_INTRO =
-	"Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。";
+	"Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。";
 const EXPECTED_README_LINK_TEXT = "查看完整设计理念";
 const EXPECTED_GUIDE =
 	"操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。";
@@ -106,9 +106,9 @@ const VIEWPORTS = [
 
 const THEMES = ["light", "dark"];
 const SCREENSHOT_STAGES = [
-	{ id: "transcription", section: "转写服务", providerSetting: "Provider" },
-	{ id: "analysis", section: "模型配置", providerSetting: "分析 provider" },
-	{ id: "memory", section: "模型配置", providerSetting: "记忆 provider" }
+	{ id: "transcription", section: "转写服务", providerSetting: "服务商" },
+	{ id: "analysis", section: "模型配置", providerSetting: "分析服务商" },
+	{ id: "memory", section: "模型配置", providerSetting: "记忆服务商" }
 ];
 
 function assert(condition, message) {
@@ -446,6 +446,7 @@ async function captureGettingStartedInitialLayouts(page) {
 			const metrics = await page.evaluate(() => {
 				const taskCenter = document.querySelector(".echo-notes-task-center");
 				const guide = taskCenter?.querySelector(".echo-notes-getting-started-guide");
+				const tabs = [...(taskCenter?.querySelectorAll('[role="tab"]') ?? [])];
 				const steps = [...(guide?.querySelectorAll(".echo-notes-getting-started-progress-step") ?? [])];
 				const guideRect = guide?.getBoundingClientRect();
 				return {
@@ -458,7 +459,10 @@ async function captureGettingStartedInitialLayouts(page) {
 					guideFits: Boolean(guideRect) && guideRect.left >= -1 && guideRect.right <= window.innerWidth + 1,
 					stepCount: steps.length,
 					stepsFit: steps.every((step) => step.scrollWidth <= step.clientWidth + 1),
-					modalCount: document.querySelectorAll(".echo-notes-getting-started-modal-shell").length
+					modalCount: document.querySelectorAll(".echo-notes-getting-started-modal-shell").length,
+					tabLabels: tabs.map((tab) => tab.textContent?.trim()),
+					selectedTab: tabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent?.trim(),
+					taskCardCount: taskCenter?.querySelectorAll(".echo-notes-task-card").length ?? 0
 				};
 			});
 			const context = `getting-started/${viewport.name}/${theme}`;
@@ -468,6 +472,12 @@ async function captureGettingStartedInitialLayouts(page) {
 			assert(metrics.guideOverflow <= 1 && metrics.guideFits, `${context} 新人边栏超出可视区域`);
 			assert(metrics.stepCount === 3 && metrics.stepsFit, `${context} 三阶段边栏布局不完整`);
 			assert(metrics.modalCount === 0, `${context} 仍出现新人弹窗`);
+			assert(
+				JSON.stringify(metrics.tabLabels) === JSON.stringify(["新人指引", "任务列表"]) &&
+				metrics.selectedTab === "新人指引" &&
+				metrics.taskCardCount === 0,
+				`${context} 未只显示新人指引：${JSON.stringify(metrics)}`
+			);
 			const fileName = `getting-started-initial-${viewport.name}-${theme}.png`;
 			const screenshotPath = path.join(OUTPUT_DIR, fileName);
 			await page.locator(".echo-notes-task-center").screenshot({ path: screenshotPath });
@@ -476,6 +486,189 @@ async function captureGettingStartedInitialLayouts(page) {
 		}
 	}
 	return results;
+}
+
+async function captureTaskCenterLayouts(page) {
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.__taskCenterUiOriginalTasks = plugin.taskCenter.getTasks();
+		const now = Date.now();
+		plugin.taskCenter.restoreTasks([
+			{
+				id: "ui-running-transcription",
+				kind: "transcription",
+				title: "转写产品评审录音",
+				status: "running",
+				stage: "正在转写第 2/4 段",
+				provider: "siliconflow",
+				model: "FunAudioLLM/SenseVoiceSmall",
+				targetPath: "Echo Notes/Transcripts/2026-08-10-产品评审会议-长文件名.transcript.md",
+				sourcePath: "01 项目/录音/2026-08-10-产品评审会议-长文件名.m4a",
+				bytes: 18_874_368,
+				currentSegment: 2,
+				totalSegments: 4,
+				traceId: "trace-ui-running-20260810",
+				createdAt: now - 94_000,
+				updatedAt: now
+			},
+			{
+				id: "ui-failed-analysis",
+				kind: "analysis",
+				title: "生成产品评审纪要",
+				status: "failed",
+				stage: "等待 AI 分析返回",
+				provider: "aliyun-bailian",
+				model: "deepseek-v4-pro",
+				targetPath: "Echo Notes/Transcripts/2026-08-10-产品评审会议-长文件名.transcript.md",
+				sourcePath: "Echo Notes/Transcripts/2026-08-10-产品评审会议-长文件名.transcript.md",
+				error: "请求超时，请检查网络与服务商配置后重试。",
+				traceId: "trace-ui-failed-20260810",
+				createdAt: now - 420_000,
+				updatedAt: now - 1_000,
+				completedAt: now - 1_000
+			},
+			{
+				id: "ui-success-memory",
+				kind: "memory",
+				title: "提取候选记忆",
+				status: "success",
+				stage: "3 条候选记忆已写入",
+				provider: "aliyun-bailian",
+				model: "deepseek-v4-pro",
+				targetPath: "Echo Memory/Candidates/2026-08-10-产品评审会议.md",
+				outputPath: "Echo Memory/Candidates/2026-08-10-产品评审会议.md",
+				createdAt: now - 620_000,
+				updatedAt: now - 2_000,
+				completedAt: now - 2_000
+			}
+		]);
+	}, PLUGIN_ID);
+
+	const taskCenter = page.locator(".echo-notes-task-center");
+	await taskCenter.getByRole("tab", { name: "任务列表", exact: true }).click();
+	await taskCenter.locator(".echo-notes-task-card").first().waitFor({ state: "visible" });
+	await taskCenter.getByRole("tab", { name: "任务列表", exact: true }).press("ArrowLeft");
+	await taskCenter.locator(".echo-notes-getting-started-guide").waitFor({ state: "visible" });
+	await page.waitForFunction(() => document.activeElement?.id === "echo-notes-task-center-tab-guide");
+	await taskCenter.getByRole("tab", { name: "新人指引", exact: true }).press("ArrowRight");
+	await taskCenter.locator(".echo-notes-task-card").first().waitFor({ state: "visible" });
+	await page.waitForFunction(() => document.activeElement?.id === "echo-notes-task-center-tab-tasks");
+	const results = [];
+	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			await taskCenter.locator(".echo-notes-task-details").first().evaluate((details) => {
+				details.open = true;
+			});
+			const metrics = await page.evaluate(() => {
+				const center = document.querySelector(".echo-notes-task-center");
+				const cards = [...(center?.querySelectorAll(".echo-notes-task-card") ?? [])];
+				const cardLayouts = cards.map((card) => {
+					const main = card.querySelector(".echo-notes-task-card-main");
+					const actions = card.querySelector(".echo-notes-task-card-actions");
+					const mainRect = main?.getBoundingClientRect();
+					const actionsRect = actions?.getBoundingClientRect();
+					return {
+						flow: getComputedStyle(card).flexDirection,
+						actionsBelowContent: Boolean(mainRect && actionsRect) && actionsRect.top >= mainRect.bottom - 1
+					};
+				});
+				const statuses = [...(center?.querySelectorAll(".echo-notes-task-status.echo-notes-status-indicator") ?? [])];
+				const pathValues = [...(center?.querySelectorAll(".echo-notes-task-meta-item.is-path .echo-notes-task-meta-value") ?? [])];
+				const tabs = [...(center?.querySelectorAll('[role="tab"]') ?? [])];
+				return {
+					innerWidth: window.innerWidth,
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					centerOverflow: center ? center.scrollWidth - center.clientWidth : Number.POSITIVE_INFINITY,
+					cardCount: cards.length,
+					cardsFit: cards.every((card) => card.scrollWidth <= card.clientWidth + 1),
+					cardLayouts,
+					selectedTab: tabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.textContent?.trim(),
+					selectedTabControlsPanel: tabs.find((tab) => tab.getAttribute("aria-selected") === "true")?.getAttribute("aria-controls"),
+					visiblePanelId: center?.querySelector('[role="tabpanel"]:not([hidden])')?.id,
+					guideCount: center?.querySelectorAll(".echo-notes-getting-started-guide").length ?? 0,
+					statusCount: statuses.length,
+					statusTones: statuses.map((status) => status.getAttribute("data-status-tone")),
+					statusesComplete: statuses.every((status) =>
+						Boolean(status.querySelector(".echo-notes-status-indicator-icon svg")) &&
+						Boolean(status.querySelector(".echo-notes-status-indicator-text")?.textContent?.trim())
+					),
+					detailOpen: Boolean(center?.querySelector(".echo-notes-task-details[open]")),
+					pathValues: pathValues.map((value) => value.textContent?.trim()),
+					pathTitles: pathValues.map((value) => value.getAttribute("title"))
+				};
+			});
+			const context = `task-center/${viewport.name}/${theme}`;
+			assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
+			assert(metrics.documentOverflow <= 1 && metrics.centerOverflow <= 1, `${context} 出现横向溢出`);
+			assert(metrics.cardCount === 3 && metrics.cardsFit, `${context} 任务卡片尺寸异常`);
+			assert(
+				metrics.cardLayouts.every((layout) => layout.flow === "column" && layout.actionsBelowContent),
+				`${context} 窄任务中心仍将操作按钮挤在正文右侧：${JSON.stringify(metrics.cardLayouts)}`
+			);
+			assert(
+				metrics.selectedTab === "任务列表" &&
+				metrics.selectedTabControlsPanel === metrics.visiblePanelId &&
+				metrics.guideCount === 0,
+				`${context} 页签 ARIA 或分区显隐错误：${JSON.stringify(metrics)}`
+			);
+			assert(
+				metrics.statusCount === 3 &&
+				metrics.statusesComplete &&
+				JSON.stringify(metrics.statusTones) === JSON.stringify(["running", "failed", "success"]),
+				`${context} 状态未同时包含图标和文字：${JSON.stringify(metrics)}`
+			);
+			assert(metrics.detailOpen, `${context} 任务详情未能展开`);
+			assert(
+				metrics.pathValues.every((value) => value && !value.includes("/")) &&
+				metrics.pathTitles.every((value) => value?.includes("/")),
+				`${context} 路径摘要或完整路径提示不正确：${JSON.stringify(metrics)}`
+			);
+			const fileName = `task-center-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await taskCenter.screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 5_000, `${fileName} 截图可能为空白`);
+			results.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.taskCenter.restoreTasks(plugin.__taskCenterUiOriginalTasks ?? []);
+		delete plugin.__taskCenterUiOriginalTasks;
+	}, PLUGIN_ID);
+	await taskCenter.getByRole("tab", { name: "新人指引", exact: true }).click();
+	await taskCenter.locator(".echo-notes-getting-started-guide").waitFor({ state: "visible" });
+	return results;
+}
+
+async function verifyRealtimeStatusIndicator(page) {
+	const metrics = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const originalRecording = plugin.activeRealtimeRecording;
+		if (originalRecording) {
+			throw new Error("实时录音状态 UI fixture 发现已有活动录音");
+		}
+		plugin.activeRealtimeRecording = {
+			startedAt: Date.now() - 7_000,
+			streamingState: { connectionStatus: "测试连接" }
+		};
+		plugin.updateRealtimeUi();
+		const statusEl = plugin.realtimeStatusEl;
+		const result = {
+			visible: Boolean(statusEl) && statusEl.style.display !== "none",
+			tone: statusEl?.getAttribute("data-status-tone"),
+			hasIcon: Boolean(statusEl?.querySelector(".echo-notes-status-indicator-icon svg")),
+			text: statusEl?.querySelector(".echo-notes-status-indicator-text")?.textContent?.trim() ?? ""
+		};
+		plugin.activeRealtimeRecording = originalRecording;
+		plugin.updateRealtimeUi();
+		return result;
+	}, PLUGIN_ID);
+	assert(metrics.visible, "实时录音状态栏 fixture 未显示");
+	assert(metrics.tone === "running", `实时录音状态栏未使用进行中状态：${JSON.stringify(metrics)}`);
+	assert(metrics.hasIcon && metrics.text, `实时录音状态栏缺少图标或文字：${JSON.stringify(metrics)}`);
+	return metrics;
 }
 
 async function captureGettingStartedGuideLayouts(page, phase) {
@@ -907,7 +1100,7 @@ async function verifyGettingStarted(page) {
 		plugin.isOfficialAudioRecorderEnabled = () => null;
 		plugin.notifyGettingStartedChanged();
 	}, PLUGIN_ID);
-	assert(await guide.getByRole("button", { name: "打开 core plugins", exact: true }).isVisible(), "核心录音机内部 API 缺失时未提供设置降级入口");
+	assert(await guide.getByRole("button", { name: "打开核心插件设置", exact: true }).isVisible(), "核心录音机内部 API 缺失时未提供设置降级入口");
 	assert(await guide.getByRole("button", { name: "我已手动开启", exact: true }).isVisible(), "核心录音机状态不可读时未提供手动确认");
 	assert(await guide.getByRole("button", { name: "重新检测", exact: true }).isVisible(), "核心录音机状态不可读时未提供重新检测");
 
@@ -1092,7 +1285,10 @@ async function verifyGettingStarted(page) {
 		);
 		assert(
 			await conflictLocator.first().getAttribute("role") === "status" &&
-			await conflictLocator.first().getAttribute("aria-live") === "polite",
+			await conflictLocator.first().getAttribute("aria-live") === "polite" &&
+			await conflictLocator.first().getAttribute("data-status-tone") === "warning" &&
+			await conflictLocator.first().locator(".echo-notes-status-indicator-icon svg").count() === 1 &&
+			Boolean((await conflictLocator.first().locator(".echo-notes-status-indicator-text").textContent())?.trim()),
 			"新人快捷键冲突提示缺少可访问状态播报"
 		);
 		assert(
@@ -1780,7 +1976,10 @@ async function verifySettingsHotkeyConflicts(page) {
 	assert(await saveButton.isDisabled(), "设置页快捷键与其他命令冲突时保存按钮仍可用");
 	assert(
 		(await status.getAttribute("aria-live")) === "polite" &&
-		(await status.textContent())?.includes(setup.conflictLabel),
+		(await status.getAttribute("data-status-tone")) === "failed" &&
+		(await status.textContent())?.includes(setup.conflictLabel) &&
+		await status.locator(".echo-notes-status-indicator-icon svg").count() === 1 &&
+		Boolean((await status.locator(".echo-notes-status-indicator-text").textContent())?.trim()),
 		"设置页快捷键冲突提示不明确或缺少可访问状态播报"
 	);
 	const bypassResult = await page.evaluate(async ({ pluginId, targetCommandId }) => {
@@ -1969,18 +2168,18 @@ async function verifyTabs(page) {
 	await automationTab.press("ArrowRight");
 	assert(await serviceTab.getAttribute("aria-selected") === "true", "二级右方向键应循环切换");
 	assert(
-		JSON.stringify(await getSettingOptionValues(page, "Provider")) ===
+		JSON.stringify(await getSettingOptionValues(page, "服务商")) ===
 			JSON.stringify(["aliyun-bailian", "siliconflow", "mosi", "ollama", "lm-studio"]),
-		"离线转写 Provider 的成员或顺序不正确"
+		"离线转写服务商的成员或顺序不正确"
 	);
-	await selectSettingOption(page, "Provider", "siliconflow");
+	await selectSettingOption(page, "服务商", "siliconflow");
 	const transcriptionAdvanced = activePanel.locator(
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
 	).first();
 	assert(await transcriptionAdvanced.getAttribute("open") === null, "转写高级配置应默认折叠");
 	assert(
-		await activePanel.getByText("当前 provider 能力", { exact: true }).isVisible(),
-		"当前 Provider 能力应在基础配置中可见"
+		await activePanel.getByText("当前服务商能力", { exact: true }).isVisible(),
+		"当前服务商能力应在基础配置中可见"
 	);
 	assert(await (await getActiveSetting(page, "转写模型")).isVisible(), "转写模型应在基础配置中可见");
 	assert(await (await getActiveSetting(page, "转写配置自检")).isVisible(), "转写配置自检应在基础配置中可见");
@@ -1991,7 +2190,7 @@ async function verifyTabs(page) {
 					return element.querySelector(".setting-item-name")?.textContent?.trim() ?? "";
 				}
 				if (element.matches(".echo-notes-provider-capability")) {
-					return "当前 provider 能力";
+					return "当前服务商能力";
 				}
 				if (element.matches(".echo-notes-settings-advanced")) {
 					return "高级配置";
@@ -2002,11 +2201,11 @@ async function verifyTabs(page) {
 	));
 	const orderIndex = (label) => serviceOrder.findIndex((item) => item.includes(label));
 	assert(
-		orderIndex("Provider") < orderIndex("API 密钥") &&
-		orderIndex("API 密钥") < orderIndex("转写模型") &&
+		orderIndex("服务商") < orderIndex("API Key") &&
+		orderIndex("API Key") < orderIndex("转写模型") &&
 		orderIndex("转写模型") < orderIndex("转写配置自检") &&
-		orderIndex("转写配置自检") < orderIndex("当前 provider 能力") &&
-		orderIndex("当前 provider 能力") < orderIndex("高级配置"),
+		orderIndex("转写配置自检") < orderIndex("当前服务商能力") &&
+		orderIndex("当前服务商能力") < orderIndex("高级配置"),
 		`转写服务设置顺序不符合信息架构：${JSON.stringify(serviceOrder)}`
 	);
 	assert(
@@ -2018,7 +2217,7 @@ async function verifyTabs(page) {
 		const advancedSetting = await getActiveSetting(page, advancedSettingName);
 		assert(!(await advancedSetting.isVisible()), `${advancedSettingName} 应在高级配置折叠时隐藏`);
 	}
-	assert((await activePanel.getByText("硅基流动注册链接", { exact: true }).count()) === 0, "Provider 注册入口不应再单独占用设置行");
+	assert((await activePanel.getByText("硅基流动注册链接", { exact: true }).count()) === 0, "服务商注册入口不应再单独占用设置行");
 	assert(
 		(await activePanel.getByText("自定义转写模型", { exact: true }).count()) === 0,
 		"使用官方模型时不应显示自定义模型输入框"
@@ -2064,7 +2263,7 @@ async function verifyTabs(page) {
 		"切回官方模型后应隐藏自定义模型输入框"
 	);
 
-	await selectSettingOption(page, "Provider", "mosi");
+	await selectSettingOption(page, "服务商", "mosi");
 	let fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
 	assert(await fixedTranscriptionModel.isDisabled(), "MOSI 固定模型应不可编辑");
 	await setSettingToggle(page, "说话人分离", false);
@@ -2088,7 +2287,7 @@ async function verifyTabs(page) {
 		"AgentPlan 实时转写固定模型应在基础配置中只读展示"
 	);
 	await selectSettingOption(page, "转写模式", "offline");
-	await selectSettingOption(page, "Provider", "siliconflow");
+	await selectSettingOption(page, "服务商", "siliconflow");
 	await transcriptionAdvanced.locator("summary").click();
 	for (const advancedSettingName of ["Base URL", "默认转写语言", "自定义语言代码"]) {
 		assert(await (await getActiveSetting(page, advancedSettingName)).isVisible(), `${advancedSettingName} 应在展开高级配置后显示`);
@@ -2117,7 +2316,7 @@ async function verifyTabs(page) {
 	const memoryProcessingTab = memorySectionTabs.filter({ hasText: "编译策略" });
 	await memoryModelTab.click();
 	assert(
-		JSON.stringify(await getSettingOptionValues(page, "记忆 provider")) ===
+		JSON.stringify(await getSettingOptionValues(page, "记忆服务商")) ===
 			JSON.stringify([
 				"siliconflow",
 				"aliyun-bailian",
@@ -2127,9 +2326,9 @@ async function verifyTabs(page) {
 				"lm-studio",
 				"custom-openai-compatible"
 			]),
-		"记忆 Provider 的成员或顺序不正确"
+		"记忆服务商的成员或顺序不正确"
 	);
-	await selectSettingOption(page, "记忆 provider", "siliconflow");
+	await selectSettingOption(page, "记忆服务商", "siliconflow");
 	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
 	assert(await (await getActiveSetting(page, "记忆模型")).isVisible(), "记忆模型应在基础配置中可见");
 	await memoryProcessingTab.click();
@@ -2155,7 +2354,7 @@ async function verifyTabs(page) {
 	const processingTab = analysisSectionTabs.filter({ hasText: "处理策略" });
 	const templatesTab = analysisSectionTabs.filter({ hasText: "模板管理" });
 	assert(
-		JSON.stringify(await getSettingOptionValues(page, "分析 provider")) ===
+		JSON.stringify(await getSettingOptionValues(page, "分析服务商")) ===
 			JSON.stringify([
 				"siliconflow",
 				"aliyun-bailian",
@@ -2165,10 +2364,10 @@ async function verifyTabs(page) {
 				"lm-studio",
 				"custom-openai-compatible"
 			]),
-		"AI 分析 Provider 的成员或顺序不正确"
+		"AI 分析服务商的成员或顺序不正确"
 	);
 
-	await selectSettingOption(page, "分析 provider", "siliconflow");
+	await selectSettingOption(page, "分析服务商", "siliconflow");
 	assert(
 		(await getSettingTextValue(page, "分析模型")) === "Qwen/Qwen3.5-4B",
 		"硅基流动默认分析模型不正确"
@@ -2178,26 +2377,26 @@ async function verifyTabs(page) {
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
 	).first();
 	assert(await analysisAdvanced.getAttribute("open") === null, "分析高级配置应默认折叠");
-	assert(!(await (await getActiveSetting(page, "分析 base URL")).isVisible()), "分析 Base URL 应在高级配置折叠时隐藏");
+	assert(!(await (await getActiveSetting(page, "分析 Base URL")).isVisible()), "分析 Base URL 应在高级配置折叠时隐藏");
 	assert(!(await (await getActiveSetting(page, "分析配置自检")).isVisible()), "分析配置自检应在高级配置折叠时隐藏");
 
-	await selectSettingOption(page, "分析 provider", "volcengine-agentplan");
+	await selectSettingOption(page, "分析服务商", "volcengine-agentplan");
 	const agentPlanAnalysisModel = await getActiveSetting(page, "分析模型");
 	assert(
 		await agentPlanAnalysisModel.isVisible() && (await agentPlanAnalysisModel.locator("select").count()) === 1,
 		"AgentPlan 分析模型应在基础配置中使用下拉框展示"
 	);
 
-	await selectSettingOption(page, "分析 provider", "ollama");
+	await selectSettingOption(page, "分析服务商", "ollama");
 	analysisAdvanced = activePanel.locator(
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
 	).first();
-	assert(await analysisAdvanced.getAttribute("open") === null, "分析高级配置应在 Provider 重绘后保持默认折叠");
+	assert(await analysisAdvanced.getAttribute("open") === null, "分析高级配置应在服务商重绘后保持默认折叠");
 	assert(await (await getActiveSetting(page, "分析模型")).isVisible(), "Ollama 分析模型应在基础配置中可见");
 	await analysisAdvanced.locator("summary").click();
-	await activePanel.getByText("分析 base URL", { exact: true }).waitFor({ state: "visible" });
+	await activePanel.getByText("分析 Base URL", { exact: true }).waitFor({ state: "visible" });
 	assert(await (await getActiveSetting(page, "分析配置自检")).isVisible(), "展开高级配置后应显示分析配置自检");
-	assert(await modelTab.getAttribute("aria-selected") === "true", "分析 Provider 重绘后应保留模型配置分类");
+	assert(await modelTab.getAttribute("aria-selected") === "true", "分析服务商重绘后应保留模型配置分类");
 
 	await processingTab.click();
 	const processingOrder = await activePanel.locator('.echo-notes-settings-section-panel:not([hidden])').evaluate((panel) => (
@@ -2224,8 +2423,8 @@ async function verifyTabs(page) {
 	await activePanel.getByText("分析分块字符数", { exact: true }).waitFor({ state: "visible" });
 
 	await modelTab.click();
-	await selectSettingOption(page, "分析 provider", "aliyun-bailian");
-	assert(await modelTab.getAttribute("aria-selected") === "true", "恢复分析 Provider 后应保留模型配置分类");
+	await selectSettingOption(page, "分析服务商", "aliyun-bailian");
+	assert(await modelTab.getAttribute("aria-selected") === "true", "恢复分析服务商后应保留模型配置分类");
 	await templatesTab.click();
 	await activePanel.getByText("默认分析模板", { exact: true }).waitFor({ state: "visible" });
 	assert(await templatesTab.getAttribute("aria-selected") === "true", "模板管理分类应可访问");
@@ -3353,7 +3552,7 @@ async function verifyApiKeyLink(page, settingName, context) {
 			hasExternalLinkIcon: Boolean(icon?.querySelector("svg"))
 		};
 	});
-	assert(metrics.label === "获取硅基流动 API key", `${context} API key 入口文案不正确`);
+	assert(metrics.label === "获取硅基流动 API Key", `${context} API Key 入口文案不正确`);
 	assert(metrics.href === "https://cloud.siliconflow.cn/i/uTf2euFF", `${context} API key 入口 URL 不正确`);
 	assert(metrics.target === "_blank" && metrics.rel.split(/\s+/).includes("noopener") && metrics.rel.split(/\s+/).includes("noreferrer"), `${context} API key 外链安全属性不完整`);
 	assert(metrics.rowDisplay === "block" && metrics.rowOnlyContainsLink, `${context} API key 入口未使用独立操作行`);
@@ -3371,29 +3570,29 @@ async function verifySettingsControlAlignment(page) {
 		{
 			stage: "transcription",
 			section: "转写服务",
-			providerName: "Provider",
+			providerName: "服务商",
 			providerValue: "siliconflow",
-			apiKeyName: "API 密钥（API key）",
-			basicNames: ["Provider", "API 密钥（API key）", "转写模型", "转写配置自检"],
+			apiKeyName: "API Key",
+			basicNames: ["服务商", "API Key", "转写模型", "转写配置自检"],
 			advancedNames: ["Base URL", "默认转写语言", "自定义语言代码"]
 		},
 		{
 			stage: "analysis",
 			section: "模型配置",
-			providerName: "分析 provider",
+			providerName: "分析服务商",
 			providerValue: "siliconflow",
-			apiKeyName: "分析 API key",
-			basicNames: ["分析 provider", "分析 API key", "分析模型"],
-			advancedNames: ["分析 base URL", "分析配置自检"]
+			apiKeyName: "分析 API Key",
+			basicNames: ["分析服务商", "分析 API Key", "分析模型"],
+			advancedNames: ["分析 Base URL", "分析配置自检"]
 		},
 		{
 			stage: "memory",
 			section: "模型配置",
-			providerName: "记忆 provider",
+			providerName: "记忆服务商",
 			providerValue: "siliconflow",
-			apiKeyName: "记忆 API key",
-			basicNames: ["记忆 provider", "记忆 API key", "记忆模型"],
-			advancedNames: ["记忆 base URL", "记忆配置自检"]
+			apiKeyName: "记忆 API Key",
+			basicNames: ["记忆服务商", "记忆 API Key", "记忆模型"],
+			advancedNames: ["记忆 Base URL", "记忆配置自检"]
 		}
 	];
 
@@ -3705,7 +3904,7 @@ async function captureViewports(page) {
 				assert(metrics.providerFound, `${context} 未找到 ${stage.providerSetting} 设置项`);
 				assert(
 					metrics.providerStacked === viewport.stackedSettings,
-					`${context} 的 Provider 设置行响应式布局不符合预期`
+					`${context} 的服务商设置行响应式布局不符合预期`
 				);
 
 				const fileName = `settings-${stage.id}-${viewport.name}-${theme}.png`;
@@ -3923,7 +4122,9 @@ try {
 	assert(runtimeState.pluginVersion === manifest.version, `宿主插件版本不匹配：${runtimeState.pluginVersion ?? "未找到"}`);
 	assert(runtimeState.audioWorkletAvailable, "Obsidian 宿主的 AudioContext.audioWorklet 不可用");
 	assert(runtimeState.audioWorkletNodeAvailable, "Obsidian 宿主的 AudioWorkletNode 不可用");
+	const realtimeStatusLayout = await verifyRealtimeStatusIndicator(page);
 	const gettingStartedLayouts = await verifyGettingStarted(page);
+	const taskCenterLayouts = await captureTaskCenterLayouts(page);
 	await setViewportMode(page, VIEWPORTS[0], "light");
 	await openSettings(page);
 	await verifyDeclarativeSettingsCompatibility(page);
@@ -3939,9 +4140,9 @@ try {
 	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
 	await verifyMemoryInitialization(page);
 	await verifyMemoryCheckpointResume(page, memoryProviderMock);
-		const memoryReviewLayouts = await verifyMemoryReview(page);
-		const memoryRelationLayouts = await verifyMemoryRelations(page);
-		const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
+	const memoryReviewLayouts = await verifyMemoryReview(page);
+	const memoryRelationLayouts = await verifyMemoryRelations(page);
+	const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
 	assert(pageErrors.length === 0, `设置页出现运行时错误：${pageErrors.join(" | ")}`);
 
 	const summary = {
@@ -3974,11 +4175,17 @@ try {
 			gettingStartedNoModal: true,
 			gettingStartedSettingsSpotlight: true,
 			gettingStartedDismissal: true,
+			realtimeStatusIndicator: true,
+			taskCenterSections: true,
+			taskCenterStatusIndicators: true,
+			taskCenterResponsiveLayout: true,
 			runtimeErrors: pageErrors.length
 		},
 		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
 		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
+		realtimeStatusLayout,
+		taskCenterLayouts,
 		controlAlignmentLayouts,
 		categorizedFieldLayouts,
 		compositeControlLayouts,
@@ -3995,7 +4202,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；新人边栏初始截图：${gettingStartedLayouts.initialLayouts.length} 张；新人阶段截图：${gettingStartedLayouts.guideLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；新人边栏初始截图：${gettingStartedLayouts.initialLayouts.length} 张；新人阶段截图：${gettingStartedLayouts.guideLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；任务中心截图：${taskCenterLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);

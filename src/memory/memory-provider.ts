@@ -118,7 +118,7 @@ export function diagnoseMemoryProviderSettings(
 		const url = new URL(config.baseUrl);
 		const localHost = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
 		if (url.protocol !== "https:" && !(isLocal && localHost && url.protocol === "http:")) {
-			errors.push("远程记忆服务必须使用 HTTPS；仅本地 Provider 可使用 localhost HTTP。");
+			errors.push("远程记忆服务必须使用 HTTPS；仅本地服务商可使用 localhost HTTP。");
 		}
 	} catch {
 		errors.push("记忆 Base URL 不是有效 URL。");

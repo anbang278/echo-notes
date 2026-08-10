@@ -23,6 +23,7 @@ import {
 	isGettingStartedBusy
 } from "./getting-started-state";
 import { formatHotkey } from "../settings/settings";
+import { renderStatusIndicator } from "../ui/status-indicator";
 
 export interface GettingStartedTaskSnapshot {
 	id: string;
@@ -129,7 +130,7 @@ export class GettingStartedGuide {
 
 	open(): void {
 		const snapshot = this.getSnapshot();
-		this.forceVisible = Platform.isMobile && snapshot.state.status === "dismissed";
+		this.forceVisible = true;
 		this.expanded = true;
 		this.selectedChapter = snapshot.state.activeReview?.chapter ?? this.getActiveChapter(snapshot.step) ?? "memory";
 		this.requestRender();
@@ -139,13 +140,17 @@ export class GettingStartedGuide {
 		return this.expanded;
 	}
 
+	isVisible(): boolean {
+		return this.getSnapshot().state.status !== "dismissed" || this.forceVisible;
+	}
+
 	private render(): void {
 		this.requestRender();
 	}
 
 	renderInto(parentEl: HTMLElement): void {
 		const snapshot = this.getSnapshot();
-		if (snapshot.state.status === "dismissed" && !this.forceVisible) {
+		if (!this.isVisible()) {
 			return;
 		}
 		const activeChapter = snapshot.state.activeReview?.chapter ?? this.getActiveChapter(snapshot.step);
@@ -265,7 +270,7 @@ export class GettingStartedGuide {
 				this.renderServiceStep(
 					"audio-lines",
 					"配置转写服务",
-					"选择离线转写 Provider 并保存对应 API Key。配置只在本地检查，不会上传音频。",
+					"选择离线转写服务商并保存对应 API Key。配置只在本地检查，不会上传音频。",
 					snapshot.readiness.transcriptionReady,
 					() => this.runExternal(() => this.actions.openTranscriptionSettings())
 				);
@@ -274,7 +279,7 @@ export class GettingStartedGuide {
 				this.renderServiceStep(
 					"sparkles",
 					"配置 AI 分析",
-					"开启 AI 分析，选择 Provider，并保存独立的分析 API Key。",
+					"开启 AI 分析，选择服务商，并保存独立的分析 API Key。",
 					snapshot.readiness.analysisReady,
 					() => this.runExternal(() => this.actions.openAnalysisSettings())
 				);
@@ -423,7 +428,7 @@ export class GettingStartedGuide {
 		onConfigure: () => void
 	): void {
 		this.renderStepIntro(icon, title, description);
-		this.renderStatus(ready ? "配置检查已通过" : "还需要完成 Provider 与 API Key 配置", ready);
+		this.renderStatus(ready ? "配置检查已通过" : "还需要完成服务商与 API Key 配置", ready);
 		new Setting(this.contentEl)
 			.setClass("echo-notes-getting-started-actions")
 			.addButton((button) => button
@@ -436,7 +441,7 @@ export class GettingStartedGuide {
 		this.renderStepIntro(
 			"mic-2",
 			"启用 Obsidian 核心录音机",
-			"离线流程使用 Obsidian Core plugin：Audio recorder 保存录音，停止后音频会插入当前笔记。"
+			"离线流程使用 Obsidian 核心插件“录音机”保存录音，停止后音频会插入当前笔记。"
 		);
 		const manuallyConfirmed = Boolean(snapshot.state.recorderManuallyConfirmedAt);
 		const enabled = snapshot.recorderEnabled === true;
@@ -462,7 +467,7 @@ export class GettingStartedGuide {
 				}));
 		} else if (snapshot.recorderEnabled === null && !manuallyConfirmed) {
 			actions.addButton((button) => button
-				.setButtonText("打开 core plugins")
+				.setButtonText("打开核心插件设置")
 				.onClick(() => this.runExternal(() => this.actions.openCorePluginSettings())));
 			actions.addButton((button) => button
 				.setCta()
@@ -489,7 +494,7 @@ export class GettingStartedGuide {
 			"keyboard",
 			"配置三组快捷键",
 			recommendation
-				? `已为 ${recommendation.platform} 填入统一推荐组合。保存后会写入 Obsidian 全局 Hotkeys，但不会移除其他命令已有的绑定。`
+				? `已为 ${recommendation.platform} 填入统一推荐组合。保存后会写入 Obsidian 全局快捷键设置，但不会移除其他命令已有的绑定。`
 				: "点击录入按钮后直接按组合键。Echo Notes 不会自动覆盖其他命令。"
 		);
 		const draft = this.hotkeyDraft ?? (recommendation
@@ -522,7 +527,7 @@ export class GettingStartedGuide {
 		}
 		if (!snapshot.hotkeyManagerWritable) {
 			this.renderInlineMessage(
-				"当前 Obsidian 版本无法由 Echo Notes 写入快捷键，请到 Hotkeys 设置中手动配置。",
+				"当前 Obsidian 版本无法由 Echo Notes 写入快捷键，请到快捷键设置中手动配置。",
 				"warning"
 			);
 		}
@@ -550,7 +555,7 @@ export class GettingStartedGuide {
 				}));
 		} else {
 			actions.addButton((button) => button
-				.setButtonText("打开 hotkeys")
+				.setButtonText("打开快捷键设置")
 				.onClick(() => {
 					this.hotkeyDraft = null;
 					this.runExternal(() => this.actions.openHotkeySettings());
@@ -577,11 +582,12 @@ export class GettingStartedGuide {
 		copyEl.createDiv({ cls: "echo-notes-getting-started-hotkey-label", text: HOTKEY_LABELS[id] });
 		const conflicts = conflictsById[id] ?? [];
 		if (conflicts.length > 0) {
-			copyEl.createDiv({
-				cls: "echo-notes-getting-started-hotkey-conflict",
+			const conflictEl = copyEl.createDiv({ cls: "echo-notes-getting-started-hotkey-conflict" });
+			renderStatusIndicator(conflictEl, {
+				tone: "warning",
 				text: `快捷键冲突：${conflicts.join("、")}`,
-				attr: { role: "status", "aria-live": "polite" }
-			});
+				live: "polite"
+			}, setIcon);
 		}
 
 		const controlsEl = rowEl.createDiv({ cls: "echo-notes-getting-started-hotkey-controls" });
@@ -807,7 +813,7 @@ export class GettingStartedGuide {
 			return;
 		}
 		if (!snapshot.readiness.memoryReady) {
-			this.renderStatus("还需要配置独立的记忆 Provider 和 API Key", false);
+			this.renderStatus("还需要配置独立的记忆服务商和 API Key", false);
 			new Setting(this.contentEl)
 				.setClass("echo-notes-getting-started-actions")
 				.addButton((button) => button
@@ -1028,7 +1034,7 @@ export class GettingStartedGuide {
 		for (const id of ids) {
 			const itemEl = containerEl.createDiv({ cls: "echo-notes-getting-started-practice-hotkey" });
 			itemEl.createSpan({ text: HOTKEY_LABELS[id] });
-			itemEl.createEl("kbd", { text: formatHotkey(hotkeys[id]) || "请在 Hotkeys 中配置" });
+			itemEl.createEl("kbd", { text: formatHotkey(hotkeys[id]) || "请在快捷键设置中配置" });
 		}
 	}
 
@@ -1043,22 +1049,21 @@ export class GettingStartedGuide {
 	}
 
 	private renderStatus(text: string, success: boolean, busy = false): void {
-		const statusEl = this.contentEl.createDiv({
-			cls: `echo-notes-getting-started-status${success ? " is-success" : ""}${busy ? " is-busy" : ""}`,
-			attr: { role: "status", "aria-live": "polite" }
-		});
-		const iconEl = statusEl.createSpan();
-		iconEl.setAttribute("aria-hidden", "true");
-		setIcon(iconEl, success ? "circle-check" : busy ? "loader-circle" : "circle-alert");
-		statusEl.createSpan({ text });
+		const statusEl = this.contentEl.createDiv({ cls: "echo-notes-getting-started-status" });
+		renderStatusIndicator(statusEl, {
+			tone: busy ? "running" : success ? "success" : "warning",
+			text,
+			live: "polite"
+		}, setIcon);
 	}
 
 	private renderInlineMessage(text: string, severity: "warning" | "error"): void {
-		this.contentEl.createDiv({
-			cls: `echo-notes-getting-started-inline-message is-${severity}`,
+		const messageEl = this.contentEl.createDiv({ cls: "echo-notes-getting-started-inline-message" });
+		renderStatusIndicator(messageEl, {
+			tone: severity === "error" ? "failed" : "warning",
 			text,
-			attr: { role: severity === "error" ? "alert" : "status", "aria-live": "polite" }
-		});
+			live: severity === "error" ? "assertive" : "polite"
+		}, setIcon);
 	}
 
 	private handleHotkeyCapture(event: KeyboardEvent): void {

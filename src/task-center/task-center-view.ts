@@ -1,6 +1,7 @@
 import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import { GettingStartedGuide } from "../getting-started/getting-started-guide";
+import { renderStatusIndicator, type StatusIndicatorTone } from "../ui/status-indicator";
 import {
 	formatTaskBytes,
 	formatTaskElapsedTime,
@@ -8,7 +9,15 @@ import {
 	type EchoNotesTask,
 	type EchoNotesTaskStatus
 } from "./task-center-store";
-import { filterTaskCenterTasks, getTaskFailureGuidance, getTaskNextStep } from "./task-center-copy";
+import {
+	filterTaskCenterTasks,
+	formatTaskDetailsForClipboard,
+	getDefaultTaskCenterSection,
+	getTaskFailureGuidance,
+	getTaskNextStep,
+	getTaskPathDisplayName,
+	type TaskCenterSection
+} from "./task-center-copy";
 
 export const ECHO_NOTES_TASK_CENTER_VIEW_TYPE = "echo-notes-task-center";
 
@@ -19,6 +28,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 	private statusFilter: EchoNotesTaskStatus | "all" = "all";
 	private kindFilter: EchoNotesTask["kind"] | "all" = "all";
 	private query = "";
+	private activeSection: TaskCenterSection = "tasks";
 
 	constructor(leaf: WorkspaceLeaf, plugin: EchoNotesPlugin) {
 		super(leaf);
@@ -38,6 +48,9 @@ export class EchoNotesTaskCenterView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
+		this.activeSection = getDefaultTaskCenterSection(
+			this.plugin.getGettingStartedGuideSnapshot().state.status
+		);
 		this.gettingStartedGuide = new GettingStartedGuide(
 			() => this.plugin.getGettingStartedGuideSnapshot(),
 			this.plugin.getGettingStartedGuideActions(),
@@ -61,10 +74,106 @@ export class EchoNotesTaskCenterView extends ItemView {
 	}
 
 	revealGettingStarted(): void {
+		this.activeSection = "guide";
 		this.gettingStartedGuide?.open();
 	}
 
 	private render(): void {
+		if (this.activeSection === "guide" && !this.gettingStartedGuide?.isVisible()) {
+			this.activeSection = "tasks";
+		}
+
+		this.contentEl.empty();
+		this.contentEl.addClass("echo-notes-task-center");
+		const panels = this.renderSectionTabs();
+		if (this.activeSection === "guide") {
+			this.gettingStartedGuide?.renderInto(panels.guide);
+			return;
+		}
+
+		this.renderTaskList(panels.tasks);
+	}
+
+	private renderSectionTabs(): Record<TaskCenterSection, HTMLElement> {
+		const tabsEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-tabs" });
+		tabsEl.setAttribute("role", "tablist");
+		tabsEl.setAttribute("aria-label", "任务中心视图");
+		const definitions: ReadonlyArray<{ id: TaskCenterSection; label: string; icon: string }> = [
+			{ id: "guide", label: "新人指引", icon: "compass" },
+			{ id: "tasks", label: "任务列表", icon: "list-checks" }
+		];
+		const panels = {} as Record<TaskCenterSection, HTMLElement>;
+
+		for (const [index, definition] of definitions.entries()) {
+			const active = definition.id === this.activeSection;
+			const tabId = `echo-notes-task-center-tab-${definition.id}`;
+			const panelId = `echo-notes-task-center-panel-${definition.id}`;
+			const buttonEl = tabsEl.createEl("button", {
+				cls: `echo-notes-task-center-tab${active ? " is-active" : ""}`,
+				attr: {
+					type: "button",
+					role: "tab",
+					id: tabId,
+					"aria-selected": String(active),
+					"aria-controls": panelId,
+					tabindex: active ? "0" : "-1"
+				}
+			});
+			const iconEl = buttonEl.createSpan({ cls: "echo-notes-task-center-tab-icon" });
+			iconEl.setAttribute("aria-hidden", "true");
+			setIcon(iconEl, definition.icon);
+			buttonEl.createSpan({ text: definition.label });
+			buttonEl.addEventListener("click", () => this.activateSection(definition.id));
+			buttonEl.addEventListener("keydown", (event) => {
+				let targetIndex: number;
+				switch (event.key) {
+					case "ArrowLeft":
+						targetIndex = (index - 1 + definitions.length) % definitions.length;
+						break;
+					case "ArrowRight":
+						targetIndex = (index + 1) % definitions.length;
+						break;
+					case "Home":
+						targetIndex = 0;
+						break;
+					case "End":
+						targetIndex = definitions.length - 1;
+						break;
+					default:
+						return;
+				}
+				event.preventDefault();
+				this.activateSection(definitions[targetIndex].id, true);
+			});
+		}
+
+		for (const definition of definitions) {
+			const active = definition.id === this.activeSection;
+			const panelEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-panel" });
+			panelEl.id = `echo-notes-task-center-panel-${definition.id}`;
+			panelEl.setAttribute("role", "tabpanel");
+			panelEl.setAttribute("aria-labelledby", `echo-notes-task-center-tab-${definition.id}`);
+			panelEl.hidden = !active;
+			panels[definition.id] = panelEl;
+		}
+		return panels;
+	}
+
+	private activateSection(section: TaskCenterSection, focusTab = false): void {
+		this.activeSection = section;
+		if (section === "guide") {
+			this.gettingStartedGuide?.open();
+		} else {
+			this.render();
+		}
+		if (focusTab) {
+			window.requestAnimationFrame(() => {
+				this.contentEl.querySelector<HTMLButtonElement>(`#echo-notes-task-center-tab-${section}`)?.focus();
+			});
+		}
+	}
+
+	private renderTaskList(containerEl: HTMLElement): void {
 		const allTasks = this.plugin.getTaskCenterTasks();
 		const counts = summarizeTaskCounts(allTasks);
 		const tasks = filterTaskCenterTasks(allTasks, {
@@ -73,13 +182,9 @@ export class EchoNotesTaskCenterView extends ItemView {
 			query: this.query
 		});
 
-		this.contentEl.empty();
-		this.contentEl.addClass("echo-notes-task-center");
-		this.gettingStartedGuide?.renderInto(this.contentEl);
-
-		const headerEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-header" });
+		const headerEl = containerEl.createDiv({ cls: "echo-notes-task-center-header" });
 		const titleWrapEl = headerEl.createDiv({ cls: "echo-notes-task-center-title-wrap" });
-		titleWrapEl.createDiv({ cls: "echo-notes-task-center-title", text: "任务中心" });
+		titleWrapEl.createDiv({ cls: "echo-notes-task-center-title", text: "任务概览" });
 		titleWrapEl.createDiv({
 			cls: "echo-notes-task-center-summary",
 			text: `运行中 ${counts.running} · 失败 ${counts.failed} · 完成 ${counts.success} · 已跳过 ${counts.skipped}`
@@ -91,7 +196,15 @@ export class EchoNotesTaskCenterView extends ItemView {
 			this.plugin.clearFinishedTaskCenterTasks();
 		});
 
-		const filtersEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-filters" });
+		if (allTasks.length === 0) {
+			containerEl.createDiv({
+				cls: "echo-notes-task-center-empty",
+				text: "暂无任务。完成一次转写或分析后，任务会自动出现在这里。"
+			});
+			return;
+		}
+
+		const filtersEl = containerEl.createDiv({ cls: "echo-notes-task-center-filters" });
 		const searchEl = filtersEl.createEl("input", {
 			cls: "echo-notes-task-center-search",
 			attr: { type: "search", placeholder: "搜索任务、文件或阶段", "aria-label": "搜索任务、文件或阶段" }
@@ -132,14 +245,14 @@ export class EchoNotesTaskCenterView extends ItemView {
 		});
 
 		if (tasks.length === 0) {
-			this.contentEl.createDiv({
+			containerEl.createDiv({
 				cls: "echo-notes-task-center-empty",
-				text: allTasks.length === 0 ? "暂无任务。完成一次转写或分析后，任务会自动出现在这里。" : "没有匹配的任务，请调整筛选条件。"
+				text: "没有匹配的任务，请调整筛选条件。"
 			});
 			return;
 		}
 
-		const listEl = this.contentEl.createDiv({ cls: "echo-notes-task-center-list" });
+		const listEl = containerEl.createDiv({ cls: "echo-notes-task-center-list" });
 		for (const task of tasks) {
 			this.renderTask(listEl, task);
 		}
@@ -149,18 +262,21 @@ export class EchoNotesTaskCenterView extends ItemView {
 		const taskEl = containerEl.createDiv({ cls: `echo-notes-task-card is-${task.status}` });
 		const mainEl = taskEl.createDiv({ cls: "echo-notes-task-card-main" });
 		const headerEl = mainEl.createDiv({ cls: "echo-notes-task-card-header" });
-		headerEl.createDiv({
-			cls: `echo-notes-task-status is-${task.status}`,
+		const statusEl = headerEl.createSpan({ cls: "echo-notes-task-status" });
+		renderStatusIndicator(statusEl, {
+			tone: getStatusTone(task.status),
 			text: getStatusLabel(task.status)
-		});
+		}, setIcon);
 		headerEl.createDiv({ cls: "echo-notes-task-kind", text: getTaskKindLabel(task.kind) });
 
 		mainEl.createDiv({ cls: "echo-notes-task-title", text: task.title });
 		mainEl.createDiv({ cls: "echo-notes-task-stage", text: task.stage });
 		mainEl.createDiv({ cls: "echo-notes-task-next-step", text: `下一步：${getTaskNextStep(task)}` });
 
-		const metaEl = mainEl.createDiv({ cls: "echo-notes-task-meta" });
-		this.renderMeta(metaEl, "Provider", task.provider ?? "未记录");
+		const detailsEl = mainEl.createEl("details", { cls: "echo-notes-task-details" });
+		detailsEl.createEl("summary", { text: "任务详情" });
+		const metaEl = detailsEl.createDiv({ cls: "echo-notes-task-meta" });
+		this.renderMeta(metaEl, "服务商", task.provider ?? "未记录");
 		this.renderMeta(metaEl, "模型", task.model ?? "未记录");
 		if (task.kind === "transcription") {
 			this.renderMeta(metaEl, "音频大小", formatTaskBytes(task.bytes));
@@ -174,11 +290,11 @@ export class EchoNotesTaskCenterView extends ItemView {
 			);
 		}
 		if (task.sourcePath) {
-			this.renderMeta(metaEl, "来源", task.sourcePath);
+			this.renderPathMeta(metaEl, "来源", task.sourcePath);
 		}
-		this.renderMeta(metaEl, task.outputPath ? "输出" : "目标", task.outputPath ?? task.targetPath);
+		this.renderPathMeta(metaEl, task.outputPath ? "输出" : "目标", task.outputPath ?? task.targetPath);
 		if (task.traceId) {
-			this.renderMeta(metaEl, "Trace ID", task.traceId);
+			this.renderMeta(metaEl, "Trace ID", task.traceId, true);
 		}
 
 		if (task.error) {
@@ -194,6 +310,14 @@ export class EchoNotesTaskCenterView extends ItemView {
 		const actionsEl = taskEl.createDiv({ cls: "echo-notes-task-card-actions" });
 		this.createIconButton(actionsEl, "file-search", "打开任务文件", () => {
 			void this.plugin.openTaskCenterTask(task);
+		});
+		this.createIconButton(actionsEl, "copy", "复制任务详情", async () => {
+			try {
+				await navigator.clipboard.writeText(formatTaskDetailsForClipboard(task));
+				new Notice("任务详情已复制。");
+			} catch {
+				new Notice("任务详情复制失败。");
+			}
 		});
 		if (task.kind === "memory" && task.status === "success" && task.outputPath) {
 			this.createTextAction(actionsEl, "clipboard-check", "立即审核", () => {
@@ -244,10 +368,23 @@ export class EchoNotesTaskCenterView extends ItemView {
 		return buttonEl;
 	}
 
-	private renderMeta(containerEl: HTMLElement, label: string, value: string): void {
+	private renderMeta(containerEl: HTMLElement, label: string, value: string, technical = false): void {
 		const itemEl = containerEl.createDiv({ cls: "echo-notes-task-meta-item" });
 		itemEl.createSpan({ cls: "echo-notes-task-meta-label", text: `${label}:` });
-		itemEl.createSpan({ cls: "echo-notes-task-meta-value", text: value });
+		itemEl.createSpan({
+			cls: `echo-notes-task-meta-value${technical ? " is-technical" : ""}`,
+			text: value
+		});
+	}
+
+	private renderPathMeta(containerEl: HTMLElement, label: string, path: string): void {
+		const itemEl = containerEl.createDiv({ cls: "echo-notes-task-meta-item is-path" });
+		itemEl.createSpan({ cls: "echo-notes-task-meta-label", text: `${label}:` });
+		itemEl.createSpan({
+			cls: "echo-notes-task-meta-value",
+			text: getTaskPathDisplayName(path),
+			attr: { title: path }
+		});
 	}
 
 	private createIconButton(
@@ -286,12 +423,25 @@ function getTaskKindLabel(kind: EchoNotesTask["kind"]): string {
 function getStatusLabel(status: EchoNotesTaskStatus): string {
 	switch (status) {
 		case "running":
-			return "运行中";
+			return "进行中";
 		case "success":
 			return "完成";
 		case "failed":
 			return "失败";
 		case "skipped":
-			return "跳过";
+			return "已跳过";
+	}
+}
+
+function getStatusTone(status: EchoNotesTaskStatus): StatusIndicatorTone {
+	switch (status) {
+		case "running":
+			return "running";
+		case "success":
+			return "success";
+		case "failed":
+			return "failed";
+		case "skipped":
+			return "neutral";
 	}
 }

@@ -299,7 +299,7 @@ export function prepareMemoryExtractionCheckpointResult(
 	const provider = result.provider.trim();
 	const model = result.model.trim();
 	if (provider !== identity.provider || model !== identity.model) {
-		throw new Error("记忆提取分块结果的 Provider 或模型与检查点身份不一致。");
+		throw new Error("记忆提取分块结果的服务商或模型与检查点身份不一致。");
 	}
 	const assertions = parseMemoryExtractionResponse(JSON.stringify({ assertions: result.assertions }), sourceText).assertions;
 	if (JSON.stringify(assertions).length > MEMORY_EXTRACTION_CHECKPOINT_RESULT_MAX_CHARACTERS) {
