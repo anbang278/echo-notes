@@ -19,12 +19,15 @@ export type OfflineTranscriptionProviderId =
 
 export type AnalysisProviderId =
 	| "siliconflow"
+	| "opencode-go"
 	| "aliyun-bailian"
 	| "deepseek"
 	| "volcengine-agentplan"
 	| "ollama"
 	| "lm-studio"
 	| "custom-openai-compatible";
+
+export type MemoryProviderId = Exclude<AnalysisProviderId, "opencode-go">;
 
 export const REMOVED_ANALYSIS_PROVIDER_IDS = [
 	"openai",
@@ -80,6 +83,7 @@ export type EchoNotesHotkeySetting = Hotkey | null;
 export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
 export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
 export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
+export const OPENCODE_GO_ANALYSIS_BASE_URL = "https://opencode.ai/zen/go/v1";
 export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
 export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
 export const MOSI_TRANSCRIPTION_VERSION = "moss-transcribe-diarize-20260325";
@@ -108,6 +112,37 @@ export const AGENTPLAN_ANALYSIS_MODELS: AgentPlanAnalysisModelOption[] = [
 	{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro（进阶·尝鲜）", preview: true },
 	{ id: "kimi-k3", label: "Kimi K3（进阶，Medium 及以上）", minimumPlan: "Medium" }
 ];
+
+export type OpenCodeGoAnalysisProtocol = "chat-completions" | "responses" | "messages";
+
+export interface OpenCodeGoAnalysisModelOption {
+	id: string;
+	label: string;
+	protocol: OpenCodeGoAnalysisProtocol;
+}
+
+export const OPENCODE_GO_ANALYSIS_MODELS: readonly OpenCodeGoAnalysisModelOption[] = [
+	{ id: "grok-4.5", label: "Grok 4.5", protocol: "chat-completions" },
+	{ id: "glm-5.2", label: "GLM-5.2", protocol: "chat-completions" },
+	{ id: "glm-5.1", label: "GLM-5.1", protocol: "chat-completions" },
+	{ id: "gpt-5.6-luna", label: "GPT 5.6 Luna", protocol: "responses" },
+	{ id: "kimi-k3", label: "Kimi K3", protocol: "chat-completions" },
+	{ id: "kimi-k2.7-code", label: "Kimi K2.7 Code", protocol: "chat-completions" },
+	{ id: "kimi-k2.6", label: "Kimi K2.6", protocol: "chat-completions" },
+	{ id: "mimo-v2.5", label: "MiMo-V2.5", protocol: "chat-completions" },
+	{ id: "mimo-v2.5-pro", label: "MiMo-V2.5-Pro", protocol: "chat-completions" },
+	{ id: "minimax-m3", label: "MiniMax M3", protocol: "messages" },
+	{ id: "minimax-m2.7", label: "MiniMax M2.7", protocol: "messages" },
+	{ id: "qwen3.8-max", label: "Qwen3.8 Max", protocol: "messages" },
+	{ id: "qwen3.7-max", label: "Qwen3.7 Max", protocol: "messages" },
+	{ id: "qwen3.7-plus", label: "Qwen3.7 Plus", protocol: "messages" },
+	{ id: "qwen3.6-plus", label: "Qwen3.6 Plus", protocol: "messages" },
+	{ id: "deepseek-v4-pro", label: "DeepSeek V4 Pro", protocol: "chat-completions" },
+	{ id: "deepseek-v4-flash", label: "DeepSeek V4 Flash", protocol: "chat-completions" },
+	{ id: "hy3", label: "Hy3", protocol: "chat-completions" }
+];
+
+export const OPENCODE_GO_DEFAULT_ANALYSIS_MODEL = "deepseek-v4-flash";
 
 export type BuiltInAnalysisTemplateId =
 	| "work-minutes"
@@ -182,7 +217,7 @@ export interface EchoNotesSettings {
 	memoryRootFolder: string;
 	memoryPathLanguage: CopyLanguage;
 	memoryMode: MemoryMode;
-	memoryProvider: AnalysisProviderId;
+	memoryProvider: MemoryProviderId;
 	memoryApiKey?: string;
 	memoryBaseUrl: string;
 	memoryModel: string;
@@ -243,6 +278,17 @@ export const SILICONFLOW_TRANSCRIPTION_MODELS = [
 
 export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
+	"opencode-go": "【推荐】OpenCode Go",
+	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
+	deepseek: "DeepSeek",
+	"volcengine-agentplan": "火山引擎 AgentPlan",
+	ollama: "Ollama",
+	"lm-studio": "LM Studio",
+	"custom-openai-compatible": "自定义兼容接口（Custom OpenAI-compatible）"
+};
+
+export const MEMORY_PROVIDER_LABELS: Record<MemoryProviderId, string> = {
+	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	deepseek: "DeepSeek",
 	"volcengine-agentplan": "火山引擎 AgentPlan",
@@ -281,6 +327,10 @@ export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNot
 	siliconflow: {
 		analysisBaseUrl: "https://api.siliconflow.cn/v1",
 		analysisModel: "Qwen/Qwen3.5-4B"
+	},
+	"opencode-go": {
+		analysisBaseUrl: OPENCODE_GO_ANALYSIS_BASE_URL,
+		analysisModel: OPENCODE_GO_DEFAULT_ANALYSIS_MODEL
 	},
 	"aliyun-bailian": {
 		analysisBaseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -1103,6 +1153,14 @@ export function isAnalysisProviderId(value: string): value is AnalysisProviderId
 	return Boolean(Object.prototype.hasOwnProperty.call(ANALYSIS_PROVIDER_LABELS, value));
 }
 
+export function isMemoryProviderId(value: string): value is MemoryProviderId {
+	return Boolean(Object.prototype.hasOwnProperty.call(MEMORY_PROVIDER_LABELS, value));
+}
+
+export function isOpenCodeGoAnalysisModelId(value: string): boolean {
+	return OPENCODE_GO_ANALYSIS_MODELS.some((option) => option.id === value);
+}
+
 export function isRemovedAnalysisProviderId(value: string): value is RemovedAnalysisProviderId {
 	return (REMOVED_ANALYSIS_PROVIDER_IDS as readonly string[]).includes(value);
 }
@@ -1209,13 +1267,21 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	settings.analysisBaseUrl =
 		settings.analysisProvider === "volcengine-agentplan"
 			? AGENTPLAN_ANALYSIS_BASE_URL
+			: settings.analysisProvider === "opencode-go"
+				? OPENCODE_GO_ANALYSIS_BASE_URL
 			: (hasValidAnalysisProvider || hasRemovedAnalysisProvider) && typeof raw.analysisBaseUrl === "string" && raw.analysisBaseUrl.trim()
 				? raw.analysisBaseUrl.trim()
 				: analysisDefaults.analysisBaseUrl;
-	settings.analysisModel =
-		(hasValidAnalysisProvider || hasRemovedAnalysisProvider) && typeof raw.analysisModel === "string" && raw.analysisModel.trim()
+	const rawAnalysisModel =
+		(hasValidAnalysisProvider || hasRemovedAnalysisProvider) && typeof raw.analysisModel === "string"
 			? raw.analysisModel.trim()
-			: analysisDefaults.analysisModel;
+			: "";
+	settings.analysisModel =
+		settings.analysisProvider === "opencode-go"
+			? isOpenCodeGoAnalysisModelId(rawAnalysisModel)
+				? rawAnalysisModel
+				: analysisDefaults.analysisModel
+			: rawAnalysisModel || analysisDefaults.analysisModel;
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
 	settings.redactTranscriptBeforeAnalysis =
 		typeof raw.redactTranscriptBeforeAnalysis === "boolean"
@@ -1239,7 +1305,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	settings.memoryPathLanguage = raw.memoryPathLanguage === "en" ? "en" : "zh";
 	settings.memoryMode = raw.memoryMode === "compile-profiles" ? "compile-profiles" : "candidates-only";
 	const rawMemoryProvider = typeof raw.memoryProvider === "string" ? raw.memoryProvider : "";
-	settings.memoryProvider = isAnalysisProviderId(rawMemoryProvider)
+	settings.memoryProvider = isMemoryProviderId(rawMemoryProvider)
 		? rawMemoryProvider
 		: DEFAULT_SETTINGS.memoryProvider;
 	const memoryDefaults = ANALYSIS_PROVIDER_DEFAULTS[settings.memoryProvider];

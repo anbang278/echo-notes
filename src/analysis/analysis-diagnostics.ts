@@ -3,6 +3,8 @@ import {
 	AGENTPLAN_ANALYSIS_BASE_URL,
 	AGENTPLAN_ANALYSIS_MODELS,
 	ANALYSIS_PROVIDER_LABELS,
+	OPENCODE_GO_ANALYSIS_BASE_URL,
+	OPENCODE_GO_ANALYSIS_MODELS,
 	isAnalysisProviderId,
 	type EchoNotesSettings
 } from "../settings/settings";
@@ -80,6 +82,27 @@ export function diagnoseAnalysisProviderSettings(
 			severity: "info",
 			title: "AgentPlan 专属凭证",
 			detail: "分析必须使用 AgentPlan 专属 API Key；实时转写与分析密钥在 Echo Notes 中按用途隔离保存。"
+		});
+	}
+	if (providerId === "opencode-go") {
+		if (baseUrl && normalizeBaseUrl(baseUrl) !== OPENCODE_GO_ANALYSIS_BASE_URL) {
+			items.push({
+				severity: "error",
+				title: "OpenCode Go 分析地址不正确",
+				detail: `必须使用官方基础地址 ${OPENCODE_GO_ANALYSIS_BASE_URL}；模型会自动路由到对应接口。`
+			});
+		}
+		if (model && !OPENCODE_GO_ANALYSIS_MODELS.some((option) => option.id === model)) {
+			items.push({
+				severity: "error",
+				title: "模型不在当前 OpenCode Go 清单中",
+				detail: "请从设置页下拉框选择官方文档当前列出的 OpenCode Go 模型。"
+			});
+		}
+		items.push({
+			severity: "info",
+			title: "OpenCode Go 订阅凭证",
+			detail: "请先订阅 OpenCode Go 并使用对应 API Key；密钥在 Echo Notes 中按服务商与用途隔离保存。"
 		});
 	}
 	if (estimatedCharacters !== undefined && estimatedCharacters > 120000) {

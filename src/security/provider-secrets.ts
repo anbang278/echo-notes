@@ -1,5 +1,6 @@
 import type {
 	AnalysisProviderId,
+	MemoryProviderId,
 	RemovedAnalysisProviderId,
 	TranscriptionProviderId
 } from "../settings/settings";
@@ -21,7 +22,7 @@ export function getAnalysisApiKeySecretId(provider: AnalysisProviderId): string 
 	return `${ANALYSIS_SECRET_PREFIX}-${provider}`;
 }
 
-export function getMemoryApiKeySecretId(provider: AnalysisProviderId): string {
+export function getMemoryApiKeySecretId(provider: MemoryProviderId): string {
 	return `${MEMORY_SECRET_PREFIX}-${provider}`;
 }
 

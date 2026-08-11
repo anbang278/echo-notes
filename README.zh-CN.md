@@ -107,7 +107,7 @@ AgentPlan 实时转写的官方 `bigmodel_async` Base URL 和模型保持只读�
 
 设置页还提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
 
-AI 纪要分析按顺序支持硅基流动、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
+AI 纪要分析按顺序支持硅基流动、**OpenCode Go**、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`；切换到 OpenCode Go 时默认使用 `deepseek-v4-flash`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。OpenCode Go 仅用于 AI 分析，固定使用官方 Base URL `https://opencode.ai/zen/go/v1`，模型选择器采用当前对接文档快照：Grok 4.5、GLM-5.2/5.1、GPT 5.6 Luna、Kimi K3/K2.7 Code/K2.6、MiMo-V2.5/Pro、MiniMax M3/M2.7、Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus、DeepSeek V4 Pro/Flash、Hy3。插件会按模型自动路由到文档规定的 Chat Completions、Responses 或 Messages 接口。可用模型、订阅额度和数据留存政策可能变化，发送内容前请查阅 [OpenCode Go 对接文档](https://opencode.ai/docs/zh-cn/go)。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
 
 AgentPlan 套餐官方限定文本生成与向量化能力用于 AI 工具场景。使用 Echo Notes 接入前，请确认你的使用方式符合当前套餐规则；在非 AI 工具或不符合规则的场景中使用专属 Base URL 和 API Key，可能触发订阅停用或账号限制。
 
@@ -120,17 +120,18 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 - MOSI 转写地址：`https://api.mosi.cn/v1/audio/transcriptions`
 - 火山引擎 AgentPlan 实时 ASR 地址：`wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
 - 火山引擎 AgentPlan 文本分析地址：`https://ark.cn-beijing.volces.com/api/plan/v3`
+- OpenCode Go 文本分析地址：`https://opencode.ai/zen/go/v1`（具体 API 路径由所选模型决定）
 - Ollama 转写默认地址：`http://localhost:11434/v1`
 - LM Studio 转写默认地址：`http://localhost:1234/v1`
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
-- 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL。
+- 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL；OpenCode Go 与 AgentPlan 的专属地址保持只读。
 - Echo Memory 使用独立选择的记忆 Provider Base URL，并调用其 OpenAI-compatible `/chat/completions` 端点。
 
 离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求；开启说话人分离时请求说话人和时间范围，关闭时只请求普通正文。Vault 中不会生成临时分段文件。
 
 实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
 
-实时 AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。MOSI 的说话人编号只在每个独立分段内有效。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 分析时使用其专属 Chat API 和套餐额度。Echo Memory 会把转写正文和纳入本批次的成功纪要发送给记忆 Provider。转写、分析和记忆 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿、候选包或日志。转写稿、录音、AI 纪要和记忆文件保存在你的 Obsidian Vault。
+实时 AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。MOSI 的说话人编号只在每个独立分段内有效。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 时使用其专属 Chat API，选择 OpenCode Go 时则发送到所选模型的官方接口。Echo Memory 会把转写正文和纳入本批次的成功纪要发送给记忆 Provider。转写、分析和记忆 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿、候选包或日志。转写稿、录音、AI 纪要和记忆文件保存在你的 Obsidian Vault。
 
 如果在设置页开启“手动转写前确认上传”，Echo Notes 会在手动转写上传前显示确认弹窗，列出 Provider、Base URL、模型、文件大小和 HTTP 风险提示。开启该模式后，自动化转写会跳过需要确认的上传，避免后台未经确认发送音频。
 

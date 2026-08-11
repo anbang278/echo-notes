@@ -33,6 +33,8 @@ import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	AGENTPLAN_ANALYSIS_MODELS,
+	MEMORY_PROVIDER_LABELS,
+	OPENCODE_GO_ANALYSIS_MODELS,
 	ANALYSIS_TEMPLATE_CATEGORIES,
 	COPY_LANGUAGE_LABELS,
 	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
@@ -49,6 +51,7 @@ import {
 	getOfflineTranscriptionProviderDefaults,
 	getMosiTranscriptionModel,
 	isAnalysisProviderId,
+	isMemoryProviderId,
 	isOfflineTranscriptionProviderId,
 	normalizeTranscriptionLanguageForProvider,
 	parseHotkeyInput,
@@ -62,6 +65,7 @@ import {
 	type EchoNotesHotkeySetting,
 	type InsertStyle,
 	type MemoryMode,
+	type MemoryProviderId,
 	type OfflineTranscriptionProviderId,
 	type OutputStrategy,
 	type TranscriptionConfig
@@ -784,7 +788,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 				for (const [value, label] of Object.entries(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
 					dropdown.addOption(value, getProviderOptionLabel(value, label));
-				}
+					}
 				return dropdown
 					.setValue(config.provider)
 					.onChange(async (value) => {
@@ -1234,10 +1238,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.renderBasicHeading(containerEl, "模型配置");
 		const analysisProviderSetting = new Setting(containerEl)
 			.setName("分析服务商")
-			.setDesc("用于对转写稿生成纪要的服务商。火山引擎 AgentPlan 使用套餐专属文本模型和接口，默认仍为阿里百炼。")
+			.setDesc("用于对转写稿生成纪要的服务商。部分服务商使用各自的专属模型和接口，默认仍为阿里百炼。")
 			.addDropdown((dropdown) =>
 				Object.entries(ANALYSIS_PROVIDER_LABELS)
-					.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
+					.reduce((control, [value, label]) => control.addOption(value, label), dropdown)
 					.setValue(this.plugin.settings.analysisProvider)
 					.onChange(async (value) => {
 						if (!isAnalysisProviderId(value)) {
@@ -1252,15 +1256,25 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		analysisProviderSetting.settingEl.dataset.echoNotesGuideTarget = "analysis-provider";
 
 		const isAgentPlanAnalysis = this.plugin.settings.analysisProvider === "volcengine-agentplan";
+		const isOpenCodeGoAnalysis = this.plugin.settings.analysisProvider === "opencode-go";
+		const usesFixedAnalysisBaseUrl = isAgentPlanAnalysis || isOpenCodeGoAnalysis;
 		const analysisApiKeyDescription = createFragment();
 		analysisApiKeyDescription.appendText(
 			isAgentPlanAnalysis
 				? "必须使用 AgentPlan 控制台创建的专属 API Key，并与其他用途的密钥隔离保存。"
+				: isOpenCodeGoAnalysis
+					? "请先订阅 OpenCode Go，再使用该工作空间生成的 API Key；密钥仅用于 AI 分析并隔离保存。"
 				: "用于调用当前分析服务商，按服务商隔离保存到 Obsidian SecretStorage。"
 		);
 		this.appendProviderSignupLink(analysisApiKeyDescription, this.plugin.settings.analysisProvider);
 		const analysisApiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlanAnalysis ? "AgentPlan 分析专属 API Key" : "分析 API Key")
+			.setName(
+				isAgentPlanAnalysis
+					? "AgentPlan 分析专属 API Key"
+					: isOpenCodeGoAnalysis
+						? "OpenCode Go 分析 API Key"
+						: "分析 API Key"
+			)
 			.setDesc(analysisApiKeyDescription);
 		analysisApiKeySetting.settingEl.dataset.echoNotesGuideTarget = "analysis-api-key";
 		const analysisApiKeyStatusEl = this.createSecretSaveStatus(
@@ -1284,14 +1298,17 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				isAgentPlanAnalysis
 					? "选择 AgentPlan 套餐当前支持的文本生成模型；Kimi K3 仅 Medium 及以上套餐可用。"
+					: isOpenCodeGoAnalysis
+						? "选择 OpenCode Go 当前文档列出的模型；不同模型会自动使用对应的 API 协议。"
 					: "用于生成纪要分析的文本模型。"
 			);
-		if (isAgentPlanAnalysis) {
+		if (isAgentPlanAnalysis || isOpenCodeGoAnalysis) {
 			analysisModelSetting.addDropdown((dropdown) => {
-				for (const option of AGENTPLAN_ANALYSIS_MODELS) {
+				const options = isAgentPlanAnalysis ? AGENTPLAN_ANALYSIS_MODELS : OPENCODE_GO_ANALYSIS_MODELS;
+				for (const option of options) {
 					dropdown.addOption(option.id, option.label);
 				}
-				if (!AGENTPLAN_ANALYSIS_MODELS.some((option) => option.id === this.plugin.settings.analysisModel)) {
+				if (isAgentPlanAnalysis && !AGENTPLAN_ANALYSIS_MODELS.some((option) => option.id === this.plugin.settings.analysisModel)) {
 					dropdown.addOption(
 						this.plugin.settings.analysisModel,
 						`当前自定义模型：${this.plugin.settings.analysisModel}`
@@ -1324,14 +1341,16 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setDesc(
 				isAgentPlanAnalysis
 					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
+					: isOpenCodeGoAnalysis
+						? "OpenCode Go 官方基础地址；模型会自动路由至 Chat Completions、Responses 或 Messages 接口。"
 					: "OpenAI-compatible chat completions 基础地址。请确认所选服务商支持 {Base URL}/chat/completions。"
 			);
 		baseUrlSetting.addText((text) => {
 			text
 				.setPlaceholder(this.getAnalysisProviderDefaults().analysisBaseUrl)
 				.setValue(this.plugin.settings.analysisBaseUrl)
-				.setDisabled(isAgentPlanAnalysis);
-			if (!isAgentPlanAnalysis) {
+				.setDisabled(usesFixedAnalysisBaseUrl);
+			if (!usesFixedAnalysisBaseUrl) {
 				this.bindDeferredTextSave(baseUrlSetting, "analysis-base-url", text.inputEl, async (value) => {
 					this.plugin.settings.analysisBaseUrl = value;
 					await this.plugin.saveSettings();
@@ -1483,11 +1502,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const providerSetting = new Setting(containerEl)
 			.setName("记忆服务商")
 			.setDesc("独立用于结构化记忆提取，不复用 AI 分析阶段的服务商、API Key、Base URL 或模型。")
-			.addDropdown((dropdown) => Object.entries(ANALYSIS_PROVIDER_LABELS)
+			.addDropdown((dropdown) => Object.entries(MEMORY_PROVIDER_LABELS)
 				.reduce((control, [value, label]) => control.addOption(value, getProviderOptionLabel(value, label)), dropdown)
 				.setValue(this.plugin.settings.memoryProvider)
 				.onChange(async (value) => {
-					if (!isAnalysisProviderId(value)) {
+					if (!isMemoryProviderId(value)) {
 						return;
 					}
 					this.plugin.settings.memoryProvider = value;
@@ -2232,7 +2251,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.plugin.settings.analysisModel = defaults.analysisModel;
 	}
 
-	private applyMemoryProviderDefaults(provider: AnalysisProviderId): void {
+	private applyMemoryProviderDefaults(provider: MemoryProviderId): void {
 		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
 		this.plugin.settings.memoryBaseUrl = defaults.analysisBaseUrl;
 		this.plugin.settings.memoryModel = defaults.analysisModel;
@@ -2273,7 +2292,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getMemoryProviderDefaults(): Pick<EchoNotesPlugin["settings"], "analysisBaseUrl" | "analysisModel"> {
-		const provider = isAnalysisProviderId(this.plugin.settings.memoryProvider)
+		const provider = isMemoryProviderId(this.plugin.settings.memoryProvider)
 			? this.plugin.settings.memoryProvider
 			: "aliyun-bailian";
 		return ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
@@ -2311,7 +2330,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private appendProviderSignupLink(desc: DocumentFragment, provider: string): void {
-		const linkConfig = provider === "volcengine-agentplan"
+		const linkConfig = provider === "opencode-go"
+			? {
+				text: "获取 OpenCode Go API Key",
+				href: "https://opencode.ai/go?ref=YD4XM7Z5CY"
+			}
+			: provider === "volcengine-agentplan"
 			? {
 				text: "获取 AgentPlan API Key",
 				href: "https://console.volcengine.com/ark/region:ark+cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan"

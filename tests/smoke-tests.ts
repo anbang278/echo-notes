@@ -269,6 +269,11 @@ import {
 	createSynthesisAnalysisInput
 } from "../src/analysis/analysis-stage-prompts";
 import {
+	buildOpenCodeGoAnalysisRequest,
+	getOpenCodeGoAnalysisModelOption,
+	parseOpenCodeGoAnalysisResponse
+} from "../src/analysis/opencode-go-protocol";
+import {
 	buildTranscriptionUploadPreview,
 	formatFileSize,
 	isInsecureRemoteBaseUrl
@@ -296,15 +301,20 @@ import {
 	MOSI_TRANSCRIPTION_BASE_URL,
 	MOSI_TRANSCRIPTION_MODEL,
 	MOSI_TRANSCRIPTION_VERSION,
+	MEMORY_PROVIDER_LABELS,
 	normalizeAnalysisTemplates,
 	normalizeEchoNotesSettings,
 	OFFLINE_TRANSCRIPTION_PROVIDER_LABELS,
 	parseHotkeyInput,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
+	OPENCODE_GO_ANALYSIS_BASE_URL,
+	OPENCODE_GO_ANALYSIS_MODELS,
+	OPENCODE_GO_DEFAULT_ANALYSIS_MODEL,
 	SILICONFLOW_TRANSCRIPTION_MODELS,
 	TRANSCRIPTION_LANGUAGE_LABELS,
 	isAnalysisProviderId,
+	isMemoryProviderId,
 	isOfflineTranscriptionProviderId,
 	isProviderId,
 	isRemovedAnalysisProviderId,
@@ -870,11 +880,11 @@ const packageLockVersion = JSON.parse(readFileSync("package-lock.json", "utf8"))
 	packages: Record<string, { version?: string }>;
 };
 const versionsMap = JSON.parse(readFileSync("versions.json", "utf8")) as Record<string, string>;
-assert.equal(manifestVersion.version, "0.4.13");
-assert.equal(packageVersion.version, "0.4.13");
-assert.equal(packageLockVersion.version, "0.4.13");
-assert.equal(packageLockVersion.packages[""]?.version, "0.4.13");
-assert.equal(versionsMap["0.4.13"], "1.11.4");
+assert.equal(manifestVersion.version, "0.4.14");
+assert.equal(packageVersion.version, "0.4.14");
+assert.equal(packageLockVersion.version, "0.4.14");
+assert.equal(packageLockVersion.packages[""]?.version, "0.4.14");
+assert.equal(versionsMap["0.4.14"], "1.11.4");
 const mainSource = readFileSync("src/main.ts", "utf8");
 assert.match(mainSource, /renderStatusIndicator\(this\.realtimeStatusEl/, "实时录音状态必须使用共享状态组件");
 assert.doesNotMatch(
@@ -2860,6 +2870,16 @@ assert.deepEqual(Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS), [
 ]);
 assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), [
 	"siliconflow",
+	"opencode-go",
+	"aliyun-bailian",
+	"deepseek",
+	"volcengine-agentplan",
+	"ollama",
+	"lm-studio",
+	"custom-openai-compatible"
+]);
+assert.deepEqual(Object.keys(MEMORY_PROVIDER_LABELS), [
+	"siliconflow",
 	"aliyun-bailian",
 	"deepseek",
 	"volcengine-agentplan",
@@ -2873,6 +2893,8 @@ assert.equal(isOfflineTranscriptionProviderId("volcengine-agentplan"), false);
 assert.equal(isOfflineTranscriptionProviderId("aliyun-bailian"), true);
 assert.equal(isOfflineTranscriptionProviderId("openai"), false);
 assert.equal(isAnalysisProviderId("volcengine-agentplan"), true);
+assert.equal(isAnalysisProviderId("opencode-go"), true);
+assert.equal(isMemoryProviderId("opencode-go"), false);
 assert.equal(isAnalysisProviderId("openai"), false);
 assert.equal(isRemovedAnalysisProviderId("openai"), true);
 assert.equal(isRemovedAnalysisProviderId("unknown-provider"), false);
@@ -2882,6 +2904,79 @@ assert.equal(ANALYSIS_PROVIDER_DEFAULTS["volcengine-agentplan"].analysisModel, "
 assert.ok(AGENTPLAN_ANALYSIS_MODELS.some((option) => option.id === "doubao-seed-2.0-pro"));
 assert.ok(AGENTPLAN_ANALYSIS_MODELS.some((option) => option.id === "kimi-k3" && option.minimumPlan === "Medium"));
 assert.equal(new Set(AGENTPLAN_ANALYSIS_MODELS.map((option) => option.id)).size, AGENTPLAN_ANALYSIS_MODELS.length);
+assert.equal(ANALYSIS_PROVIDER_LABELS["opencode-go"], "【推荐】OpenCode Go");
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS["opencode-go"].analysisBaseUrl, OPENCODE_GO_ANALYSIS_BASE_URL);
+assert.equal(ANALYSIS_PROVIDER_DEFAULTS["opencode-go"].analysisModel, OPENCODE_GO_DEFAULT_ANALYSIS_MODEL);
+assert.deepEqual(OPENCODE_GO_ANALYSIS_MODELS.map((option) => option.id), [
+	"grok-4.5",
+	"glm-5.2",
+	"glm-5.1",
+	"gpt-5.6-luna",
+	"kimi-k3",
+	"kimi-k2.7-code",
+	"kimi-k2.6",
+	"mimo-v2.5",
+	"mimo-v2.5-pro",
+	"minimax-m3",
+	"minimax-m2.7",
+	"qwen3.8-max",
+	"qwen3.7-max",
+	"qwen3.7-plus",
+	"qwen3.6-plus",
+	"deepseek-v4-pro",
+	"deepseek-v4-flash",
+	"hy3"
+]);
+assert.equal(new Set(OPENCODE_GO_ANALYSIS_MODELS.map((option) => option.id)).size, 18);
+assert.equal(getOpenCodeGoAnalysisModelOption("gpt-5.6-luna")?.protocol, "responses");
+assert.equal(getOpenCodeGoAnalysisModelOption("minimax-m3")?.protocol, "messages");
+assert.equal(getOpenCodeGoAnalysisModelOption("deepseek-v4-flash")?.protocol, "chat-completions");
+const openCodeGoMessages = { system: "系统提示", user: "用户提示" };
+const openCodeGoChatRequest = buildOpenCodeGoAnalysisRequest("deepseek-v4-flash", "oc-go-key", openCodeGoMessages);
+assert.equal(openCodeGoChatRequest.path, "chat-completions");
+assert.equal(openCodeGoChatRequest.headers.Authorization, "Bearer oc-go-key");
+assert.equal("temperature" in openCodeGoChatRequest.body, false);
+assert.deepEqual(openCodeGoChatRequest.body.messages, [
+	{ role: "system", content: "系统提示" },
+	{ role: "user", content: "用户提示" }
+]);
+const openCodeGoResponsesRequest = buildOpenCodeGoAnalysisRequest("gpt-5.6-luna", "oc-go-key", openCodeGoMessages);
+assert.equal(openCodeGoResponsesRequest.path, "responses");
+assert.equal(openCodeGoResponsesRequest.headers.Authorization, "Bearer oc-go-key");
+assert.equal(openCodeGoResponsesRequest.body.instructions, "系统提示");
+assert.equal(openCodeGoResponsesRequest.body.input, "用户提示");
+const openCodeGoMessagesRequest = buildOpenCodeGoAnalysisRequest("minimax-m3", "oc-go-key", openCodeGoMessages);
+assert.equal(openCodeGoMessagesRequest.path, "messages");
+assert.equal(openCodeGoMessagesRequest.headers["x-api-key"], "oc-go-key");
+assert.equal(openCodeGoMessagesRequest.headers["anthropic-version"], "2023-06-01");
+assert.equal(openCodeGoMessagesRequest.body.max_tokens, 8192);
+assert.deepEqual(openCodeGoMessagesRequest.body.messages, [{ role: "user", content: "用户提示" }]);
+assert.equal(
+	parseOpenCodeGoAnalysisResponse("deepseek-v4-flash", {
+		choices: [{ message: { content: "Chat 结果" } }]
+	}),
+	"Chat 结果"
+);
+assert.equal(
+	parseOpenCodeGoAnalysisResponse("gpt-5.6-luna", {
+		output: [{ content: [{ type: "output_text", text: "Responses 结果" }] }]
+	}),
+	"Responses 结果"
+);
+assert.equal(
+	parseOpenCodeGoAnalysisResponse("minimax-m3", {
+		content: [
+			{ type: "thinking", thinking: "忽略" },
+			{ type: "text", text: "Messages 结果" }
+		]
+	}),
+	"Messages 结果"
+);
+assert.equal(parseOpenCodeGoAnalysisResponse("minimax-m3", { content: [] }), undefined);
+assert.throws(
+	() => buildOpenCodeGoAnalysisRequest("minimax-m2.5", "oc-go-key", openCodeGoMessages),
+	/OpenCode Go 不支持模型/
+);
 assert.equal(DEFAULT_SETTINGS.transcriptionMode, "offline");
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.provider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
@@ -3411,6 +3506,7 @@ assert.equal(
 	getAnalysisApiKeySecretId("volcengine-agentplan"),
 	"echo-notes-analysis-api-key-volcengine-agentplan"
 );
+assert.equal(getAnalysisApiKeySecretId("opencode-go"), "echo-notes-analysis-api-key-opencode-go");
 assert.equal(
 	getMemoryApiKeySecretId("aliyun-bailian"),
 	"echo-notes-memory-api-key-aliyun-bailian"
@@ -3547,6 +3643,30 @@ const validAgentPlanAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
 assert.equal(validAgentPlanAnalysisDiagnostics.canAttemptAnalysis, true);
 assert.equal(validAgentPlanAnalysisDiagnostics.providerLabel, "火山引擎 AgentPlan");
 assert.ok(validAgentPlanAnalysisDiagnostics.items.some((item) => item.title === "AgentPlan 专属凭证"));
+const validOpenCodeGoAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		analysisProvider: "opencode-go",
+		analysisBaseUrl: OPENCODE_GO_ANALYSIS_BASE_URL,
+		analysisModel: OPENCODE_GO_DEFAULT_ANALYSIS_MODEL
+	},
+	"oc-go-valid"
+);
+assert.equal(validOpenCodeGoAnalysisDiagnostics.canAttemptAnalysis, true);
+assert.equal(validOpenCodeGoAnalysisDiagnostics.providerLabel, "【推荐】OpenCode Go");
+assert.ok(validOpenCodeGoAnalysisDiagnostics.items.some((item) => item.title === "OpenCode Go 订阅凭证"));
+const invalidOpenCodeGoAnalysisDiagnostics = diagnoseAnalysisProviderSettings(
+	{
+		...DEFAULT_SETTINGS,
+		analysisProvider: "opencode-go",
+		analysisBaseUrl: "https://opencode.ai/v1",
+		analysisModel: "minimax-m2.5"
+	},
+	"oc-go-valid"
+);
+assert.equal(invalidOpenCodeGoAnalysisDiagnostics.canAttemptAnalysis, false);
+assert.ok(invalidOpenCodeGoAnalysisDiagnostics.items.some((item) => item.title === "OpenCode Go 分析地址不正确"));
+assert.ok(invalidOpenCodeGoAnalysisDiagnostics.items.some((item) => item.title === "模型不在当前 OpenCode Go 清单中"));
 const invalidAgentPlanAnalysisUrlDiagnostics = diagnoseAnalysisProviderSettings(
 	{
 		...DEFAULT_SETTINGS,
@@ -4109,6 +4229,18 @@ const normalizedAgentPlanAnalysisSettings = normalizeEchoNotesSettings({
 assert.equal(normalizedAgentPlanAnalysisSettings.analysisProvider, "volcengine-agentplan");
 assert.equal(normalizedAgentPlanAnalysisSettings.analysisBaseUrl, AGENTPLAN_ANALYSIS_BASE_URL);
 assert.equal(normalizedAgentPlanAnalysisSettings.analysisModel, "doubao-seed-2.0-pro");
+const normalizedOpenCodeGoAnalysisSettings = normalizeEchoNotesSettings({
+	analysisProvider: "opencode-go",
+	analysisBaseUrl: "https://wrong.example.com/v1",
+	analysisModel: "gpt-5.6-luna"
+});
+assert.equal(normalizedOpenCodeGoAnalysisSettings.analysisProvider, "opencode-go");
+assert.equal(normalizedOpenCodeGoAnalysisSettings.analysisBaseUrl, OPENCODE_GO_ANALYSIS_BASE_URL);
+assert.equal(normalizedOpenCodeGoAnalysisSettings.analysisModel, "gpt-5.6-luna");
+assert.equal(
+	normalizeEchoNotesSettings({ analysisProvider: "opencode-go", analysisModel: "minimax-m2.5" }).analysisModel,
+	OPENCODE_GO_DEFAULT_ANALYSIS_MODEL
+);
 assert.equal(normalizedAgentPlanAnalysisSettings.offlineTranscription.provider, "aliyun-bailian");
 assert.equal(normalizedSettings.redactTranscriptBeforeAnalysis, false);
 assert.equal(normalizedSettings.defaultAnalysisTemplateId, "work-minutes");
@@ -4792,6 +4924,10 @@ const agentPlanMemorySettings = normalizeEchoNotesSettings({
 });
 assert.equal(agentPlanMemorySettings.memoryBaseUrl, AGENTPLAN_ANALYSIS_BASE_URL);
 assert.equal(agentPlanMemorySettings.memoryModel, "doubao-seed-2.0-pro");
+assert.equal(
+	normalizeEchoNotesSettings({ memoryProvider: "opencode-go" }).memoryProvider,
+	DEFAULT_SETTINGS.memoryProvider
+);
 const customOpenAIAnalysisSettings = normalizeEchoNotesSettings({
 	analysisProvider: "openai",
 	analysisBaseUrl: "https://proxy.example.com/v1",

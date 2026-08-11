@@ -2357,6 +2357,7 @@ async function verifyTabs(page) {
 		JSON.stringify(await getSettingOptionValues(page, "分析服务商")) ===
 			JSON.stringify([
 				"siliconflow",
+				"opencode-go",
 				"aliyun-bailian",
 				"deepseek",
 				"volcengine-agentplan",
@@ -2365,6 +2366,20 @@ async function verifyTabs(page) {
 				"custom-openai-compatible"
 			]),
 		"AI 分析服务商的成员或顺序不正确"
+	);
+	assert(
+		JSON.stringify(await (await getActiveSetting(page, "分析服务商")).locator("option").allTextContents()) ===
+			JSON.stringify([
+				"【免费】硅基流动（SiliconFlow）",
+				"【推荐】OpenCode Go",
+				"阿里百炼（Alibaba Bailian）",
+				"DeepSeek",
+				"火山引擎 AgentPlan",
+				"Ollama",
+				"LM Studio",
+				"自定义兼容接口（Custom OpenAI-compatible）"
+			]),
+		"AI 分析服务商展示名称或顺序不正确"
 	);
 
 	await selectSettingOption(page, "分析服务商", "siliconflow");
@@ -2379,6 +2394,55 @@ async function verifyTabs(page) {
 	assert(await analysisAdvanced.getAttribute("open") === null, "分析高级配置应默认折叠");
 	assert(!(await (await getActiveSetting(page, "分析 Base URL")).isVisible()), "分析 Base URL 应在高级配置折叠时隐藏");
 	assert(!(await (await getActiveSetting(page, "分析配置自检")).isVisible()), "分析配置自检应在高级配置折叠时隐藏");
+
+	await selectSettingOption(page, "分析服务商", "opencode-go");
+	const openCodeGoAnalysisModel = await getActiveSetting(page, "分析模型");
+	assert(
+		await openCodeGoAnalysisModel.isVisible() && (await openCodeGoAnalysisModel.locator("select").count()) === 1,
+		"OpenCode Go 分析模型应在基础配置中使用下拉框展示"
+	);
+	assert(
+		await openCodeGoAnalysisModel.locator("select").inputValue() === "deepseek-v4-flash",
+		"OpenCode Go 默认分析模型不正确"
+	);
+	assert(
+		JSON.stringify(await getSettingOptionValues(page, "分析模型")) ===
+			JSON.stringify([
+				"grok-4.5",
+				"glm-5.2",
+				"glm-5.1",
+				"gpt-5.6-luna",
+				"kimi-k3",
+				"kimi-k2.7-code",
+				"kimi-k2.6",
+				"mimo-v2.5",
+				"mimo-v2.5-pro",
+				"minimax-m3",
+				"minimax-m2.7",
+				"qwen3.8-max",
+				"qwen3.7-max",
+				"qwen3.7-plus",
+				"qwen3.6-plus",
+				"deepseek-v4-pro",
+				"deepseek-v4-flash",
+				"hy3"
+			]),
+		"OpenCode Go 模型清单不符合官方文档快照"
+	);
+	analysisAdvanced = activePanel.locator(
+		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
+	).first();
+	await verifyApiKeyLink(page, "OpenCode Go 分析 API Key", "OpenCode Go 分析", {
+		label: "获取 OpenCode Go API Key",
+		href: "https://opencode.ai/go?ref=YD4XM7Z5CY"
+	});
+	await analysisAdvanced.locator("summary").click();
+	const openCodeGoBaseUrl = (await getActiveSetting(page, "分析 Base URL")).locator("input");
+	assert(
+		await openCodeGoBaseUrl.isDisabled() &&
+		await openCodeGoBaseUrl.inputValue() === "https://opencode.ai/zen/go/v1",
+		"OpenCode Go Base URL 应为只读官方地址"
+	);
 
 	await selectSettingOption(page, "分析服务商", "volcengine-agentplan");
 	const agentPlanAnalysisModel = await getActiveSetting(page, "分析模型");
@@ -3520,10 +3584,15 @@ async function verifyApiKeyFeedback(page, settingName, context) {
 	return { initial: metrics, saved: savedMetrics, cleared: clearedMetrics };
 }
 
-async function verifyApiKeyLink(page, settingName, context) {
+async function verifyApiKeyLink(page, settingName, context, expected = {
+	label: "获取硅基流动 API Key",
+	href: "https://cloud.siliconflow.cn/i/uTf2euFF"
+}) {
 	const settingItem = await getActiveSetting(page, settingName);
 	const link = settingItem.locator(".echo-notes-settings-api-key-link");
 	assert((await link.count()) === 1, `${context} 应显示一个 API key 获取入口`);
+	// 先建立键盘导航上下文，再聚焦链接；仅 programmatic focus 不一定触发 :focus-visible。
+	await page.keyboard.press("Tab");
 	await link.focus();
 	const metrics = await settingItem.evaluate((item) => {
 		const description = item.querySelector(".setting-item-description");
@@ -3552,8 +3621,8 @@ async function verifyApiKeyLink(page, settingName, context) {
 			hasExternalLinkIcon: Boolean(icon?.querySelector("svg"))
 		};
 	});
-	assert(metrics.label === "获取硅基流动 API Key", `${context} API Key 入口文案不正确`);
-	assert(metrics.href === "https://cloud.siliconflow.cn/i/uTf2euFF", `${context} API key 入口 URL 不正确`);
+	assert(metrics.label === expected.label, `${context} API Key 入口文案不正确`);
+	assert(metrics.href === expected.href, `${context} API key 入口 URL 不正确`);
 	assert(metrics.target === "_blank" && metrics.rel.split(/\s+/).includes("noopener") && metrics.rel.split(/\s+/).includes("noreferrer"), `${context} API key 外链安全属性不完整`);
 	assert(metrics.rowDisplay === "block" && metrics.rowOnlyContainsLink, `${context} API key 入口未使用独立操作行`);
 	assert(metrics.linkDisplay === "inline-flex" && metrics.whiteSpace === "nowrap", `${context} API key 入口样式不完整`);

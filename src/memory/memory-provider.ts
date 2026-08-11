@@ -1,10 +1,10 @@
 import { requestUrl } from "obsidian";
-import { ANALYSIS_PROVIDER_LABELS, type AnalysisProviderId, type CopyLanguage } from "../settings/settings";
+import { MEMORY_PROVIDER_LABELS, type CopyLanguage, type MemoryProviderId } from "../settings/settings";
 import { sanitizeSensitiveText } from "../security/redaction";
 import { createMemoryDeadline, waitForMemoryResponse } from "./memory-timeout";
 
 export interface MemoryProviderConfig {
-	provider: AnalysisProviderId;
+	provider: MemoryProviderId;
 	baseUrl: string;
 	model: string;
 	apiKey: string;
@@ -163,8 +163,8 @@ function buildMemoryUserPrompt(input: MemoryProviderInput): string {
 	].join("\n");
 }
 
-function getProviderLabel(provider: AnalysisProviderId): string {
-	return ANALYSIS_PROVIDER_LABELS[provider] ?? provider;
+function getProviderLabel(provider: MemoryProviderId): string {
+	return MEMORY_PROVIDER_LABELS[provider] ?? provider;
 }
 
 function readTraceId(headers: Record<string, string>): string | undefined {
