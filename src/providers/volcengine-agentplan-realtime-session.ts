@@ -15,6 +15,7 @@ import {
 	type AgentPlanResponsePayload
 } from "./volcengine-agentplan-protocol";
 import type { TranscriptionUtterance } from "./transcription-provider";
+import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
 
 const MAX_BUFFERED_SOCKET_BYTES = 2 * 1024 * 1024;
 const MAX_PENDING_PCM_PACKETS = 150;
@@ -34,6 +35,7 @@ export interface AgentPlanRealtimeSessionOptions {
 	handshakeTimeoutMs?: number;
 	finalResponseTimeoutMs?: number;
 	onProgress?: (progress: AgentPlanRealtimeProgress) => Promise<void> | void;
+	diagnostics?: DiagnosticSink;
 }
 
 export interface AgentPlanRealtimeSessionResult {
@@ -67,6 +69,7 @@ export class AgentPlanRealtimeSession {
 	private finalTimer: number | null = null;
 	private progressQueue = Promise.resolve();
 	private responseQueue = Promise.resolve();
+	private connectionStartedAt: number | null = null;
 
 	constructor(options: AgentPlanRealtimeSessionOptions) {
 		this.options = options;
@@ -82,6 +85,12 @@ export class AgentPlanRealtimeSession {
 			this.rejectReady = reject;
 		});
 		const requestId = crypto.randomUUID();
+		this.connectionStartedAt = Date.now();
+		this.options.diagnostics?.event("request", "agentplan-websocket-connecting", {
+			endpoint: this.options.url,
+			language: this.options.language,
+			protocol: "agentplan-websocket"
+		});
 		this.socket = this.options.createSocket(this.options.url, {
 			"X-Api-Key": this.options.apiKey,
 			"X-Api-Resource-Id": AGENTPLAN_RESOURCE_ID,
@@ -116,6 +125,9 @@ export class AgentPlanRealtimeSession {
 				return;
 			}
 			this.queuedBeforeReady.push(Uint8Array.from(packet));
+			this.options.diagnostics?.event("progress", "agentplan-packet-buffered", {
+				queuedPackets: this.queuedBeforeReady.length
+			});
 			return;
 		}
 		this.enqueuePacket(packet);
@@ -168,8 +180,12 @@ export class AgentPlanRealtimeSession {
 	private bindSocket(socket: AgentPlanSocket): void {
 		socket.onUpgrade((headers) => {
 			this.traceId = readHeader(headers, "x-tt-logid") ?? this.traceId;
+			this.options.diagnostics?.event("request", "agentplan-websocket-upgraded", { traceId: this.traceId });
 		});
 		socket.onOpen(() => {
+			this.options.diagnostics?.event("request", "agentplan-websocket-opened", {
+				connectionDurationMs: this.connectionStartedAt === null ? undefined : Date.now() - this.connectionStartedAt
+			});
 			void encodeAgentPlanFullRequest(buildAgentPlanFullRequestPayload(this.options.language, "pcm"))
 				.then((frame) => socket.send(frame))
 				.catch((error) => this.fail(toSessionError(error, this.traceId)));
@@ -214,6 +230,7 @@ export class AgentPlanRealtimeSession {
 			);
 		});
 		socket.onClose((code, reason) => {
+			this.options.diagnostics?.event("result", "agentplan-websocket-closed", { code, reason });
 			if (!this.settled) {
 				this.fail(
 					new AgentPlanClientError(
@@ -232,6 +249,10 @@ export class AgentPlanRealtimeSession {
 			this.handshakeTimer = null;
 		}
 		this.resolveReady?.();
+		this.options.diagnostics?.event("lifecycle", "agentplan-websocket-ready", {
+			traceId: this.traceId,
+			handshakeDurationMs: this.connectionStartedAt === null ? undefined : Date.now() - this.connectionStartedAt
+		});
 		this.resolveReady = null;
 		this.rejectReady = null;
 		this.flushQueuedPackets();
@@ -269,6 +290,7 @@ export class AgentPlanRealtimeSession {
 			throw this.failedError ?? new AgentPlanClientError("AgentPlan 实时 ASR 连接不可用。", undefined, this.traceId);
 		}
 		const bufferedAmount = this.socket.getBufferedAmount?.() ?? 0;
+		this.options.diagnostics?.event("progress", "agentplan-socket-buffered-amount", { bufferedAmount });
 		if (bufferedAmount > MAX_BUFFERED_SOCKET_BYTES) {
 			throw new AgentPlanClientError("AgentPlan 实时 ASR 网络发送积压超过安全上限。", undefined, this.traceId);
 		}
@@ -312,6 +334,7 @@ export class AgentPlanRealtimeSession {
 				new AgentPlanClientError("AgentPlan 实时 ASR 响应中缺少 result.text。", undefined, this.traceId)
 			);
 		} else {
+			this.options.diagnostics?.event("result", "agentplan-realtime-completed", { traceId: this.traceId, utteranceCount: finalResult.utterances?.length ?? 0 });
 			this.resolveFinish?.({
 				text,
 				utterances: finalResult.utterances ?? this.latestUtterances,
@@ -327,6 +350,11 @@ export class AgentPlanRealtimeSession {
 			return;
 		}
 		this.failedError = error;
+		this.options.diagnostics?.event("result", "agentplan-realtime-failed", {
+			error: error.message,
+			traceId: error.traceId,
+			serverCode: error.serverCode
+		});
 		error.traceId ??= this.traceId;
 		this.settled = true;
 		this.clearTimers();

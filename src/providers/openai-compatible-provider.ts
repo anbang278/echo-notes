@@ -82,6 +82,15 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 
 		let response;
 		try {
+			const requestStartedAt = Date.now();
+			input.diagnostics?.event("request", "openai-audio-request-started", {
+				provider: this.id,
+				protocol: "multipart/form-data",
+				endpoint: `${this.settings.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`,
+				model: this.settings.model,
+				language: input.language ?? "auto",
+				audioBytes: audioBuffer.byteLength
+			});
 			response = await requestUrl({
 				url: `${this.settings.baseUrl.replace(/\/+$/, "")}/audio/transcriptions`,
 				method: "POST",
@@ -92,11 +101,17 @@ export class OpenAICompatibleAudioProvider implements TranscriptionProvider {
 				},
 				body: buildMultipartFormDataBody(boundary, parts)
 			});
+			input.diagnostics?.event("request", "openai-audio-request-finished", {
+				status: response.status,
+				durationMs: Date.now() - requestStartedAt
+			});
 		} catch (error) {
+			input.diagnostics?.event("result", "openai-audio-request-failed", { error: error instanceof Error ? error.message : String(error) });
 			throw createNetworkTranscriptionError(this.name, error);
 		}
 
 		const traceId = readTraceId(response.headers);
+		input.diagnostics?.event("request", "openai-audio-trace-id", { traceId });
 		if (response.status < 200 || response.status >= 300) {
 			throw createHttpTranscriptionError(this.name, response.status, response.text, traceId);
 		}

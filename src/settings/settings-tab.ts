@@ -706,6 +706,31 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		new Setting(containerEl)
+			.setName("保留脱敏诊断记录")
+			.setDesc("默认开启，自动保留最近 20 次且最长 7 天的转写、AI 分析与 Echo Memory 诊断事件。不会自动上传，也不保存正文、音频或密钥。")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.isDiagnosticRetentionEnabled())
+					.onChange(async (value) => {
+						this.plugin.setDiagnosticRetentionEnabled(value);
+						await this.plugin.saveSettings();
+					})
+			)
+			.addButton((button) =>
+				button
+					.setButtonText("导出近期诊断包")
+					.onClick(() => this.plugin.openDiagnosticExport())
+			)
+			.addExtraButton((button) =>
+				button
+					.setIcon("trash-2")
+					.setTooltip("清空已保存的诊断记录")
+					.onClick(() => {
+						void this.plugin.clearDiagnosticRecords();
+					})
+			);
 	}
 
 	private renderTranscriptionSettings(containerEl: HTMLElement, renderId: number): void {

@@ -5,6 +5,11 @@ import {
 	type TaskCenterState
 } from "../task-center/task-center-store";
 import {
+	EMPTY_DIAGNOSTIC_STATE,
+	normalizeDiagnosticState
+} from "../diagnostics/diagnostic-store";
+import type { DiagnosticState } from "../diagnostics/diagnostic-types";
+import {
 	createGettingStartedState,
 	normalizeGettingStartedState,
 	type GettingStartedState
@@ -234,6 +239,7 @@ export interface EchoNotesSettings {
 	officialRecorderStopHotkey: EchoNotesHotkeySetting;
 	transcribeAllAudioHotkey: EchoNotesHotkeySetting;
 	taskCenterState: TaskCenterState;
+	diagnosticState: DiagnosticState;
 	gettingStartedState: GettingStartedState;
 	verboseLog: boolean;
 }
@@ -1017,6 +1023,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	officialRecorderStopHotkey: null,
 	transcribeAllAudioHotkey: null,
 	taskCenterState: EMPTY_TASK_CENTER_STATE,
+	diagnosticState: EMPTY_DIAGNOSTIC_STATE,
 	gettingStartedState: createGettingStartedState(),
 	verboseLog: false
 };
@@ -1350,6 +1357,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		DEFAULT_SETTINGS.transcribeAllAudioHotkey
 	);
 	settings.taskCenterState = normalizeTaskCenterState(raw.taskCenterState);
+	settings.diagnosticState = normalizeDiagnosticState(raw.diagnosticState);
 	settings.gettingStartedState = normalizeGettingStartedState(
 		raw.gettingStartedState,
 		isRecord(rawData) ? "dismissed" : "not-started"

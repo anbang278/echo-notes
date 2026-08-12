@@ -2,6 +2,7 @@ import { requestUrl } from "obsidian";
 import { MEMORY_PROVIDER_LABELS, type CopyLanguage, type MemoryProviderId } from "../settings/settings";
 import { sanitizeSensitiveText } from "../security/redaction";
 import { createMemoryDeadline, waitForMemoryResponse } from "./memory-timeout";
+import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
 
 export interface MemoryProviderConfig {
 	provider: MemoryProviderId;
@@ -18,6 +19,7 @@ export interface MemoryProviderInput {
 	chunkIndex: number;
 	totalChunks: number;
 	copyLanguage: CopyLanguage;
+	diagnostics?: DiagnosticSink;
 }
 
 export interface MemoryProviderResult {
@@ -57,6 +59,15 @@ export class OpenAICompatibleMemoryProvider {
 		};
 
 		try {
+			const requestStartedAt = Date.now();
+			input.diagnostics?.event("request", "memory-request-started", {
+				endpoint: `${this.config.baseUrl.replace(/\/+$/, "")}/chat/completions`,
+				provider: this.config.provider,
+				model: this.config.model,
+				chunkIndex: input.chunkIndex,
+				totalChunks: input.totalChunks,
+				inputCharacters: input.text.length
+			});
 			const headers: Record<string, string> = { "Content-Type": "application/json" };
 			if (this.config.apiKey.trim()) {
 				headers.Authorization = `Bearer ${this.config.apiKey.trim()}`;
@@ -73,6 +84,11 @@ export class OpenAICompatibleMemoryProvider {
 				signal
 			);
 			const traceId = readTraceId(response.headers);
+			input.diagnostics?.event("request", "memory-request-finished", {
+				status: response.status,
+				traceId,
+				durationMs: Date.now() - requestStartedAt
+			});
 			if (response.status < 200 || response.status >= 300) {
 				throw new Error(`HTTP ${response.status} ${sanitizeSensitiveText(response.text)}`);
 			}
@@ -89,6 +105,9 @@ export class OpenAICompatibleMemoryProvider {
 				traceId
 			};
 		} catch (error) {
+			input.diagnostics?.event("result", "memory-request-failed", {
+				error: error instanceof Error ? error.message : String(error)
+			});
 			throw new Error(
 				`${getProviderLabel(this.config.provider)} 记忆提取失败：${sanitizeSensitiveText(getErrorMessage(error))}`,
 				{ cause: error }

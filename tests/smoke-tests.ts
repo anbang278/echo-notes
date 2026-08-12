@@ -1,6 +1,21 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { unzipSync } from "fflate";
+import {
+	DIAGNOSTIC_RETENTION_DAYS,
+	MAX_DIAGNOSTIC_EVENTS_PER_SESSION,
+	MAX_DIAGNOSTIC_SESSIONS,
+	DiagnosticStore,
+	sanitizeDiagnosticData,
+	sanitizeDiagnosticText,
+	sanitizeDiagnosticUrl
+} from "../src/diagnostics/diagnostic-store";
+import { createDiagnosticArchive } from "../src/diagnostics/diagnostic-export";
+import {
+	getDiagnosticFolderRevealLabel,
+	revealDiagnosticExportInFolder
+} from "../src/diagnostics/diagnostic-folder-reveal";
 import {
 	ANALYSIS_LINKS_END,
 	ANALYSIS_LINKS_START,
@@ -873,18 +888,21 @@ assert.doesNotMatch(taskCenterViewSource, /renderMeta\(metaEl, "Provider"/, "任
 assert.doesNotMatch(gettingStartedGuideSource, /选择离线转写 Provider|选择 Provider|Provider 与 API Key|core plugins|Core plugin|Hotkeys 设置|打开 hotkeys/);
 assert.doesNotMatch(settingsTabSource, /\.setName\("Provider"\)|分析 provider|记忆 provider|当前 provider 能力|API key|Core plugin|Hotkeys/);
 
-const manifestVersion = JSON.parse(readFileSync("manifest.json", "utf8")) as { version: string };
+const manifestVersion = JSON.parse(readFileSync("manifest.json", "utf8")) as {
+	version: string;
+	minAppVersion: string;
+};
 const packageVersion = JSON.parse(readFileSync("package.json", "utf8")) as { version: string };
 const packageLockVersion = JSON.parse(readFileSync("package-lock.json", "utf8")) as {
 	version: string;
 	packages: Record<string, { version?: string }>;
 };
 const versionsMap = JSON.parse(readFileSync("versions.json", "utf8")) as Record<string, string>;
-assert.equal(manifestVersion.version, "0.4.14");
-assert.equal(packageVersion.version, "0.4.14");
-assert.equal(packageLockVersion.version, "0.4.14");
-assert.equal(packageLockVersion.packages[""]?.version, "0.4.14");
-assert.equal(versionsMap["0.4.14"], "1.11.4");
+assert.match(manifestVersion.version, /^\d+\.\d+\.\d+$/);
+assert.equal(packageVersion.version, manifestVersion.version);
+assert.equal(packageLockVersion.version, manifestVersion.version);
+assert.equal(packageLockVersion.packages[""]?.version, manifestVersion.version);
+assert.equal(versionsMap[manifestVersion.version], manifestVersion.minAppVersion);
 const mainSource = readFileSync("src/main.ts", "utf8");
 assert.match(mainSource, /renderStatusIndicator\(this\.realtimeStatusEl/, "实时录音状态必须使用共享状态组件");
 assert.doesNotMatch(
@@ -3394,6 +3412,7 @@ assert.match(normalizedAgentPlanQuotaError.message, /额度不足/);
 const fakeRealtimeAgentPlanSocket = createFakeAgentPlanSocket();
 let capturedRealtimeAgentPlanHeaders: Record<string, string> | undefined;
 const realtimeAgentPlanProgress: Array<{ text: string; provisionalText: string }> = [];
+const realtimeAgentPlanDiagnosticEvents: Array<{ category: string; name: string; data?: Record<string, unknown> }> = [];
 const realtimeAgentPlanSession = new AgentPlanRealtimeSession({
 	url: PROVIDER_DEFAULTS["volcengine-agentplan"].baseUrl,
 	apiKey: "ark-realtime-test-secret",
@@ -3407,6 +3426,9 @@ const realtimeAgentPlanSession = new AgentPlanRealtimeSession({
 			text: progress.text,
 			provisionalText: progress.provisionalText
 		});
+	},
+	diagnostics: {
+		event: (category, name, data) => realtimeAgentPlanDiagnosticEvents.push({ category, name, data })
 	},
 	handshakeTimeoutMs: 100,
 	finalResponseTimeoutMs: 100
@@ -3436,6 +3458,10 @@ const realtimeAudioFrames = fakeRealtimeAgentPlanSocket.sentFrames.filter((frame
 assert.equal(realtimeAudioFrames.length, 2);
 assert.equal(realtimeAudioFrames[0][1] & 0x2, 0);
 assert.equal(realtimeAudioFrames[1][1] & 0x2, 0x2);
+assert.ok(realtimeAgentPlanDiagnosticEvents.some((event) => event.name === "agentplan-websocket-connecting"));
+assert.ok(realtimeAgentPlanDiagnosticEvents.some((event) => event.name === "agentplan-websocket-ready"));
+assert.ok(realtimeAgentPlanDiagnosticEvents.some((event) => event.name === "agentplan-realtime-completed"));
+assert.ok(realtimeAgentPlanDiagnosticEvents.every((event) => !JSON.stringify(event).includes("ark-realtime-test-secret")));
 
 await assert.rejects(
 	new AgentPlanRealtimeSession({
@@ -5704,5 +5730,151 @@ function createFakeAgentPlanSocket(
 		terminate: () => undefined
 	};
 }
+
+const diagnosticStore = new DiagnosticStore();
+const diagnosticSession = diagnosticStore.startSession({ kind: "transcription" });
+diagnosticStore.record(diagnosticSession.id, "request", "same-progress", { attempt: 1 });
+diagnosticStore.record(diagnosticSession.id, "request", "same-progress", { attempt: 1 });
+diagnosticStore.record(diagnosticSession.id, "configuration", "connection", {
+	baseUrl: "https://user:password@192.168.1.8:9443/v1/?token=private#fragment",
+	authorization: "Bearer sk-DIAGNOSTIC-SENTINEL-123456789",
+	body: "data:audio/wav;base64,DIAGNOSTIC_AUDIO_SENTINEL",
+	content: "DIAGNOSTIC_TRANSCRIPT_BODY_SENTINEL",
+	prompt: "DIAGNOSTIC_PROMPT_SENTINEL",
+	fileName: "secret-recording.wav",
+	path: "/Users/tester/private/secret-recording.wav"
+});
+for (let index = 0; index <= MAX_DIAGNOSTIC_EVENTS_PER_SESSION; index += 1) {
+	diagnosticStore.record(diagnosticSession.id, "progress", `event-${index}`, { index });
+}
+diagnosticStore.complete(diagnosticSession.id, "failed", { error: "HTTP 401 Authorization: Bearer sk-DIAGNOSTIC-SENTINEL-123456789" });
+const persistedDiagnosticSession = diagnosticStore.getState().sessions[0];
+assert.equal(persistedDiagnosticSession.events[0].count, 2);
+assert.ok(persistedDiagnosticSession.events.length <= MAX_DIAGNOSTIC_EVENTS_PER_SESSION);
+assert.ok(persistedDiagnosticSession.events.some((event) => event.name === "event-limit-reached"));
+assert.equal(sanitizeDiagnosticUrl("https://user:password@192.168.1.8:9443/v1/?token=private#fragment"), "https://[lan]:9443/v1");
+assert.match(sanitizeDiagnosticText("failed at /Users/tester/private/secret-recording.wav"), /\[PATH\]/);
+assert.deepEqual(sanitizeDiagnosticData({ authorization: "Bearer private", apiKey: "secret", fileName: "audio.wav" }), {});
+const oversizedDiagnosticStore = new DiagnosticStore();
+const oversizedDiagnosticSession = oversizedDiagnosticStore.startSession({ kind: "analysis" });
+oversizedDiagnosticStore.record(oversizedDiagnosticSession.id, "progress", "large-event", {
+	large: Array.from({ length: 30 }, () => Object.fromEntries(
+		Array.from({ length: 40 }, (_, index) => [`field${index}`, "甲".repeat(1_200)])
+	))
+});
+const boundedOversizedSession = oversizedDiagnosticStore.getState().sessions[0];
+assert.ok(new TextEncoder().encode(JSON.stringify(boundedOversizedSession)).byteLength <= 64 * 1024);
+assert.equal(boundedOversizedSession.events[0].name, "session-size-limit-reached");
+
+const retrySession = diagnosticStore.startSession({
+	kind: "analysis",
+	chainId: diagnosticSession.chainId,
+	retryOfSessionId: diagnosticSession.id
+});
+diagnosticStore.complete(retrySession.id, "success");
+assert.equal(retrySession.chainId, diagnosticSession.chainId);
+assert.equal(retrySession.retryOfSessionId, diagnosticSession.id);
+const interruptedDiagnosticStore = new DiagnosticStore();
+const interruptedDiagnosticSession = interruptedDiagnosticStore.startSession({ kind: "memory" });
+interruptedDiagnosticStore.markInterruptedSessions();
+assert.equal(interruptedDiagnosticStore.getState().sessions[0].id, interruptedDiagnosticSession.id);
+assert.equal(interruptedDiagnosticStore.getState().sessions[0].status, "failed");
+
+const retainedSessions = new DiagnosticStore();
+for (let index = 0; index <= MAX_DIAGNOSTIC_SESSIONS; index += 1) {
+	const session = retainedSessions.startSession({ kind: "memory" });
+	retainedSessions.complete(session.id, "success", { index });
+}
+assert.equal(retainedSessions.getState().sessions.length, MAX_DIAGNOSTIC_SESSIONS);
+const nowForDiagnosticRetention = Date.now();
+retainedSessions.restore({
+	schemaVersion: 1,
+	enabled: true,
+	sessions: [{
+		id: "session-old",
+		chainId: "chain-old",
+		kind: "transcription",
+		status: "success",
+		startedAt: nowForDiagnosticRetention - (DIAGNOSTIC_RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000,
+		updatedAt: nowForDiagnosticRetention - (DIAGNOSTIC_RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000,
+		completedAt: nowForDiagnosticRetention - (DIAGNOSTIC_RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000,
+		events: []
+	}]
+});
+assert.equal(retainedSessions.getState().sessions.length, 0);
+
+const defaultDiagnosticArchive = createDiagnosticArchive({
+	pluginVersion: manifestVersion.version,
+	obsidianVersion: "test",
+	platform: "desktop",
+	applicationLanguage: "kk-KZ",
+	sessions: diagnosticStore.getState().sessions,
+	tasks: [{
+		id: "task-safe-id",
+		kind: "transcription",
+		status: "failed",
+		provider: "aliyun-bailian",
+		model: "qwen3-asr-flash",
+		error: "Authorization: Bearer sk-DIAGNOSTIC-SENTINEL-123456789 at /Users/tester/private/secret-recording.wav"
+	}]
+});
+const defaultDiagnosticFiles = unzipSync(defaultDiagnosticArchive.bytes);
+assert.deepEqual(Object.keys(defaultDiagnosticFiles).sort(), ["README.md", "events.jsonl", "manifest.json"]);
+const defaultDiagnosticText = Object.values(defaultDiagnosticFiles)
+	.map((bytes) => new TextDecoder().decode(bytes))
+	.join("\n");
+assert.doesNotMatch(
+	defaultDiagnosticText,
+	/DIAGNOSTIC-SENTINEL|DIAGNOSTIC_AUDIO_SENTINEL|DIAGNOSTIC_TRANSCRIPT_BODY_SENTINEL|DIAGNOSTIC_PROMPT_SENTINEL|secret-recording\.wav|\/Users\/tester/
+);
+assert.match(defaultDiagnosticText, /\[lan\]/);
+assert.doesNotMatch(defaultDiagnosticText, /optional\/audio/i);
+assert.doesNotThrow(() => JSON.parse(new TextDecoder().decode(defaultDiagnosticFiles["manifest.json"])));
+for (const line of new TextDecoder().decode(defaultDiagnosticFiles["events.jsonl"]).trim().split("\n")) {
+	if (line) {
+		assert.doesNotThrow(() => JSON.parse(line));
+	}
+}
+
+const optionalDiagnosticArchive = createDiagnosticArchive({
+	pluginVersion: manifestVersion.version,
+	platform: "desktop",
+	applicationLanguage: "zh-CN",
+	sessions: [],
+	tasks: [],
+	content: {
+		transcript: "仅因明确勾选而包含的转写正文",
+		analyses: "仅因明确勾选而包含的 AI 分析结果",
+		memoryCandidate: "{\"assertions\":[]}"
+	}
+});
+const optionalDiagnosticFiles = unzipSync(optionalDiagnosticArchive.bytes);
+assert.ok(optionalDiagnosticFiles["optional/transcript.md"]);
+assert.ok(optionalDiagnosticFiles["optional/analysis.md"]);
+assert.ok(optionalDiagnosticFiles["optional/memory-candidate.json"]);
+assert.ok(!Object.keys(optionalDiagnosticFiles).some((name) => /audio/i.test(name)));
+
+assert.equal(getDiagnosticFolderRevealLabel("darwin"), "在访达中打开");
+assert.equal(getDiagnosticFolderRevealLabel("win32"), "在文件资源管理器中打开");
+assert.equal(getDiagnosticFolderRevealLabel("linux"), "在文件管理器中打开");
+const revealedDiagnosticPaths: string[] = [];
+revealDiagnosticExportInFolder({
+	adapter: {
+		getFullPath: (vaultPath) => `/isolated-vault/${vaultPath}`
+	},
+	shell: {
+		showItemInFolder: (fullPath) => revealedDiagnosticPaths.push(fullPath)
+	},
+	vaultPath: "Echo Notes/诊断包/diagnostic.zip"
+});
+assert.deepEqual(revealedDiagnosticPaths, ["/isolated-vault/Echo Notes/诊断包/diagnostic.zip"]);
+assert.throws(
+	() => revealDiagnosticExportInFolder({
+		adapter: { getFullPath: () => "" },
+		shell: { showItemInFolder: () => undefined },
+		vaultPath: "Echo Notes/诊断包/diagnostic.zip"
+	}),
+	/无法获取诊断包所在的本地文件夹/
+);
 
 console.log("Smoke tests passed.");

@@ -319,6 +319,9 @@ export class EchoNotesTaskCenterView extends ItemView {
 				new Notice("任务详情复制失败。");
 			}
 		});
+		this.createIconButton(actionsEl, "package", "导出诊断包", () => {
+			this.plugin.openDiagnosticExport(task);
+		});
 		if (task.kind === "memory" && task.status === "success" && task.outputPath) {
 			this.createTextAction(actionsEl, "clipboard-check", "立即审核", () => {
 				void this.plugin.reviewMemoryCandidatePath(task.outputPath!);

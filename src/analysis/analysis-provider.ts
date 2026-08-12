@@ -1,10 +1,12 @@
 import type { AnalysisTemplateConfig, CopyLanguage } from "../settings/settings";
+import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
 
 export interface AnalysisInput {
 	template: AnalysisTemplateConfig;
 	transcriptTitle: string;
 	transcriptText: string;
 	copyLanguage: CopyLanguage;
+	diagnostics?: DiagnosticSink;
 }
 
 export interface AnalysisResult {
