@@ -44,6 +44,8 @@ export interface EchoNotesTask {
 	totalSegments?: number;
 	error?: string;
 	traceId?: string;
+	diagnosticSessionId?: string;
+	diagnosticChainId?: string;
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;
@@ -127,6 +129,10 @@ export class TaskCenterStore {
 
 	getTasks(): EchoNotesTask[] {
 		return Array.from(this.tasks.values()).sort((left, right) => right.updatedAt - left.updatedAt);
+	}
+
+	getTask(id: string): EchoNotesTask | undefined {
+		return this.tasks.get(id);
 	}
 
 	restoreTasks(tasks: readonly EchoNotesTask[]): void {
@@ -315,6 +321,8 @@ function parsePersistedTask(value: unknown): PersistedEchoNotesTask | null {
 	assignOptionalString(task, "sourcePath", value.sourcePath);
 	assignOptionalString(task, "outputPath", value.outputPath);
 	assignOptionalString(task, "traceId", value.traceId);
+	assignOptionalString(task, "diagnosticSessionId", value.diagnosticSessionId);
+	assignOptionalString(task, "diagnosticChainId", value.diagnosticChainId);
 	assignOptionalString(task, "error", value.error, MAX_PERSISTED_ERROR_LENGTH);
 	assignOptionalNumber(task, "bytes", value.bytes);
 	assignOptionalNumber(task, "currentSegment", value.currentSegment);
@@ -386,7 +394,7 @@ function cloneRecovery(recovery: EchoNotesTaskRecovery | undefined): EchoNotesTa
 
 function assignOptionalString(
 	task: PersistedEchoNotesTask,
-	key: "provider" | "model" | "sourcePath" | "outputPath" | "traceId" | "error",
+	key: "provider" | "model" | "sourcePath" | "outputPath" | "traceId" | "diagnosticSessionId" | "diagnosticChainId" | "error",
 	value: unknown,
 	maxLength = 1000
 ): void {

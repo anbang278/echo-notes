@@ -83,6 +83,16 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			model: this.settings.model
 		});
 		const durationSeconds = await this.probeDuration(audioBuffer, mimeType);
+		input.diagnostics?.event("configuration", "siliconflow-transcription-configuration", {
+			provider: this.id,
+			protocol: "multipart/form-data",
+			endpoint: `${this.settings.baseUrl.replace(/\/+$/, "")}/v1/audio/transcriptions`,
+			model: this.settings.model,
+			audioBytes: audioBuffer.byteLength,
+			durationSeconds,
+			preChunking: shouldPreChunkTranscription({ policy, sourceBytes: input.audioFile.stat.size, durationSeconds }),
+			resumedSegments: input.resumeSegments?.length ?? 0
+		});
 		if (input.resumeSegments && input.resumeSegments.length > 0) {
 			return this.transcribeLongAudio(audioBuffer, input, policy, true);
 		}
@@ -153,7 +163,8 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 					const result = await this.transcribeAudioBuffer(
 						chunk.audioBuffer,
 						chunk.mimeType,
-						buildSegmentFileName(input.audioFile.name, chunk)
+						buildSegmentFileName(input.audioFile.name, chunk),
+						input
 					);
 					return {
 						text: result.text,
@@ -234,7 +245,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 	): Promise<SiliconFlowSegmentResult> {
 		for (let attempt = 0; ; attempt += 1) {
 			try {
-				return await this.transcribeAudioBuffer(audioBuffer, mimeType, fileName);
+				return await this.transcribeAudioBuffer(audioBuffer, mimeType, fileName, input);
 			} catch (error) {
 				const delayMs = policy.retryDelaysMs[attempt];
 				if (delayMs === undefined || !isRetryablePolicyStatus(policy, readHttpStatus(error))) {
@@ -266,7 +277,8 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 	private async transcribeAudioBuffer(
 		audioBuffer: ArrayBuffer,
 		mimeType: string,
-		fileName: string
+		fileName: string,
+		input: TranscriptionInput
 	): Promise<SiliconFlowSegmentResult> {
 		const apiKey = this.apiKey.trim();
 		const boundary = `----EchoNotesBoundary${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
@@ -287,6 +299,13 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 		const url = `${baseUrl}/v1/audio/transcriptions`;
 
 		try {
+			const requestStartedAt = Date.now();
+			input.diagnostics?.event("request", "siliconflow-request-started", {
+				endpoint: url,
+				model: this.settings.model,
+				audioBytes: audioBuffer.byteLength,
+				upload: "multipart"
+			});
 			const response = await requestUrl({
 				url,
 				method: "POST",
@@ -299,6 +318,11 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			});
 
 			const traceId = readTraceId(response.headers);
+			input.diagnostics?.event("request", "siliconflow-request-finished", {
+				status: response.status,
+				traceId,
+				durationMs: Date.now() - requestStartedAt
+			});
 			if (response.status < 200 || response.status >= 300) {
 				throw createHttpTranscriptionError("SiliconFlow", response.status, response.text, traceId);
 			}
@@ -314,6 +338,9 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 				raw: data
 			};
 		} catch (error) {
+			input.diagnostics?.event("result", "siliconflow-request-failed", {
+				error: error instanceof Error ? error.message : String(error)
+			});
 			if (error instanceof TranscriptionError) {
 				throw error;
 			}

@@ -33,6 +33,22 @@ import {
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
 import {
+	DiagnosticStore
+} from "./diagnostics/diagnostic-store";
+import { createDiagnosticArchive, type DiagnosticExportContent } from "./diagnostics/diagnostic-export";
+import {
+	DiagnosticExportCompletedModal,
+	DiagnosticExportModal,
+	type DiagnosticExportCompletedActions,
+	type DiagnosticExportOptions
+} from "./diagnostics/diagnostic-export-modal";
+import {
+	getDiagnosticFolderRevealLabel,
+	revealDiagnosticExportInFolder,
+	type DiagnosticFolderRevealShell
+} from "./diagnostics/diagnostic-folder-reveal";
+import type { DiagnosticSession, DiagnosticTaskKind } from "./diagnostics/diagnostic-types";
+import {
 	ChunkedMediaRecorder,
 	RealtimePcmCapture,
 	REALTIME_RECORDING_EXTENSION,
@@ -118,6 +134,7 @@ import { MemoryRelationModal } from "./memory/memory-relation-modal";
 import { MemoryReviewModal } from "./memory/memory-review-modal";
 import { MemoryService } from "./memory/memory-service";
 import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
+import { parseMemoryCandidate } from "./memory/memory-output";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
@@ -182,6 +199,8 @@ import {
 } from "./transcript/transcript-analysis-metadata";
 import { createTranscriptionCheckpointIdentity } from "./transcript/transcript-checkpoint";
 import { TranscriptService } from "./transcript/transcript-service";
+import { extractTranscriptAnalyses, extractTranscriptText } from "./analysis/analysis-output";
+import { FileService } from "./obsidian/file-service";
 
 const LEGACY_API_KEY_SECRET_ID = "echo-notes-api-key";
 const LEGACY_ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
@@ -207,12 +226,14 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"open-echo-memory-home",
 	"open-echo-memory-timeline",
 	"create-personal-agent-context-package",
-	"rebuild-memory-profiles"
+	"rebuild-memory-profiles",
+	"export-diagnostic-package"
 ];
 
 interface ProcessAudioResult {
 	transcriptFile: TFile;
 	analysisEligible: boolean;
+	diagnosticChainId: string;
 }
 
 interface ProcessAudioOptions {
@@ -220,6 +241,8 @@ interface ProcessAudioOptions {
 	allowUploadConfirmation?: boolean;
 	audioLinkPath?: string;
 	forceTranscription?: boolean;
+	diagnosticChainId?: string;
+	diagnosticRetryOfSessionId?: string;
 }
 
 interface InternalPlugin {
@@ -286,11 +309,14 @@ interface ActiveRealtimeRecording {
 	writeTimer?: number;
 	writeQueue: Promise<void>;
 	taskId: string;
+	diagnosticSessionId: string;
+	diagnosticChainId: string;
 }
 
 interface ActiveMemoryTask {
 	controller: AbortController;
 	promise: Promise<void>;
+	diagnosticSessionId: string;
 }
 
 export default class EchoNotesPlugin extends Plugin {
@@ -301,6 +327,8 @@ export default class EchoNotesPlugin extends Plugin {
 	private linkService: LinkService;
 	private analysisService: AnalysisService;
 	private memoryService: MemoryService;
+	private diagnostics = new DiagnosticStore();
+	private diagnosticFiles: FileService;
 	private taskCenter = new TaskCenterStore();
 	private editorService = new EditorService();
 	private processingAudio = new Map<string, Promise<ProcessAudioResult | null>>();
@@ -315,8 +343,10 @@ export default class EchoNotesPlugin extends Plugin {
 	private realtimeRibbonEl: HTMLElement | null = null;
 	private realtimeStatusEl: HTMLElement | null = null;
 	private realtimeStatusTimer: number | null = null;
-	private taskCenterPersistenceTimer: number | null = null;
+	private persistentStateTimer: number | null = null;
+	private persistenceQueue: Promise<void> = Promise.resolve();
 	private unsubscribeTaskCenterPersistence: (() => void) | null = null;
+	private unsubscribeDiagnosticsPersistence: (() => void) | null = null;
 	private settingTab: EchoNotesSettingTab | null = null;
 	private settingsListeners = new Set<() => void>();
 	private gettingStartedListeners = new Set<() => void>();
@@ -327,9 +357,13 @@ export default class EchoNotesPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.refreshServices();
+		this.diagnosticFiles = new FileService(this.app);
+		this.diagnostics.restore(this.settings.diagnosticState);
 		this.unsubscribeTaskCenterPersistence = this.taskCenter.subscribe(() => {
-			this.scheduleTaskCenterPersistence();
+			this.schedulePersistentState();
 		});
+		this.unsubscribeDiagnosticsPersistence = this.diagnostics.subscribe(() => this.schedulePersistentState());
+		this.diagnostics.markInterruptedSessions();
 		this.restoreTaskCenter();
 		this.settingTab = new EchoNotesSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
@@ -370,15 +404,17 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	onunload(): void {
-		if (this.taskCenterPersistenceTimer !== null) {
-			window.clearTimeout(this.taskCenterPersistenceTimer);
-			this.taskCenterPersistenceTimer = null;
+		if (this.persistentStateTimer !== null) {
+			window.clearTimeout(this.persistentStateTimer);
+			this.persistentStateTimer = null;
 		}
-		void this.persistTaskCenter().catch((error) => {
+		void this.persistPersistentState().catch((error) => {
 			this.log("持久化 Task Center 状态失败", error);
 		});
 		this.unsubscribeTaskCenterPersistence?.();
 		this.unsubscribeTaskCenterPersistence = null;
+		this.unsubscribeDiagnosticsPersistence?.();
+		this.unsubscribeDiagnosticsPersistence = null;
 		this.settingTab?.closeSettingsGuide();
 		if (this.gettingStartedNativeSettingsTimer !== null) {
 			window.clearInterval(this.gettingStartedNativeSettingsTimer);
@@ -418,12 +454,12 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	async saveSettings(): Promise<void> {
-		this.settings.taskCenterState = createTaskCenterState(this.taskCenter.getTasks());
+		this.capturePersistentRuntimeState();
 		this.settings = normalizeEchoNotesSettings(this.settings);
 		delete this.settings.apiKey;
 		delete this.settings.analysisApiKey;
 		delete this.settings.memoryApiKey;
-		await this.saveData(this.settings);
+		await this.enqueueSettingsWrite();
 		this.refreshServices();
 		this.updateRealtimeUi();
 		this.notifySettingsChanged();
@@ -457,6 +493,220 @@ export default class EchoNotesPlugin extends Plugin {
 
 	subscribeTaskCenter(listener: () => void): () => void {
 		return this.taskCenter.subscribe(listener);
+	}
+
+	openDiagnosticExport(task?: EchoNotesTask): void {
+		new DiagnosticExportModal(this.app, (options) => this.exportDiagnosticPackage(options, task)).open();
+	}
+
+	async clearDiagnosticRecords(): Promise<void> {
+		this.diagnostics.clear();
+		await this.persistPersistentState();
+		new Notice("已清空插件内保存的诊断记录；此前生成的 zip 不会被删除。");
+	}
+
+	setDiagnosticRetentionEnabled(enabled: boolean): void {
+		this.diagnostics.setEnabled(enabled);
+	}
+
+	isDiagnosticRetentionEnabled(): boolean {
+		return this.diagnostics.isEnabled();
+	}
+
+	private async exportDiagnosticPackage(options: DiagnosticExportOptions, task?: EchoNotesTask): Promise<void> {
+		try {
+			const allTasks = this.taskCenter.getTasks();
+			const chainId = task?.diagnosticChainId;
+			const selectedTasks = chainId
+				? allTasks.filter((item) => item.diagnosticChainId === chainId)
+				: task ? [task] : allTasks;
+			const sessions = this.diagnostics.getState().sessions.filter((session) =>
+				chainId ? session.chainId === chainId : task?.diagnosticSessionId ? session.id === task.diagnosticSessionId : true
+			);
+			const content = await this.collectDiagnosticExportContent(options, selectedTasks);
+			const appVersion = (this.app as unknown as { version?: unknown }).version;
+			const archive = createDiagnosticArchive({
+				pluginVersion: this.manifest.version,
+				obsidianVersion: typeof appVersion === "string" ? appVersion : undefined,
+				platform: Platform.isMobile ? "mobile" : "desktop",
+				applicationLanguage: navigator.language || "unknown",
+				sessions,
+				tasks: selectedTasks.map((item) => ({
+					id: item.id,
+					kind: item.kind,
+					status: item.status,
+					provider: item.provider,
+					model: item.model,
+					traceId: item.traceId,
+					diagnosticSessionId: item.diagnosticSessionId,
+					diagnosticChainId: item.diagnosticChainId,
+					error: item.error
+				})),
+				content
+			});
+			const directory = "Echo Notes/诊断包";
+			await this.diagnosticFiles.ensureFolder(directory);
+			const path = `${directory}/${archive.fileName}`;
+			await this.app.vault.createBinary(path, Uint8Array.from(archive.bytes).buffer);
+			new DiagnosticExportCompletedModal(this.app, path, this.getDiagnosticFolderRevealActions(path)).open();
+		} catch (error) {
+			const message = getSanitizedErrorMessage(error);
+			new Notice(`导出诊断包失败：${message}`);
+			throw error;
+		}
+	}
+
+	private getDiagnosticFolderRevealActions(vaultPath: string): DiagnosticExportCompletedActions {
+		if (!Platform.isDesktopApp || !(this.app.vault.adapter instanceof FileSystemAdapter)) {
+			return {};
+		}
+		const shell = getDesktopElectronShell();
+		if (!shell) {
+			return {};
+		}
+		const adapter = this.app.vault.adapter;
+		return {
+			revealLabel: getDiagnosticFolderRevealLabel(getDesktopRuntimePlatform()),
+			onRevealInFolder: () => revealDiagnosticExportInFolder({ shell, adapter, vaultPath })
+		};
+	}
+
+	private async collectDiagnosticExportContent(
+		options: DiagnosticExportOptions,
+		tasks: readonly EchoNotesTask[]
+	): Promise<DiagnosticExportContent | undefined> {
+		const result: DiagnosticExportContent = {};
+		const transcriptPaths = uniquePaths(tasks.filter((task) => task.kind === "transcription").map((task) => task.outputPath));
+		const analysisPaths = uniquePaths(tasks.filter((task) => task.kind === "analysis").map((task) => task.outputPath));
+		const memoryPaths = uniquePaths(tasks.filter((task) => task.kind === "memory").map((task) => task.outputPath));
+		if (options.includeTranscript) {
+			const blocks = await this.readDiagnosticTextFiles(transcriptPaths, (content) => extractTranscriptText(content));
+			if (blocks.length > 0) {
+				result.transcript = blocks.map((block, index) => `## 转写正文 ${index + 1}\n\n${block}`).join("\n\n");
+			}
+		}
+		if (options.includeAnalyses) {
+			const blocks = await this.readDiagnosticTextFiles(uniquePaths([...transcriptPaths, ...analysisPaths]), (content) =>
+				extractTranscriptAnalyses(content).map((analysis) => analysis.markdown).join("\n\n")
+			);
+			if (blocks.length > 0) {
+				result.analyses = blocks.map((block, index) => `## AI 分析 ${index + 1}\n\n${block}`).join("\n\n");
+			}
+		}
+		if (options.includeMemoryCandidate) {
+			const candidates: unknown[] = [];
+			for (const path of memoryPaths) {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) {
+					continue;
+				}
+				const candidate = parseMemoryCandidate(await this.app.vault.cachedRead(file));
+				candidates.push({
+					provider: candidate.provider,
+					model: candidate.model,
+					createdAt: candidate.createdAt,
+					rejectedAssertionCount: candidate.rejectedAssertionCount,
+					assertions: candidate.assertions.map(({ sourcePath: _sourcePath, ...assertion }) => assertion)
+				});
+			}
+			if (candidates.length > 0) {
+				result.memoryCandidate = JSON.stringify(candidates, null, 2);
+			}
+		}
+		const selectedBytes = new TextEncoder().encode(Object.values(result).join("\n")).byteLength;
+		if (selectedBytes > 10 * 1024 * 1024) {
+			throw new Error("所选可选内容超过 10 MB，请减少勾选内容后重试。");
+		}
+		return Object.keys(result).length > 0 ? result : undefined;
+	}
+
+	private async readDiagnosticTextFiles(paths: readonly string[], extract: (content: string) => string): Promise<string[]> {
+		const blocks: string[] = [];
+		for (const path of paths) {
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) {
+				continue;
+			}
+			const value = extract(await this.app.vault.cachedRead(file)).trim();
+			if (value) {
+				blocks.push(value);
+			}
+		}
+		return blocks;
+	}
+
+	private startDiagnosticSession(
+		kind: DiagnosticTaskKind,
+		chainId?: string,
+		retryOfSessionId?: string
+	): DiagnosticSession {
+		const session = this.diagnostics.startSession({ kind, chainId, retryOfSessionId });
+		if (this.diagnostics.isEnabled()) {
+			this.diagnostics.record(session.id, "environment", "host-environment", {
+				pluginVersion: this.manifest.version,
+				platform: Platform.isMobile ? "mobile" : "desktop",
+				applicationLanguage: navigator.language || "unknown"
+			});
+		}
+		return session;
+	}
+
+	private recordTranscriptionDiagnosticProgress(sessionId: string, progress: TranscriptionProgress): void {
+		if (progress.type === "whole-audio-request-started") {
+			this.diagnostics.record(sessionId, "request", "whole-audio-request", {
+				attempt: progress.attempt,
+				totalAttempts: progress.totalAttempts,
+				audioBytes: progress.audioBytes
+			});
+			return;
+		}
+		if (progress.type === "streaming-result") {
+			this.diagnostics.record(sessionId, "progress", "streaming-result", {
+				processedSeconds: Math.round(progress.processedSeconds),
+				totalSeconds: Math.round(progress.totalSeconds),
+				utteranceCount: progress.utterances?.length ?? 0,
+				traceId: progress.traceId
+			});
+			return;
+		}
+		if (progress.type === "long-audio-preparing") {
+			this.diagnostics.record(sessionId, "lifecycle", "long-audio-preparing", {
+				completedSegments: progress.segments.length
+			});
+			return;
+		}
+		if (progress.type === "long-audio-started") {
+			this.diagnostics.record(sessionId, "lifecycle", "long-audio-segmented", {
+				totalSegments: progress.totalSegments,
+				resumedSegments: progress.segments.length
+			});
+			return;
+		}
+		if (progress.type === "segment-split") {
+			this.diagnostics.record(sessionId, "lifecycle", "segment-shortened", {
+				segmentIndex: progress.segment.index,
+				segmentTotal: progress.segment.total,
+				replacementCount: progress.replacementSegments.length,
+				totalSegments: progress.totalSegments
+			});
+			return;
+		}
+		if (progress.type === "segment-retrying") {
+			this.diagnostics.record(sessionId, "lifecycle", "segment-retry", {
+				attempt: progress.attempt,
+				maxAttempts: progress.maxAttempts,
+				delayMs: progress.delayMs,
+				segmentIndex: progress.segment?.index,
+				segmentTotal: progress.segment?.total
+			});
+			return;
+		}
+		this.diagnostics.record(sessionId, "progress", progress.type === "segment-started" ? "segment-started" : "segment-completed", {
+			segmentIndex: progress.segment.index,
+			segmentTotal: progress.segment.total,
+			startSeconds: Math.round(progress.segment.startSeconds),
+			endSeconds: Math.round(progress.segment.endSeconds)
+		});
 	}
 
 	subscribeSettings(listener: () => void): () => void {
@@ -897,21 +1147,34 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private scheduleTaskCenterPersistence(): void {
-		if (this.taskCenterPersistenceTimer !== null) {
+	private schedulePersistentState(): void {
+		if (this.persistentStateTimer !== null) {
 			return;
 		}
-		this.taskCenterPersistenceTimer = window.setTimeout(() => {
-			this.taskCenterPersistenceTimer = null;
-			void this.persistTaskCenter().catch((error) => {
-				this.log("持久化 Task Center 状态失败", error);
+		this.persistentStateTimer = window.setTimeout(() => {
+			this.persistentStateTimer = null;
+			void this.persistPersistentState().catch((error) => {
+				this.log("持久化 Echo Notes 运行状态失败", error);
 			});
 		}, 1000);
 	}
 
-	private async persistTaskCenter(): Promise<void> {
+	private capturePersistentRuntimeState(): void {
 		this.settings.taskCenterState = createTaskCenterState(this.taskCenter.getTasks());
-		await this.saveData(this.settings);
+		this.settings.diagnosticState = this.diagnostics.getState();
+	}
+
+	private async persistPersistentState(): Promise<void> {
+		this.capturePersistentRuntimeState();
+		await this.enqueueSettingsWrite();
+	}
+
+	private enqueueSettingsWrite(): Promise<void> {
+		const snapshot = JSON.parse(JSON.stringify(this.settings)) as EchoNotesSettings;
+		this.persistenceQueue = this.persistenceQueue
+			.catch(() => undefined)
+			.then(() => this.saveData(snapshot));
+		return this.persistenceQueue;
 	}
 
 	private async maybeOpenGettingStartedGuide(): Promise<void> {
@@ -1898,6 +2161,12 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: "export-diagnostic-package",
+			name: "导出诊断日志包",
+			callback: () => this.openDiagnosticExport()
+		});
+
 	}
 
 	private registerEditorContextMenu(): void {
@@ -2076,7 +2345,7 @@ export default class EchoNotesPlugin extends Plugin {
 					void this.processAudioToTranscript(file, undefined, { allowUploadConfirmation: false })
 						.then((result) => {
 							if (result?.analysisEligible) {
-								this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis());
+								this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis(), result.diagnosticChainId);
 							}
 						})
 						.catch((error) => {
@@ -2123,7 +2392,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const transcriptFile = result.transcriptFile;
 
 		if (result.analysisEligible) {
-			this.startAnalysisTasks(transcriptFile, analysisTemplates);
+			this.startAnalysisTasks(transcriptFile, analysisTemplates, result.diagnosticChainId);
 		}
 	}
 
@@ -2164,7 +2433,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			const transcriptFile = result.transcriptFile;
 			if (result.analysisEligible) {
-				this.startAnalysisTasks(transcriptFile, analysisTemplates);
+				this.startAnalysisTasks(transcriptFile, analysisTemplates, result.diagnosticChainId);
 			}
 			completed += 1;
 		}
@@ -2240,6 +2509,21 @@ export default class EchoNotesPlugin extends Plugin {
 		options: ProcessAudioOptions
 	): Promise<ProcessAudioResult | null> {
 		const transcriptionConfig = this.settings.offlineTranscription;
+		const diagnostic = this.startDiagnosticSession(
+			"transcription",
+			options.diagnosticChainId,
+			options.diagnosticRetryOfSessionId
+		);
+		const diagnosticSink = this.diagnostics.getSink(diagnostic.id);
+		this.diagnostics.record(diagnostic.id, "configuration", "transcription-configuration", {
+			provider: transcriptionConfig.provider,
+			baseUrl: transcriptionConfig.baseUrl,
+			model: transcriptionConfig.model,
+			language: transcriptionConfig.language || "auto",
+			keyPresent: Boolean(this.getApiKey(transcriptionConfig.provider).trim()),
+			audioExtension: audioFile.extension,
+			audioBytes: audioFile.stat.size
+		});
 		const checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
 		let notifiedTranscriptPath: string | null = null;
 		const notifyTranscriptFileReady = async (transcriptFile: TFile): Promise<void> => {
@@ -2288,12 +2572,15 @@ export default class EchoNotesPlugin extends Plugin {
 				totalSegments: undefined,
 				error: undefined,
 				traceId: undefined,
+				diagnosticSessionId: diagnostic.id,
+				diagnosticChainId: diagnostic.chainId,
 				completedAt: Date.now()
 			});
+			this.diagnostics.complete(diagnostic.id, "skipped", { reason: "existing-transcript-reused" });
 			new Notice("Transcript 已存在，已跳过转写。");
 			await notifyTranscriptFileReady(reusableTranscript);
 			await this.markGettingStartedTranscriptionSuccess(audioFile.path, reusableTranscript.path);
-			return { transcriptFile: reusableTranscript, analysisEligible: true };
+			return { transcriptFile: reusableTranscript, analysisEligible: true, diagnosticChainId: diagnostic.chainId };
 		}
 
 		if (existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription) {
@@ -2307,12 +2594,14 @@ export default class EchoNotesPlugin extends Plugin {
 
 		if (this.settings.confirmBeforeTranscription) {
 			if (options.allowUploadConfirmation === false) {
+				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "upload-confirmation-required" });
 				new Notice("已跳过自动转写：当前开启了手动转写前确认上传。");
 				return null;
 			}
 
 			const confirmed = await this.confirmTranscriptionUpload(audioFile);
 			if (!confirmed) {
+				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "user-cancelled-upload" });
 				new Notice(`已取消转写：${audioFile.name}`);
 				return null;
 			}
@@ -2334,6 +2623,8 @@ export default class EchoNotesPlugin extends Plugin {
 			totalSegments: undefined,
 			error: undefined,
 			traceId: undefined,
+			diagnosticSessionId: diagnostic.id,
+			diagnosticChainId: diagnostic.chainId,
 			recovery: {
 				kind: "transcription",
 				audioPath: audioFile.path,
@@ -2368,6 +2659,10 @@ export default class EchoNotesPlugin extends Plugin {
 				this.getApiKey(transcriptionConfig.provider),
 				{ isMobile: Platform.isMobile, usage: "offline" }
 			);
+			this.diagnostics.record(diagnostic.id, "configuration", "transcription-local-diagnostics", {
+				canAttempt: diagnostics.canAttemptTranscription,
+				items: diagnostics.items.map((item) => ({ severity: item.severity, title: item.title }))
+			});
 			if (!diagnostics.canAttemptTranscription) {
 				throw new Error(diagnostics.items.filter((item) => item.severity === "error").map((item) => item.detail).join("；"));
 			}
@@ -2397,6 +2692,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			new Notice(`已创建转写稿，开始准备音频：${audioFile.name}`);
 			const handleProgress = async (progress: TranscriptionProgress): Promise<void> => {
+				this.recordTranscriptionDiagnosticProgress(diagnostic.id, progress);
 				if (progress.type === "whole-audio-request-started") {
 					const attemptText = progress.totalAttempts > 1
 						? `尝试 ${progress.attempt}/${progress.totalAttempts} · `
@@ -2562,7 +2858,8 @@ export default class EchoNotesPlugin extends Plugin {
 				sourceNote,
 				language: transcriptionConfig.language,
 				resumeSegments: completedSegments,
-				onProgress: handleProgress
+				onProgress: handleProgress,
+				diagnostics: diagnosticSink
 			});
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			await notifyTranscriptFileReady(transcriptFile);
@@ -2577,11 +2874,15 @@ export default class EchoNotesPlugin extends Plugin {
 				currentSegment: result.segments?.length,
 				totalSegments: result.segments?.length,
 				error: undefined,
-					completedAt: Date.now()
-				});
-				await this.markGettingStartedTranscriptionSuccess(audioFile.path, transcriptFile.path);
-				new Notice(`转写完成：${audioFile.name}`);
-				return { transcriptFile, analysisEligible: true };
+				completedAt: Date.now()
+			});
+			this.diagnostics.complete(diagnostic.id, "success", {
+				traceId: result.traceId,
+				segmentCount: result.segments?.length ?? 0
+			});
+			await this.markGettingStartedTranscriptionSuccess(audioFile.path, transcriptFile.path);
+			new Notice(`转写完成：${audioFile.name}`);
+			return { transcriptFile, analysisEligible: true, diagnosticChainId: diagnostic.chainId };
 		} catch (error) {
 			hideLongAudioNotice();
 			const message = getErrorMessage(error);
@@ -2592,6 +2893,11 @@ export default class EchoNotesPlugin extends Plugin {
 				error: message,
 				traceId,
 				completedAt: Date.now()
+			});
+			this.diagnostics.complete(diagnostic.id, "failed", {
+				error: message,
+				traceId,
+				errorCategory: classifyDiagnosticError(error)
 			});
 			await this.markGettingStartedFailure("transcription", audioFile.path, transcriptionTaskId);
 			new Notice(getTaskFailureNotice("transcription", message));
@@ -2617,7 +2923,7 @@ export default class EchoNotesPlugin extends Plugin {
 					this.taskCenter.updateTask(transcriptionTaskId, {
 						outputPath: transcriptFile.path
 					});
-					return { transcriptFile, analysisEligible: false };
+					return { transcriptFile, analysisEligible: false, diagnosticChainId: diagnostic.chainId };
 				} catch (writeError) {
 					new Notice(`写入失败 transcript 时出错：${getErrorMessage(writeError)}`);
 				}
@@ -2627,7 +2933,13 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private async retryTranscriptionTask(audioPath: string, sourcePath: string | undefined, audioLinkPath: string | undefined): Promise<void> {
+	private async retryTranscriptionTask(
+		audioPath: string,
+		sourcePath: string | undefined,
+		audioLinkPath: string | undefined,
+		diagnosticChainId?: string,
+		diagnosticRetryOfSessionId?: string
+	): Promise<void> {
 		const audioFile = this.app.vault.getAbstractFileByPath(audioPath);
 		if (!(audioFile instanceof TFile) || !isSupportedAudioFile(audioFile)) {
 			const taskId = createTaskId("transcription", audioPath);
@@ -2648,10 +2960,13 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const sourceFile = sourcePath ? this.app.vault.getAbstractFileByPath(sourcePath) : null;
 		const sourceNote = sourceFile instanceof TFile ? sourceFile : undefined;
+		const previousTask = this.taskCenter.getTask(createTaskId("transcription", audioPath));
 		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
 			allowUploadConfirmation: true,
 			audioLinkPath,
 			forceTranscription: true,
+			diagnosticChainId: diagnosticChainId ?? previousTask?.diagnosticChainId,
+			diagnosticRetryOfSessionId: diagnosticRetryOfSessionId ?? previousTask?.diagnosticSessionId,
 			onTranscriptFileReady: async (transcriptFile) => {
 				if (sourceNote && audioLinkPath) {
 					await this.insertTranscriptLinkIntoFile(sourceNote, audioLinkPath, transcriptFile);
@@ -2660,7 +2975,7 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 
 		if (result?.analysisEligible) {
-			this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis());
+			this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis(), result.diagnosticChainId);
 		}
 	}
 
@@ -2720,28 +3035,41 @@ export default class EchoNotesPlugin extends Plugin {
 		return template ? [template] : [];
 	}
 
-	private startAnalysisTasks(transcriptFile: TFile, templates: AnalysisTemplateConfig[]): void {
+	private startAnalysisTasks(
+		transcriptFile: TFile,
+		templates: AnalysisTemplateConfig[],
+		diagnosticChainId?: string
+	): void {
 		if (templates.length === 0) {
 			return;
 		}
-		void this.runAnalysisBatch(transcriptFile, templates);
+		void this.runAnalysisBatch(transcriptFile, templates, diagnosticChainId);
 	}
 
-	private async runAnalysisBatch(transcriptFile: TFile, templates: AnalysisTemplateConfig[]): Promise<void> {
+	private async runAnalysisBatch(
+		transcriptFile: TFile,
+		templates: AnalysisTemplateConfig[],
+		diagnosticChainId?: string
+	): Promise<void> {
 		const results = await Promise.all(
-			templates.map(async (template) => ({ template, success: await this.startAnalysisTask(transcriptFile, template) }))
+			templates.map(async (template) => ({
+				template,
+				success: await this.startAnalysisTask(transcriptFile, template, diagnosticChainId)
+			}))
 		);
 		const successfulTemplateIds = results
 			.filter((result) => result.success)
 			.map((result) => result.template.id);
 		if (successfulTemplateIds.length > 0) {
-			void this.startMemoryTask(transcriptFile, successfulTemplateIds, false);
+			void this.startMemoryTask(transcriptFile, successfulTemplateIds, false, false, diagnosticChainId);
 		}
 	}
 
 	private async startAnalysisTask(
 		transcriptFile: TFile,
-		template: AnalysisTemplateConfig | null | undefined
+		template: AnalysisTemplateConfig | null | undefined,
+		diagnosticChainId?: string,
+		diagnosticRetryOfSessionId?: string
 	): Promise<boolean> {
 		if (!template || !this.settings.analysisEnabled) {
 			return false;
@@ -2754,6 +3082,7 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`正在后台生成 ${templateTitle}：${transcriptFile.name}`);
 			return false;
 		}
+		const diagnostic = this.startDiagnosticSession("analysis", diagnosticChainId, diagnosticRetryOfSessionId);
 
 		this.taskCenter.upsertTask({
 			id: analysisTaskId,
@@ -2767,6 +3096,8 @@ export default class EchoNotesPlugin extends Plugin {
 			outputPath: transcriptFile.path,
 			error: undefined,
 			traceId: undefined,
+			diagnosticSessionId: diagnostic.id,
+			diagnosticChainId: diagnostic.chainId,
 			recovery: {
 				kind: "analysis",
 				transcriptPath: transcriptFile.path,
@@ -2775,13 +3106,13 @@ export default class EchoNotesPlugin extends Plugin {
 			completedAt: undefined,
 			retry: {
 				label: "重试分析",
-				run: () => this.startAnalysisTasks(transcriptFile, [template])
+				run: () => this.retryAnalysisTask(transcriptFile.path, template.id)
 			}
 		});
 		this.processingAnalyses.add(processingKey);
 		await this.markGettingStartedRunning("analysis", transcriptFile.path);
 		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
-		return this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId);
+		return this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId, diagnostic.id);
 	}
 
 	private async retryAnalysisTask(transcriptPath: string, templateId: string): Promise<void> {
@@ -2795,14 +3126,16 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`无法重试分析，模板不存在：${templateId}`);
 			return;
 		}
-		await this.startAnalysisTask(file, template);
+		const previousTask = this.taskCenter.getTask(createTaskId("analysis", transcriptPath, templateId));
+		await this.startAnalysisTask(file, template, previousTask?.diagnosticChainId, previousTask?.diagnosticSessionId);
 	}
 
 	private async runAnalysisTask(
 		transcriptFile: TFile,
 		template: AnalysisTemplateConfig,
 		processingKey: string,
-		analysisTaskId: string
+		analysisTaskId: string,
+		diagnosticSessionId: string
 	): Promise<boolean> {
 		if (!this.settings.analysisEnabled) {
 			this.taskCenter.updateTask(analysisTaskId, {
@@ -2812,6 +3145,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			new Notice("AI 纪要分析未启用，请先在 Echo Notes 设置中开启。");
 			await this.markGettingStartedFailure("analysis", transcriptFile.path, analysisTaskId);
+			this.diagnostics.complete(diagnosticSessionId, "skipped", { reason: "analysis-disabled" });
 			this.processingAnalyses.delete(processingKey);
 			return false;
 		}
@@ -2844,6 +3178,7 @@ export default class EchoNotesPlugin extends Plugin {
 				});
 				new Notice("转写稿内容为空，已跳过 AI 纪要分析。");
 				await this.markGettingStartedFailure("analysis", transcriptFile.path, analysisTaskId);
+				this.diagnostics.complete(diagnosticSessionId, "skipped", { reason: "empty-transcript" });
 				return false;
 			}
 
@@ -2855,6 +3190,16 @@ export default class EchoNotesPlugin extends Plugin {
 			if (!diagnostics.canAttemptAnalysis) {
 				throw new Error(diagnostics.items.filter((item) => item.severity === "error").map((item) => item.detail).join("；"));
 			}
+			this.diagnostics.record(diagnosticSessionId, "configuration", "analysis-configuration", {
+				provider: this.settings.analysisProvider,
+				baseUrl: this.settings.analysisBaseUrl,
+				model: this.settings.analysisModel,
+				keyPresent: Boolean(this.getAnalysisApiKey().trim()),
+				templateType: template.builtin ? "builtin" : "custom",
+				inputCharacters: transcriptText.length,
+				redactTranscriptBeforeAnalysis: this.settings.redactTranscriptBeforeAnalysis,
+				localChecks: diagnostics.items.map((item) => ({ severity: item.severity, title: item.title }))
+			});
 			const provider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
 			const analysisTranscriptText = this.settings.redactTranscriptBeforeAnalysis
 				? redactAnalysisInputText(transcriptText)
@@ -2863,7 +3208,8 @@ export default class EchoNotesPlugin extends Plugin {
 				template,
 				transcriptTitle: transcriptFile.basename,
 				transcriptText: analysisTranscriptText,
-				copyLanguage: this.settings.copyLanguage
+				copyLanguage: this.settings.copyLanguage,
+				diagnostics: this.diagnostics.getSink(diagnosticSessionId)
 			};
 			const chunks = this.settings.analysisLongTextEnabled
 				? splitAnalysisText(analysisTranscriptText, {
@@ -2876,6 +3222,11 @@ export default class EchoNotesPlugin extends Plugin {
 					`转写稿将产生 ${chunks.length} 个分析分块，超过安全上限 ${ANALYSIS_CHECKPOINT_MAX_CHUNKS}。请提高分块字符数、缩短转写稿或拆分文件后重试。`
 				);
 			}
+			this.diagnostics.record(diagnosticSessionId, "lifecycle", "analysis-chunks-prepared", {
+				chunkCount: chunks.length || 1,
+				chunked: chunks.length > 1,
+				inputCharacters: analysisTranscriptText.length
+			});
 			if (!this.settings.analysisLongTextEnabled && analysisTranscriptText.length > this.settings.analysisChunkCharacters) {
 				throw new Error("转写稿超过单次分析安全长度，且长文本分块已关闭。请开启长文本分块分析或拆分转写稿。");
 			}
@@ -2894,6 +3245,10 @@ export default class EchoNotesPlugin extends Plugin {
 					chunks
 				);
 				if (resumeResults.length > 0) {
+					this.diagnostics.record(diagnosticSessionId, "lifecycle", "analysis-chunks-recovered", {
+						recoveredChunks: resumeResults.length,
+						totalChunks: chunks.length
+					});
 					this.taskCenter.updateTask(analysisTaskId, {
 						stage: `已恢复 ${resumeResults.length}/${chunks.length} 个分析分块`,
 						currentSegment: resumeResults.length,
@@ -2908,6 +3263,11 @@ export default class EchoNotesPlugin extends Plugin {
 					prepareResult: prepareAnalysisCheckpointResult,
 					synthesize: (input, chunkResults) => provider.synthesizeChunks(input, chunkResults),
 					onChunkStart: (chunk) => {
+						this.diagnostics.record(diagnosticSessionId, "progress", "analysis-chunk-started", {
+							chunkIndex: chunk.index,
+							totalChunks: chunk.total,
+							characters: chunk.text.length
+						});
 						this.taskCenter.updateTask(analysisTaskId, {
 							stage: `正在分析长文本分块 ${chunk.index}/${chunk.total}（约 ${estimateAnalysisTextTokens(chunk.text)} tokens）`,
 							currentSegment: chunk.index - 1,
@@ -2924,8 +3284,15 @@ export default class EchoNotesPlugin extends Plugin {
 							currentSegment: chunk.index,
 							totalSegments: chunk.total
 						});
+						this.diagnostics.record(diagnosticSessionId, "progress", "analysis-chunk-completed", {
+							chunkIndex: chunk.index,
+							totalChunks: chunk.total
+						});
 					},
 					onSynthesisStart: () => {
+						this.diagnostics.record(diagnosticSessionId, "lifecycle", "analysis-synthesis-started", {
+							totalChunks: chunks.length
+						});
 						this.taskCenter.updateTask(analysisTaskId, {
 							stage: `正在汇总 ${chunks.length} 个分析分块`,
 							currentSegment: chunks.length,
@@ -2964,6 +3331,7 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
+			this.diagnostics.complete(diagnosticSessionId, "success", { traceId: result.traceId });
 			await this.markGettingStartedAnalysisSuccess(transcriptFile.path);
 			new Notice(`${templateTitle} 已写入转写稿：${transcriptFile.name}`);
 			return true;
@@ -2984,6 +3352,10 @@ export default class EchoNotesPlugin extends Plugin {
 				error: message,
 				completedAt: Date.now()
 			});
+			this.diagnostics.complete(diagnosticSessionId, "failed", {
+				error: message,
+				errorCategory: classifyDiagnosticError(error)
+			});
 			await this.markGettingStartedFailure("analysis", transcriptFile.path, analysisTaskId);
 			new Notice(getTaskFailureNotice("analysis", message));
 			this.log("AI 纪要分析失败", error);
@@ -2997,7 +3369,9 @@ export default class EchoNotesPlugin extends Plugin {
 		transcriptFile: TFile,
 		analysisTemplateIds: readonly string[] | undefined,
 		manual: boolean,
-		retryRequested = false
+		retryRequested = false,
+		diagnosticChainId?: string,
+		diagnosticRetryOfSessionId?: string
 	): Promise<void> {
 		if (!this.settings.memoryInitialized || (!manual && !this.settings.memoryEnabled)) {
 			return;
@@ -3010,6 +3384,8 @@ export default class EchoNotesPlugin extends Plugin {
 				new Notice(`正在后台提取记忆：${transcriptFile.name}`);
 				return;
 			}
+			this.diagnostics.record(activeTask.diagnosticSessionId, "lifecycle", "memory-retry-requested");
+			this.diagnostics.complete(activeTask.diagnosticSessionId, "failed", { error: "用户发起重试，当前提取已取消" });
 			activeTask.controller.abort(new Error("当前记忆提取已由用户重试。"));
 			await activeTask.promise;
 		}
@@ -3022,6 +3398,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		}
 
+		const diagnostic = this.startDiagnosticSession("memory", diagnosticChainId, diagnosticRetryOfSessionId);
 		const controller = new AbortController();
 		const task = {
 			id: taskId,
@@ -3035,6 +3412,8 @@ export default class EchoNotesPlugin extends Plugin {
 			sourcePath: transcriptFile.path,
 			error: undefined,
 			traceId: undefined,
+			diagnosticSessionId: diagnostic.id,
+			diagnosticChainId: diagnostic.chainId,
 			recovery: {
 				kind: "memory-extraction",
 				transcriptPath: transcriptFile.path,
@@ -3052,7 +3431,8 @@ export default class EchoNotesPlugin extends Plugin {
 		new Notice(`${retryRequested ? "重新开始" : "后台提取"}记忆：${transcriptFile.name}`);
 		const activeMemoryTask: ActiveMemoryTask = {
 			controller,
-			promise: Promise.resolve()
+			promise: Promise.resolve(),
+			diagnosticSessionId: diagnostic.id
 		};
 		this.activeMemoryTasks.set(processingKey, activeMemoryTask);
 		activeMemoryTask.promise = this.runMemoryTask(
@@ -3060,7 +3440,8 @@ export default class EchoNotesPlugin extends Plugin {
 			analysisTemplateIds,
 			processingKey,
 			taskId,
-			controller
+			controller,
+			diagnostic.id
 		);
 	}
 
@@ -3073,7 +3454,15 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`无法重试记忆提取，转写稿不存在：${transcriptPath}`);
 			return;
 		}
-		await this.startMemoryTask(file, analysisTemplateIds, true, true);
+		const previousTask = this.taskCenter.getTask(createTaskId("memory", transcriptPath));
+		await this.startMemoryTask(
+			file,
+			analysisTemplateIds,
+			true,
+			true,
+			previousTask?.diagnosticChainId,
+			previousTask?.diagnosticSessionId
+		);
 	}
 
 	private async runMemoryTask(
@@ -3081,14 +3470,28 @@ export default class EchoNotesPlugin extends Plugin {
 		analysisTemplateIds: readonly string[] | undefined,
 		processingKey: string,
 		taskId: string,
-		controller: AbortController
+		controller: AbortController,
+		diagnosticSessionId: string
 	): Promise<void> {
 		try {
+			this.diagnostics.record(diagnosticSessionId, "configuration", "memory-configuration", {
+				provider: this.settings.memoryProvider,
+				baseUrl: this.settings.memoryBaseUrl,
+				model: this.settings.memoryModel,
+				keyPresent: Boolean(this.getMemoryApiKey().trim()),
+				analysisTemplateCount: analysisTemplateIds?.length ?? 0
+			});
 			const result = await this.memoryService.extractFromTranscript(this.settings, transcriptFile, {
 				apiKey: this.getMemoryApiKey(),
 				analysisTemplateIds,
 				signal: controller.signal,
+				diagnostics: this.diagnostics.getSink(diagnosticSessionId),
 				onProgress: (stage, progress) => {
+					this.diagnostics.record(diagnosticSessionId, "progress", "memory-progress", {
+						stage,
+						currentChunk: progress?.currentChunk,
+						totalChunks: progress?.totalChunks
+					});
 					if (this.activeMemoryTasks.get(processingKey)?.controller === controller) {
 						this.taskCenter.updateTask(taskId, {
 							stage,
@@ -3112,6 +3515,12 @@ export default class EchoNotesPlugin extends Plugin {
 				traceId: result.traceIds.join(", ") || undefined,
 				completedAt: Date.now()
 			});
+			this.diagnostics.complete(diagnosticSessionId, result.skipped ? "skipped" : "success", {
+				assertionCount: result.assertionCount,
+				rejectedAssertionCount: result.rejectedAssertionCount,
+				compiled: result.compiled,
+				traceIdCount: result.traceIds.length
+			});
 			await this.markGettingStartedMemorySuccess(
 				transcriptFile.path,
 				result.candidateFilePath
@@ -3132,6 +3541,10 @@ export default class EchoNotesPlugin extends Plugin {
 				stage: "记忆提取失败",
 				error: message,
 				completedAt: Date.now()
+			});
+			this.diagnostics.complete(diagnosticSessionId, "failed", {
+				error: message,
+				errorCategory: classifyDiagnosticError(error)
 			});
 			await this.markGettingStartedFailure("memory", transcriptFile.path, taskId);
 			try {
@@ -3184,7 +3597,17 @@ export default class EchoNotesPlugin extends Plugin {
 			isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter,
 			usage: "realtime"
 		});
+		const diagnostic = this.startDiagnosticSession("transcription");
+		this.diagnostics.record(diagnostic.id, "configuration", "realtime-transcription-configuration", {
+			provider: config.provider,
+			baseUrl: config.baseUrl,
+			model: config.model,
+			language: config.language || "auto",
+			keyPresent: Boolean(apiKey.trim()),
+			localChecks: diagnostics.items.map((item) => ({ severity: item.severity, title: item.title }))
+		});
 		if (!diagnostics.canAttemptTranscription) {
+			this.diagnostics.complete(diagnostic.id, "failed", { error: "实时转写配置不可用" });
 			new Notice(
 				`实时转写配置不可用：${diagnostics.items
 					.filter((item) => item.severity === "error")
@@ -3244,6 +3667,7 @@ export default class EchoNotesPlugin extends Plugin {
 				apiKey,
 				language: config.language,
 				createSocket: socketFactory,
+				diagnostics: this.diagnostics.getSink(diagnostic.id),
 				onProgress: (progress) => {
 					const recording = this.activeRealtimeRecording;
 					if (!recording || recording.audioFile.path !== audioFile.path) {
@@ -3286,7 +3710,9 @@ export default class EchoNotesPlugin extends Plugin {
 				streamingState,
 				stopping: false,
 				writeQueue: Promise.resolve(),
-				taskId
+				taskId,
+				diagnosticSessionId: diagnostic.id,
+				diagnosticChainId: diagnostic.chainId
 			};
 			this.activeRealtimeRecording = recording;
 			this.taskCenter.upsertTask({
@@ -3303,6 +3729,8 @@ export default class EchoNotesPlugin extends Plugin {
 				bytes: 0,
 				error: undefined,
 				traceId: undefined,
+				diagnosticSessionId: diagnostic.id,
+				diagnosticChainId: diagnostic.chainId,
 				recovery: {
 					kind: "transcription",
 					audioPath: audioFile.path,
@@ -3326,6 +3754,10 @@ export default class EchoNotesPlugin extends Plugin {
 			this.updateRealtimeUi();
 			new Notice(`已开始实时转写：${audioFile.name}`);
 		} catch (error) {
+			this.diagnostics.complete(diagnostic.id, "failed", {
+				error: getErrorMessage(error),
+				errorCategory: classifyDiagnosticError(error)
+			});
 			agentPlanSession?.abort("实时录音启动失败，已中止 AgentPlan 会话。");
 			await pcmCapture?.stop().catch(() => undefined);
 			await mediaRecorder?.stop().catch(() => undefined);
@@ -3406,10 +3838,15 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
+			this.diagnostics.complete(recording.diagnosticSessionId, "success", {
+				traceId: result.traceId,
+				utteranceCount: result.utterances?.length ?? 0
+			});
 			new Notice(`实时转写完成：${recording.audioFile.name}`);
 			this.startAnalysisTasks(
 				transcriptFile,
-				this.getDefaultAnalysisTemplatesForAnalysis()
+				this.getDefaultAnalysisTemplatesForAnalysis(),
+				recording.diagnosticChainId
 			);
 		} else {
 			if (finalAsr.status === "fulfilled") {
@@ -3455,9 +3892,16 @@ export default class EchoNotesPlugin extends Plugin {
 					run: () => this.retryTranscriptionTask(
 						recording.audioFile.path,
 						recording.sourceNote.path,
-						recording.audioFile.path
+						recording.audioFile.path,
+						recording.diagnosticChainId,
+						recording.diagnosticSessionId
 					)
 				}
+			});
+			this.diagnostics.complete(recording.diagnosticSessionId, "failed", {
+				error: getErrorMessage(error),
+				traceId: recording.streamingState.traceId,
+				errorCategory: classifyDiagnosticError(error)
 			});
 			new Notice(
 				audioSaveError
@@ -3652,7 +4096,7 @@ export default class EchoNotesPlugin extends Plugin {
 			const transcriptFile = result.transcriptFile;
 
 			if (result.analysisEligible) {
-				this.startAnalysisTasks(transcriptFile, analysisTemplates);
+				this.startAnalysisTasks(transcriptFile, analysisTemplates, result.diagnosticChainId);
 			}
 		}
 	}
@@ -3752,6 +4196,55 @@ function isChunkedAnalysisProvider(provider: unknown): provider is ChunkedAnalys
 function getPathBasename(path: string): string {
 	const normalized = path.replace(/\\/g, "/");
 	return normalized.split("/").filter(Boolean).pop() ?? path;
+}
+
+function uniquePaths(values: Array<string | undefined>): string[] {
+	return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+}
+
+function getDesktopElectronShell(): DiagnosticFolderRevealShell | null {
+	const runtime = window.activeWindow as Window & {
+		require?: (moduleName: string) => unknown;
+	};
+	if (typeof runtime.require !== "function") {
+		return null;
+	}
+	try {
+		const electron = runtime.require("electron") as { shell?: unknown };
+		const shell = electron?.shell;
+		return shell && typeof (shell as DiagnosticFolderRevealShell).showItemInFolder === "function"
+			? shell as DiagnosticFolderRevealShell
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+function getDesktopRuntimePlatform(): string {
+	const runtime = window.activeWindow as Window & {
+		process?: { platform?: unknown };
+	};
+	return typeof runtime.process?.platform === "string" ? runtime.process.platform : "unknown";
+}
+
+function classifyDiagnosticError(error: unknown): string {
+	const message = getErrorMessage(error).toLocaleLowerCase();
+	if (/timeout|超时/.test(message)) {
+		return "timeout";
+	}
+	if (/network|网络|fetch|socket|websocket|连接/.test(message)) {
+		return "network";
+	}
+	if (/401|403|鉴权|api key|密钥|unauthorized|forbidden/.test(message)) {
+		return "authentication";
+	}
+	if (/429|rate limit|频率|限流/.test(message)) {
+		return "rate-limit";
+	}
+	if (/4\d\d|5\d\d|http/.test(message)) {
+		return "http";
+	}
+	return "unknown";
 }
 
 function formatMegabytes(bytes: number): string {

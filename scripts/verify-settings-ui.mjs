@@ -595,7 +595,8 @@ async function captureTaskCenterLayouts(page) {
 					),
 					detailOpen: Boolean(center?.querySelector(".echo-notes-task-details[open]")),
 					pathValues: pathValues.map((value) => value.textContent?.trim()),
-					pathTitles: pathValues.map((value) => value.getAttribute("title"))
+					pathTitles: pathValues.map((value) => value.getAttribute("title")),
+					diagnosticExportButtonCount: center?.querySelectorAll('[aria-label="导出诊断包"]').length ?? 0
 				};
 			});
 			const context = `task-center/${viewport.name}/${theme}`;
@@ -619,6 +620,7 @@ async function captureTaskCenterLayouts(page) {
 				`${context} 状态未同时包含图标和文字：${JSON.stringify(metrics)}`
 			);
 			assert(metrics.detailOpen, `${context} 任务详情未能展开`);
+			assert(metrics.diagnosticExportButtonCount === 3, `${context} 未为每张任务卡提供导出诊断包操作`);
 			assert(
 				metrics.pathValues.every((value) => value && !value.includes("/")) &&
 				metrics.pathTitles.every((value) => value?.includes("/")),
@@ -640,6 +642,81 @@ async function captureTaskCenterLayouts(page) {
 	await taskCenter.getByRole("tab", { name: "新人指引", exact: true }).click();
 	await taskCenter.locator(".echo-notes-getting-started-guide").waitFor({ state: "visible" });
 	return results;
+}
+
+async function verifyDiagnosticPackageUi(page) {
+	const layouts = [];
+	await page.locator('[data-settings-stage="transcription"]').click();
+	await getActivePanel(page).getByRole("tab", { name: "自动化与日志", exact: true }).click();
+	const setting = await getActiveSetting(page, "保留脱敏诊断记录");
+	assert(await setting.isVisible(), "自动化与日志中未显示诊断留存设置");
+	assert(await setting.getByRole("button", { name: "导出近期诊断包", exact: true }).isVisible(), "未显示近期诊断包导出按钮");
+	assert(await setting.locator('[aria-label="清空已保存的诊断记录"]').isVisible(), "未显示清空诊断记录操作");
+
+	await setting.getByRole("button", { name: "导出近期诊断包", exact: true }).click();
+	const modal = page.locator(".modal").filter({ hasText: "导出 Echo Notes 诊断包" });
+	await modal.waitFor({ state: "visible" });
+	assert(await modal.getByText("不会自动上传", { exact: false }).isVisible(), "导出弹窗缺少本地生成说明");
+	assert(await modal.getByText("音频、API Key、鉴权头", { exact: false }).isVisible(), "导出弹窗缺少隐私确认说明");
+	const toggles = modal.locator('input[type="checkbox"]');
+	assert(await toggles.count() === 3, "导出弹窗必须提供三项独立的可选内容开关");
+	for (let index = 0; index < await toggles.count(); index += 1) {
+		assert(!(await toggles.nth(index).isChecked()), "诊断包的可选内容必须默认关闭");
+	}
+	await modal.getByRole("button", { name: "取消", exact: true }).click();
+	await modal.waitFor({ state: "hidden" });
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		await plugin.exportDiagnosticPackage({
+			includeTranscript: false,
+			includeAnalyses: false,
+			includeMemoryCandidate: false
+		});
+	}, PLUGIN_ID);
+	const completedModal = page.locator(".modal").filter({ hasText: "诊断包已生成" });
+	await completedModal.waitFor({ state: "visible" });
+	const expectedRevealLabel = process.platform === "darwin"
+		? "在访达中打开"
+		: process.platform === "win32"
+			? "在文件资源管理器中打开"
+			: "在文件管理器中打开";
+	assert(
+		await completedModal.getByRole("button", { name: expectedRevealLabel, exact: true }).isVisible(),
+		`诊断包完成弹窗未显示 ${expectedRevealLabel} 操作`
+	);
+	assert(
+		await completedModal.getByText("会在系统文件管理器中定位并选中此诊断包。", { exact: true }).isVisible(),
+		"诊断包完成弹窗未说明定位行为"
+	);
+	await completedModal.getByRole("button", { name: "关闭", exact: true }).click();
+	await completedModal.waitFor({ state: "hidden" });
+
+	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			await page.locator('[data-settings-stage="transcription"]').click();
+			await getActivePanel(page).getByRole("tab", { name: "自动化与日志", exact: true }).click();
+			const metrics = await setting.evaluate((element) => {
+				const rect = element.getBoundingClientRect();
+				const parent = element.closest(".echo-notes-settings-section-panel");
+				return {
+					settingWidth: rect.width,
+					settingOverflow: element.scrollWidth - element.clientWidth,
+					panelOverflow: parent ? parent.scrollWidth - parent.clientWidth : Number.POSITIVE_INFINITY,
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+				};
+			});
+			const context = `diagnostic-package/${viewport.name}/${theme}`;
+			assert(metrics.settingWidth > 0, `${context} 未渲染诊断留存设置`);
+			assert(metrics.settingOverflow <= 1 && metrics.panelOverflow <= 1 && metrics.documentOverflow <= 1, `${context} 出现横向溢出`);
+			const fileName = `settings-diagnostic-package-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+			layouts.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+	return layouts;
 }
 
 async function verifyRealtimeStatusIndicator(page) {
@@ -4205,6 +4282,7 @@ try {
 	const controlAlignmentLayouts = await verifySettingsControlAlignment(page);
 	const categorizedFieldLayouts = await verifyAllCategorizedFields(page);
 	const compositeControlLayouts = await verifyCompositeControlLayouts(page);
+	const diagnosticPackageLayouts = await verifyDiagnosticPackageUi(page);
 	const screenshots = await captureViewports(page);
 	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
 	await verifyMemoryInitialization(page);
@@ -4233,6 +4311,7 @@ try {
 			settingsFeedbackSemantics: true,
 			settingsApiKeyLinks: true,
 			settingsCompositeControls: true,
+			diagnosticPackageUi: true,
 			templateGrouping: true,
 			memoryInitialization: true,
 			memoryCheckpointResume: true,
@@ -4258,6 +4337,7 @@ try {
 		controlAlignmentLayouts,
 		categorizedFieldLayouts,
 		compositeControlLayouts,
+		diagnosticPackageLayouts,
 		screenshots,
 		templateLayouts,
 		memoryReviewLayouts,

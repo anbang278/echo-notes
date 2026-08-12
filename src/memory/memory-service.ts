@@ -2,6 +2,7 @@ import { App, normalizePath, TFile, TFolder } from "obsidian";
 import { extractTranscriptAnalyses, extractTranscriptText } from "../analysis/analysis-output";
 import { splitAnalysisText, type AnalysisTextChunk } from "../analysis/analysis-chunking";
 import { FileService } from "../obsidian/file-service";
+import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
 import type { EchoNotesSettings, MemoryMode } from "../settings/settings";
 import { OpenAICompatibleMemoryProvider } from "./memory-provider";
 import { extractMemoryChunkSequence } from "./memory-chunked-service";
@@ -112,6 +113,7 @@ export interface ExtractMemoryOptions {
 	analysisTemplateIds?: readonly string[];
 	onProgress?: (stage: string, progress?: MemoryExtractionProgress) => void;
 	signal?: AbortSignal;
+	diagnostics?: DiagnosticSink;
 }
 
 export interface MemoryExtractionProgress {
@@ -265,6 +267,15 @@ export class MemoryService {
 
 		const analyses = extractTranscriptAnalyses(transcriptContent, options.analysisTemplateIds);
 		const sourceText = buildMemorySourceText(transcriptText, analyses);
+		options.diagnostics?.event("configuration", "memory-configuration", {
+			provider: settings.memoryProvider,
+			baseUrl: settings.memoryBaseUrl,
+			model: settings.memoryModel,
+			keyPresent: Boolean(options.apiKey.trim()),
+			inputCharacters: sourceText.length,
+			longTextEnabled: settings.memoryLongTextEnabled,
+			analysisCount: analyses.length
+		});
 		const fingerprint = createStableFingerprint(JSON.stringify({
 			schemaVersion: MEMORY_SCHEMA_VERSION,
 			promptVersion: MEMORY_EXTRACTION_PROMPT_VERSION,
@@ -281,6 +292,7 @@ export class MemoryService {
 			? this.app.vault.getAbstractFileByPath(existingRun.candidatePath)
 			: null;
 		if (existingRun && existingCandidateFile instanceof TFile) {
+			options.diagnostics?.event("lifecycle", "memory-existing-candidate-reused");
 			throwIfMemoryTaskAborted(options.signal);
 			const existingCandidate = parseMemoryCandidate(await this.app.vault.cachedRead(existingCandidateFile));
 			const existingReview = await this.ensureMemoryReview(existingRun.candidatePath, existingCandidate);
@@ -336,6 +348,10 @@ export class MemoryService {
 			? await this.readResumableMemoryExtraction(manifest, checkpointIdentity, chunks)
 			: null;
 		if (resumable) {
+			options.diagnostics?.event("lifecycle", "memory-checkpoint-restored", {
+				completedChunks: resumable.results.length,
+				totalChunks: chunks.length
+			});
 			options.onProgress?.(
 				`已恢复 ${resumable.results.length}/${chunks.length} 个记忆提取分块`,
 				{ currentChunk: resumable.results.length, totalChunks: chunks.length }
@@ -349,12 +365,14 @@ export class MemoryService {
 			apiKey: options.apiKey
 		});
 		const createdAt = resumable?.createdAt ?? new Date().toISOString();
+		options.diagnostics?.event("lifecycle", "memory-chunks-prepared", { totalChunks: chunks.length });
 		const chunkResults = await extractMemoryChunkSequence({
 			chunks,
 			resumeResults: resumable?.results,
 			prepareResult: (result, chunk) =>
 				prepareMemoryExtractionCheckpointResult(result, chunk.text, checkpointIdentity),
 			extractChunk: async (chunk) => {
+				options.diagnostics?.event("progress", "memory-chunk-started", { chunkIndex: chunk.index, totalChunks: chunk.total });
 				const result = await provider.extract({
 					transcriptTitle: transcriptFile.basename,
 					transcriptPath: transcriptFile.path,
@@ -362,17 +380,25 @@ export class MemoryService {
 					text: chunk.text,
 					chunkIndex: chunk.index,
 					totalChunks: chunk.total,
-					copyLanguage: settings.copyLanguage
+					copyLanguage: settings.copyLanguage,
+					diagnostics: options.diagnostics
 				}, options.signal);
 				throwIfMemoryTaskAborted(options.signal);
 				const parsed = parseMemoryExtractionResponseWithDiagnostics(result.text, chunk.text);
-				return {
+				const prepared = {
 					assertions: parsed.response.assertions,
 					provider: result.provider,
 					model: result.model,
 					rejectedAssertionCount: parsed.rejectedAssertions.length,
 					traceId: result.traceId
 				};
+				options.diagnostics?.event("progress", "memory-chunk-completed", {
+					chunkIndex: chunk.index,
+					totalChunks: chunk.total,
+					traceId: result.traceId,
+					rejectedAssertions: prepared.rejectedAssertionCount
+				});
+				return prepared;
 			},
 			onChunkStart: (chunk) => {
 				throwIfMemoryTaskAborted(options.signal);
@@ -403,6 +429,10 @@ export class MemoryService {
 			(total, result) => total + (result.rejectedAssertionCount ?? 0),
 			0
 		);
+		options.diagnostics?.event("result", "memory-extraction-parsed", {
+			chunks: chunkResults.length,
+			rejectedAssertions: rejectedAssertionCount
+		});
 		for (const [index, result] of chunkResults.entries()) {
 			const chunk = chunks[index];
 			if (result.traceId && !traceIds.includes(result.traceId)) {

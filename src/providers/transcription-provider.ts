@@ -1,4 +1,5 @@
 import type { TFile } from "obsidian";
+import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
 import { getSanitizedErrorMessage, sanitizeSensitiveText } from "../security/redaction";
 
 export interface TranscriptionSegmentRange {
@@ -90,6 +91,7 @@ export interface TranscriptionInput {
 	language?: string;
 	resumeSegments?: TranscriptionSegment[];
 	onProgress?: (progress: TranscriptionProgress) => Promise<void> | void;
+	diagnostics?: DiagnosticSink;
 }
 
 export interface TranscriptionResult {

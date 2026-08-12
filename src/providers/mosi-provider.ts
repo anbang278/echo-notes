@@ -89,6 +89,17 @@ export class MosiTranscriptionProvider implements TranscriptionProvider {
 			model: this.settings.model
 		});
 		const durationSeconds = await this.probeDuration(audioBuffer, mimeType);
+		input.diagnostics?.event("configuration", "mosi-transcription-configuration", {
+			provider: this.id,
+			protocol: "multipart/form-data",
+			endpoint: buildMosiTranscriptionsUrl(this.settings.baseUrl),
+			model: this.settings.model,
+			diarization: isMosiSpeakerDiarizationModel(this.settings.model),
+			audioBytes: audioBuffer.byteLength,
+			durationSeconds,
+			preChunking: shouldPreChunkTranscription({ policy, sourceBytes: input.audioFile.stat.size, durationSeconds }),
+			resumedSegments: input.resumeSegments?.length ?? 0
+		});
 		if (input.resumeSegments && input.resumeSegments.length > 0) {
 			return this.transcribeLongAudio(audioBuffer, input, policy, true);
 		}
@@ -155,7 +166,8 @@ export class MosiTranscriptionProvider implements TranscriptionProvider {
 					const result = await this.transcribeAudioBuffer(
 						chunk.audioBuffer,
 						chunk.mimeType,
-						buildSegmentFileName(input.audioFile.name, chunk)
+						buildSegmentFileName(input.audioFile.name, chunk),
+						input
 					);
 					return {
 						text: result.text,
@@ -228,7 +240,7 @@ export class MosiTranscriptionProvider implements TranscriptionProvider {
 	): Promise<MosiSegmentResult> {
 		for (let attempt = 0; ; attempt += 1) {
 			try {
-				return await this.transcribeAudioBuffer(audioBuffer, mimeType, fileName);
+				return await this.transcribeAudioBuffer(audioBuffer, mimeType, fileName, input);
 			} catch (error) {
 				const delayMs = policy.retryDelaysMs[attempt];
 				if (
@@ -263,11 +275,20 @@ export class MosiTranscriptionProvider implements TranscriptionProvider {
 	private async transcribeAudioBuffer(
 		audioBuffer: ArrayBuffer,
 		mimeType: string,
-		fileName: string
+		fileName: string,
+		input: TranscriptionInput
 	): Promise<MosiSegmentResult> {
 		const boundary = `----EchoNotesBoundary${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
 		let response;
 		try {
+			const requestStartedAt = Date.now();
+			input.diagnostics?.event("request", "mosi-request-started", {
+				endpoint: buildMosiTranscriptionsUrl(this.settings.baseUrl),
+				model: this.settings.model,
+				diarization: isMosiSpeakerDiarizationModel(this.settings.model),
+				audioBytes: audioBuffer.byteLength,
+				upload: "multipart"
+			});
 			response = await requestUrl({
 				url: buildMosiTranscriptionsUrl(this.settings.baseUrl),
 				method: "POST",
@@ -284,11 +305,17 @@ export class MosiTranscriptionProvider implements TranscriptionProvider {
 					isMosiSpeakerDiarizationModel(this.settings.model)
 				)
 			});
+			input.diagnostics?.event("request", "mosi-request-finished", {
+				status: response.status,
+				durationMs: Date.now() - requestStartedAt
+			});
 		} catch (error) {
+			input.diagnostics?.event("result", "mosi-request-failed", { error: error instanceof Error ? error.message : String(error) });
 			throw createNetworkTranscriptionError("MOSI", error);
 		}
 
 		const traceId = readTraceId(response.headers);
+		input.diagnostics?.event("request", "mosi-trace-id", { traceId });
 		if (response.status < 200 || response.status >= 300) {
 			const message = readMosiErrorMessage(response.json) ?? response.text;
 			throw createMosiHttpError(response.status, message, traceId);

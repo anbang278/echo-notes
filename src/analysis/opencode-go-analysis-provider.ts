@@ -50,6 +50,14 @@ export class OpenCodeGoAnalysisProvider implements AnalysisProvider {
 		const messages = buildAnalysisMessages(input);
 		try {
 			const request = buildOpenCodeGoAnalysisRequest(this.settings.analysisModel, apiKey, messages);
+			const requestStartedAt = Date.now();
+			input.diagnostics?.event("request", "analysis-request-started", {
+				protocol: request.path,
+				endpoint: `${OPENCODE_GO_ANALYSIS_BASE_URL}/${request.path}`,
+				provider: this.id,
+				model: this.settings.analysisModel,
+				inputCharacters: input.transcriptText.length
+			});
 			const response = await waitForAnalysisResponse(
 				() => requestUrl({
 					url: `${OPENCODE_GO_ANALYSIS_BASE_URL}/${request.path}`,
@@ -62,6 +70,11 @@ export class OpenCodeGoAnalysisProvider implements AnalysisProvider {
 			);
 
 			const traceId = readTraceId(response.headers);
+			input.diagnostics?.event("request", "analysis-request-finished", {
+				status: response.status,
+				traceId,
+				durationMs: Date.now() - requestStartedAt
+			});
 			if (response.status < 200 || response.status >= 300) {
 				throw new AnalysisError(
 					"api_error",
@@ -83,6 +96,9 @@ export class OpenCodeGoAnalysisProvider implements AnalysisProvider {
 				raw: response.json
 			};
 		} catch (error) {
+			input.diagnostics?.event("result", "analysis-request-failed", {
+				error: error instanceof Error ? error.message : String(error)
+			});
 			if (error instanceof AnalysisError) {
 				throw error;
 			}

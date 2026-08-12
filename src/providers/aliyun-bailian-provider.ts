@@ -65,12 +65,24 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 
 		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
 		const mimeType = getAudioMimeType(input.audioFile);
+		const encodedBytes = estimateBase64DataUrlByteLength(audioBuffer.byteLength, mimeType);
+		input.diagnostics?.event("configuration", "bailian-asr-options", {
+			provider: this.id,
+			protocol: "chat-completions-base64",
+			endpoint: buildChatCompletionsUrl(this.settings.baseUrl),
+			model: this.settings.model,
+			language: this.settings.language || "auto",
+			asrOptions: buildAsrOptions(this.settings.language),
+			base64EstimatedBytes: encodedBytes,
+			base64LimitBytes: BAILIAN_MAX_BASE64_BYTES
+		});
 
-		if (estimateBase64DataUrlByteLength(audioBuffer.byteLength, mimeType) > BAILIAN_MAX_BASE64_BYTES) {
+		if (encodedBytes > BAILIAN_MAX_BASE64_BYTES) {
+			input.diagnostics?.event("lifecycle", "bailian-long-audio-segmentation-started", { encodedBytes });
 			return this.transcribeLongAudio(audioBuffer, input);
 		}
 
-		const result = await this.transcribeAudioBuffer(audioBuffer, mimeType);
+		const result = await this.transcribeAudioBuffer(audioBuffer, mimeType, input);
 
 		return {
 			text: result.text,
@@ -88,7 +100,14 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 			createChunks: () => this.createLongAudioChunks(audioBuffer),
 			transcribeChunk: async (chunk) => {
 				this.assertChunkWithinBase64Limit(chunk);
-				const result = await this.transcribeAudioBuffer(chunk.audioBuffer, chunk.mimeType);
+				input.diagnostics?.event("progress", "bailian-segment-request", {
+					segmentIndex: chunk.index,
+					totalSegments: chunk.total,
+					startSeconds: chunk.startSeconds,
+					endSeconds: chunk.endSeconds,
+					base64EstimatedBytes: estimateBase64DataUrlByteLength(chunk.audioBuffer.byteLength, chunk.mimeType)
+				});
+				const result = await this.transcribeAudioBuffer(chunk.audioBuffer, chunk.mimeType, input);
 				return {
 					text: result.text,
 					traceId: result.traceId,
@@ -137,7 +156,7 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 		);
 	}
 
-	private async transcribeAudioBuffer(audioBuffer: ArrayBuffer, mimeType: string): Promise<BailianTranscriptionResponse> {
+	private async transcribeAudioBuffer(audioBuffer: ArrayBuffer, mimeType: string, input: TranscriptionInput): Promise<BailianTranscriptionResponse> {
 		const dataUrl = `data:${mimeType};base64,${arrayBufferToBase64(audioBuffer)}`;
 		if (new TextEncoder().encode(dataUrl).byteLength > BAILIAN_MAX_BASE64_BYTES) {
 			throw new TranscriptionError(
@@ -148,6 +167,13 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 
 		let response;
 		try {
+			const requestStartedAt = Date.now();
+			input.diagnostics?.event("request", "bailian-request-started", {
+				endpoint: buildChatCompletionsUrl(this.settings.baseUrl),
+				model: this.settings.model,
+				asrOptions: buildAsrOptions(this.settings.language),
+				encodedBytes: new TextEncoder().encode(dataUrl).byteLength
+			});
 			response = await requestUrl({
 				url: buildChatCompletionsUrl(this.settings.baseUrl),
 				method: "POST",
@@ -175,11 +201,17 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 					asr_options: buildAsrOptions(this.settings.language)
 				})
 			});
+			input.diagnostics?.event("request", "bailian-request-finished", {
+				status: response.status,
+				durationMs: Date.now() - requestStartedAt
+			});
 		} catch (error) {
+			input.diagnostics?.event("result", "bailian-request-failed", { error: error instanceof Error ? error.message : String(error) });
 			throw createNetworkTranscriptionError("阿里百炼", error);
 		}
 
 		const traceId = readTraceId(response.headers);
+		input.diagnostics?.event("request", "bailian-trace-id", { traceId });
 		const data = response.json as BailianChatCompletionResponse;
 		if (response.status < 200 || response.status >= 300) {
 			const message = data?.error?.message ?? response.text;
