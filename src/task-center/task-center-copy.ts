@@ -39,6 +39,12 @@ export function getTaskNextStep(task: EchoNotesTask): string {
 	if (task.status === "running") {
 		return task.totalSegments ? `等待完成（${task.currentSegment ?? 0}/${task.totalSegments}）` : "等待完成，可在这里查看实时进度";
 	}
+	if (task.status === "paused") {
+		return "点击“继续跟踪”恢复原百炼任务；云端可能仍在执行并计费";
+	}
+	if (task.status === "cancelled") {
+		return "云端任务已取消，无需继续处理";
+	}
 	if (task.status === "failed") {
 		return task.retry ? "按“重试”重新执行；仍失败时展开技术详情" : "检查输入和设置，再回到命令重试";
 	}
@@ -134,5 +140,9 @@ function getTaskStatusLabel(status: EchoNotesTaskStatus): string {
 			return "失败";
 		case "skipped":
 			return "已跳过";
+		case "paused":
+			return "已暂停跟踪";
+		case "cancelled":
+			return "已取消";
 	}
 }

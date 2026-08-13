@@ -20,6 +20,40 @@ export interface TranscriptionUtterance {
 	text: string;
 	startSeconds?: number;
 	endSeconds?: number;
+	words?: TranscriptionWord[];
+}
+
+export interface TranscriptionWord {
+	text: string;
+	startSeconds?: number;
+	endSeconds?: number;
+}
+
+export type TranscriptionHotwordWeight = 1 | 2 | 3 | 4 | 5 | 50;
+
+export interface TranscriptionHotword {
+	id: string;
+	text: string;
+	weight: TranscriptionHotwordWeight;
+}
+
+export interface TranscriptionEnhancementSnapshot {
+	hotwords: TranscriptionHotword[];
+	contextText?: string;
+	scopeIds: string[];
+	memoryAssertionIds: string[];
+	omittedHotwordCount: number;
+	omittedContextCount: number;
+	fingerprint: string;
+}
+
+export type RemoteTranscriptionTaskStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED" | "UNKNOWN";
+
+export interface RemoteTranscriptionTaskResume {
+	taskId: string;
+	status: RemoteTranscriptionTaskStatus;
+	submittedAt: number;
+	configurationFingerprint: string;
 }
 
 export interface StreamingTranscriptionState {
@@ -83,6 +117,30 @@ export type TranscriptionProgress =
 			processedSeconds: StreamingTranscriptionState["processedSeconds"];
 			totalSeconds: StreamingTranscriptionState["totalSeconds"];
 			traceId?: StreamingTranscriptionState["traceId"];
+	  }
+	| {
+			type: "filetrans-upload-started";
+			audioBytes: number;
+			convertedToMono: boolean;
+	  }
+	| {
+			type: "filetrans-upload-completed";
+			audioBytes: number;
+	  }
+	| {
+			type: "filetrans-task-submitted";
+			task: RemoteTranscriptionTaskResume;
+			traceId?: string;
+	  }
+	| {
+			type: "filetrans-task-status";
+			task: RemoteTranscriptionTaskResume;
+			traceId?: string;
+			pollDelayMs: number;
+	  }
+	| {
+			type: "filetrans-result-downloading";
+			task: RemoteTranscriptionTaskResume;
 	  };
 
 export interface TranscriptionInput {
@@ -90,6 +148,10 @@ export interface TranscriptionInput {
 	sourceNote?: TFile;
 	language?: string;
 	resumeSegments?: TranscriptionSegment[];
+	resumeRemoteTask?: RemoteTranscriptionTaskResume;
+	enhancement?: TranscriptionEnhancementSnapshot;
+	configurationFingerprint?: string;
+	signal?: AbortSignal;
 	onProgress?: (progress: TranscriptionProgress) => Promise<void> | void;
 	diagnostics?: DiagnosticSink;
 }
@@ -102,6 +164,7 @@ export interface TranscriptionResult {
 	segments?: TranscriptionSegment[];
 	utterances?: TranscriptionUtterance[];
 	raw?: unknown;
+	configurationFingerprint?: string;
 }
 
 export interface TranscriptionProvider {

@@ -2249,6 +2249,38 @@ async function verifyTabs(page) {
 			JSON.stringify(["aliyun-bailian", "siliconflow", "mosi", "ollama", "lm-studio"]),
 		"离线转写服务商的成员或顺序不正确"
 	);
+	assert(
+		JSON.stringify(await getSettingOptionValues(page, "转写模型")) ===
+			JSON.stringify(["qwen-audio-3.0-asr-flash-filetrans", "qwen3-asr-flash"]),
+		"阿里百炼转写模型选项不完整"
+	);
+	assert(
+		await (await getActiveSetting(page, "说话人分离"))
+			.locator(".checkbox-container")
+			.evaluate((element) => element.classList.contains("is-enabled")),
+		"阿里 filetrans 说话人分离应默认开启"
+	);
+	assert(
+		(await getSettingTextValue(page, "说话人数")) === "",
+		"阿里 filetrans 说话人数应默认自动判断"
+	);
+	const memoryEnhancementSetting = await getActiveSetting(page, "使用 Echo Memory 转写增强");
+	const memoryInitialized = await page.evaluate(
+		(pluginId) => window.app.plugins.plugins[pluginId].settings.memoryInitialized,
+		PLUGIN_ID
+	);
+	assert(
+		await memoryEnhancementSetting
+			.locator(".checkbox-container")
+			.evaluate((element) => element.classList.contains("is-disabled")) === !memoryInitialized,
+		"转写增强开关的 Memory 初始化限制不正确"
+	);
+	assert(
+		!await memoryEnhancementSetting
+			.locator(".checkbox-container")
+			.evaluate((element) => element.classList.contains("is-enabled")),
+		"阿里 filetrans 的 Memory 转写增强应默认关闭"
+	);
 	await selectSettingOption(page, "服务商", "siliconflow");
 	const transcriptionAdvanced = activePanel.locator(
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
@@ -2386,11 +2418,12 @@ async function verifyTabs(page) {
 	await memoryTab.click();
 	const memorySectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
 	assert(
-		(await memorySectionTabs.allTextContents()).join("|") === "记忆工作区|模型配置|编译策略",
+		(await memorySectionTabs.allTextContents()).join("|") === "记忆工作区|模型配置|编译策略|转写增强",
 		"记忆提取二级分类不完整"
 	);
 	const memoryModelTab = memorySectionTabs.filter({ hasText: "模型配置" });
 	const memoryProcessingTab = memorySectionTabs.filter({ hasText: "编译策略" });
+	const memoryEnhancementTab = memorySectionTabs.filter({ hasText: "转写增强" });
 	await memoryModelTab.click();
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "记忆服务商")) ===
@@ -2418,6 +2451,12 @@ async function verifyTabs(page) {
 	assert(await memoryAdvanced.getAttribute("open") === null, "记忆分块高级配置应默认折叠");
 	await memoryAdvanced.locator("summary").click();
 	await activePanel.getByText("记忆分块字符数", { exact: true }).waitFor({ state: "visible" });
+	await memoryEnhancementTab.click();
+	assert(await (await getActiveSetting(page, "术语与上下文")).isVisible(), "转写增强管理入口应可见");
+	assert(
+		await (await getActiveSetting(page, "从已批准记忆生成候选")).isVisible(),
+		"转写增强候选生成入口应可见"
+	);
 
 	await analysisTab.click();
 	await setSettingToggle(page, "启用 AI 纪要分析", true);

@@ -33,6 +33,8 @@ import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
 	AGENTPLAN_ANALYSIS_MODELS,
+	ALIYUN_FILETRANS_MODEL,
+	ALIYUN_TRANSCRIPTION_MODELS,
 	MEMORY_PROVIDER_LABELS,
 	OPENCODE_GO_ANALYSIS_MODELS,
 	ANALYSIS_TEMPLATE_CATEGORIES,
@@ -75,7 +77,7 @@ type SettingsStage = "transcription" | "analysis" | "memory";
 
 type TranscriptionSettingsSection = "service" | "recording" | "output" | "automation";
 type AnalysisSettingsSection = "model" | "processing" | "templates";
-type MemorySettingsSection = "workspace" | "model" | "processing";
+type MemorySettingsSection = "workspace" | "model" | "processing" | "transcription-enhancement";
 
 export type EchoNotesSettingsDestination =
 	| "transcription-service"
@@ -134,7 +136,8 @@ const ANALYSIS_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<AnalysisSet
 const MEMORY_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<MemorySettingsSection>[] = [
 	{ id: "workspace", label: "记忆工作区" },
 	{ id: "model", label: "模型配置" },
-	{ id: "processing", label: "编译策略" }
+	{ id: "processing", label: "编译策略" },
+	{ id: "transcription-enhancement", label: "转写增强" }
 ];
 
 export class EchoNotesSettingTab extends PluginSettingTab {
@@ -174,7 +177,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					this.renderSettings(hostEl);
 					return () => {
 						if (this.settingsContainerEl === hostEl) {
-							this.closeSettingsGuide(true);
+							this.settingsSpotlight.close();
 							this.settingsContainerEl = null;
 						}
 						hostEl.remove();
@@ -792,7 +795,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 		const providerCapability = getTranscriptionProviderCapability(
 			config.provider,
-			this.getSelectedTranscriptionMode()
+			this.getSelectedTranscriptionMode(),
+			config.model
 		);
 		this.renderBasicHeading(containerEl, "连接配置");
 
@@ -870,7 +874,87 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				);
 		}
 
-		if (!isRealtime && config.provider === "siliconflow") {
+		if (!isRealtime && config.provider === "aliyun-bailian") {
+			new Setting(containerEl)
+				.setName("转写模型")
+				.setDesc("新模型使用临时对象存储与异步 HTTP；旧 qwen3-asr-flash 保留原有兼容链路。")
+				.addDropdown((dropdown) => {
+					for (const model of ALIYUN_TRANSCRIPTION_MODELS) {
+						dropdown.addOption(
+							model,
+							model === ALIYUN_FILETRANS_MODEL ? `${model}（推荐）` : `${model}（旧兼容）`
+						);
+					}
+					return dropdown.setValue(config.model).onChange(async (value) => {
+						this.plugin.settings.offlineTranscription.model = value;
+						await this.plugin.saveSettings();
+						this.refreshSettings();
+					});
+				});
+
+			if (config.model === ALIYUN_FILETRANS_MODEL) {
+				const filetrans = config.aliyunFiletrans!;
+				new Setting(containerEl)
+					.setName("说话人分离")
+					.setDesc("默认开启。整段音频会转换为 16 千赫兹单声道后提交；建议不超过 2 小时。")
+					.addToggle((toggle) => toggle
+						.setValue(filetrans.diarizationEnabled)
+						.onChange(async (value) => {
+							filetrans.diarizationEnabled = value;
+							if (!value) {
+								delete filetrans.speakerCount;
+							}
+							await this.plugin.saveSettings();
+							this.refreshSettings();
+						}));
+
+				if (filetrans.diarizationEnabled) {
+					const speakerCountSetting = new Setting(containerEl)
+						.setName("说话人数")
+						.setDesc("留空由百炼自动判断；可填写 2～100 作为参考人数，不保证一定输出该人数。");
+					speakerCountSetting.addText((text) => {
+							text.setPlaceholder("自动").setValue(filetrans.speakerCount?.toString() ?? "");
+							this.bindDeferredTextSave(
+								speakerCountSetting,
+								"aliyun-filetrans-speaker-count",
+								text.inputEl,
+								async (value) => {
+									const trimmed = value.trim();
+									if (trimmed) {
+										filetrans.speakerCount = Number(trimmed);
+									} else {
+										delete filetrans.speakerCount;
+									}
+									await this.plugin.saveSettings();
+								},
+								(value) => {
+									if (!value.trim()) return undefined;
+									const parsed = Number(value);
+									return Number.isInteger(parsed) && parsed >= 2 && parsed <= 100
+										? undefined
+										: "请输入 2～100 的整数，或留空自动判断。";
+								}
+							);
+							return text;
+						});
+				}
+
+				new Setting(containerEl)
+					.setName("使用 Echo Memory 转写增强")
+					.setDesc(
+						this.plugin.settings.memoryInitialized
+							? "默认关闭。开启后，会把已确认热词和相关已批准记忆随音频发送给百炼。"
+							: "请先初始化 Echo Memory；在你明确开启前，不会外发记忆内容。"
+					)
+					.addToggle((toggle) => toggle
+						.setValue(filetrans.memoryEnhancementEnabled)
+						.setDisabled(!this.plugin.settings.memoryInitialized)
+						.onChange(async (value) => {
+							filetrans.memoryEnhancementEnabled = value;
+							await this.plugin.saveSettings();
+						}));
+			}
+		} else if (!isRealtime && config.provider === "siliconflow") {
 			const isOfficialModel = SILICONFLOW_TRANSCRIPTION_MODELS.some((model) => model === config.model);
 			const isChoosingCustomModel = !isOfficialModel || this.customTranscriptionModelProvider === config.provider;
 			new Setting(containerEl)
@@ -1462,6 +1546,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					case "processing":
 						this.renderMemoryProcessingSettings(panelEl);
 						break;
+					case "transcription-enhancement":
+						this.renderMemoryTranscriptionEnhancementSettings(panelEl);
+						break;
 				}
 			},
 			(section) => {
@@ -1679,6 +1766,41 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				}));
 	}
 
+	private renderMemoryTranscriptionEnhancementSettings(containerEl: HTMLElement): void {
+		new Setting(containerEl)
+			.setName("术语与上下文")
+			.setDesc(
+				this.plugin.settings.memoryInitialized
+					? "统一管理原生热词、固定 Prompt 和已批准记忆上下文；待审核、拒绝或禁用内容不会进入请求。"
+					: "初始化 Echo Memory 后可创建可审计的术语与上下文文件。"
+			)
+			.addButton((button) => button
+				.setButtonText("打开管理器")
+				.setCta()
+				.setDisabled(!this.plugin.settings.memoryInitialized)
+				.onClick(() => {
+					void this.plugin.openTranscriptionEnhancementManager();
+				}));
+
+		new Setting(containerEl)
+			.setName("来源笔记作用域")
+			.setDesc("转写时自动读取 echo_notes_memory_projects、echo_notes_memory_people、echo_notes_memory_organizations；字段可为字符串或字符串数组。无来源笔记时只使用全局作用域。");
+
+		new Setting(containerEl)
+			.setName("从已批准记忆生成候选")
+			.setDesc("显式调用当前记忆模型，只读取已批准、关系解析后仍生效的记忆；生成结果保持待审核，确认前不进入转写请求。")
+			.addButton((button) => button
+				.setButtonText("生成待审核候选")
+				.setDisabled(!this.plugin.settings.memoryInitialized)
+				.onClick(() => {
+					void this.plugin.generateTranscriptionTermCandidates();
+				}));
+
+		new Setting(containerEl)
+			.setName("隐私边界")
+			.setDesc("只有在阿里百炼新模型中显式开启“使用 Echo Memory 转写增强”后，才会外发匹配且已批准的内容。诊断日志只记录 ID、纳入/省略数量和内容指纹。");
+	}
+
 	private renderAnalysisTemplateSettings(containerEl: HTMLElement, renderId: number): void {
 		new Setting(containerEl)
 			.setName("默认分析模板")
@@ -1837,10 +1959,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderProviderCapability(containerEl: HTMLElement): void {
-		const providerId = this.getSelectedTranscriptionConfig().provider;
+		const config = this.getSelectedTranscriptionConfig();
+		const providerId = config.provider;
 		const capability = getTranscriptionProviderCapability(
 			providerId,
-			this.getSelectedTranscriptionMode()
+			this.getSelectedTranscriptionMode(),
+			config.model
 		);
 		const capabilityEl = containerEl.createDiv({ cls: "echo-notes-provider-capability" });
 		const headerEl = capabilityEl.createDiv({ cls: "echo-notes-provider-capability-header" });
@@ -2268,6 +2392,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					)
 				: defaults.model;
 		this.plugin.settings.offlineTranscription.language = defaults.language;
+		if (defaults.aliyunFiletrans) {
+			this.plugin.settings.offlineTranscription.aliyunFiletrans = {
+				...defaults.aliyunFiletrans
+			};
+		} else {
+			delete this.plugin.settings.offlineTranscription.aliyunFiletrans;
+		}
 	}
 
 	private applyAnalysisProviderDefaults(provider: AnalysisProviderId): void {
@@ -2328,7 +2459,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			case "volcengine-agentplan":
 				return "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
-				return "阿里百炼 OpenAI 兼容模式基础地址。国内默认 https://dashscope.aliyuncs.com/compatible-mode/v1。";
+				return this.getSelectedTranscriptionConfig().model === ALIYUN_FILETRANS_MODEL
+					? "阿里百炼服务域名。新模型会在该域名下调用 /api/v1/uploads、异步提交与任务查询接口。"
+					: "旧 qwen3-asr-flash 的 OpenAI 兼容地址；也可只填写 https://dashscope.aliyuncs.com。";
 			case "ollama":
 				return "Ollama OpenAI 兼容基础地址，默认 http://localhost:11434/v1。需确认本地服务支持音频转写接口。";
 			case "lm-studio":
@@ -2343,9 +2476,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private getTranscriptionLanguageDescription(): string {
+		const config = this.getSelectedTranscriptionConfig();
 		const capability = getTranscriptionProviderCapability(
-			this.getSelectedTranscriptionConfig().provider,
-			this.getSelectedTranscriptionMode()
+			config.provider,
+			this.getSelectedTranscriptionMode(),
+			config.model
 		);
 		if (!capability.supportsLanguage) {
 			return "默认 ASR 转写语言。当前服务商不支持语言参数，此设置不会传给服务商，仍由模型自动识别。";
@@ -2405,6 +2540,8 @@ function getUploadModeLabel(uploadMode: string): string {
 			return "multipart";
 		case "base64-data-url":
 			return "Base64 Data URL";
+		case "temporary-oss-url":
+			return "百炼临时 OSS URL";
 		case "websocket-stream":
 			return "WebSocket 实时流";
 		default:
@@ -2418,6 +2555,8 @@ function getEndpointShapeLabel(endpointShape: string): string {
 			return "/audio/transcriptions";
 		case "chat-audio":
 			return "/chat/completions + input_audio";
+		case "dashscope-async-filetrans":
+			return "DashScope 异步 filetrans";
 		case "agentplan-asr-websocket":
 			return "AgentPlan ASR WebSocket";
 		case "mosi-transcription":

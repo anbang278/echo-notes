@@ -4,6 +4,7 @@ import { splitAnalysisText, type AnalysisTextChunk } from "../analysis/analysis-
 import { FileService } from "../obsidian/file-service";
 import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
 import type { EchoNotesSettings, MemoryMode } from "../settings/settings";
+import type { TranscriptionEnhancementSnapshot } from "../providers/transcription-provider";
 import { OpenAICompatibleMemoryProvider } from "./memory-provider";
 import { extractMemoryChunkSequence } from "./memory-chunked-service";
 import {
@@ -42,6 +43,16 @@ import {
 	type MemoryExtractionCheckpointStore
 } from "./memory-checkpoint";
 import { buildMemoryPaths, MEMORY_USER_PROFILE_TITLES, normalizeMemoryRoot } from "./memory-paths";
+import {
+	buildTranscriptionEnhancementSnapshot,
+	createTranscriptionEnhancementStore,
+	normalizeTranscriptionEnhancementScopes,
+	parseTranscriptionEnhancementDocument,
+	renderTranscriptionEnhancementDocument,
+	updateTranscriptionEnhancementDocument,
+	type TranscriptionEnhancementScope,
+	type TranscriptionEnhancementStore
+} from "./memory-transcription-enhancement";
 import {
 	MEMORY_CANDIDATE_DATA_END,
 	MEMORY_CANDIDATE_DATA_START,
@@ -230,6 +241,10 @@ export class MemoryService {
 				renderInitialMemoryAggregation(compilation, settings.copyLanguage)
 			);
 		}
+		await this.writeIfMissing(
+			paths.transcriptionEnhancement,
+			renderTranscriptionEnhancementDocument(createTranscriptionEnhancementStore())
+		);
 
 		const now = new Date().toISOString();
 		const manifest: EchoMemoryManifest = {
@@ -750,6 +765,131 @@ export class MemoryService {
 		return file;
 	}
 
+	async getTranscriptionEnhancementStore(settings: EchoNotesSettings): Promise<TranscriptionEnhancementStore> {
+		const manifest = await this.readManifest(settings);
+		const file = await this.ensureTranscriptionEnhancementFile(manifest);
+		return parseTranscriptionEnhancementDocument(await this.app.vault.cachedRead(file));
+	}
+
+	async saveTranscriptionEnhancementStore(
+		settings: EchoNotesSettings,
+		store: TranscriptionEnhancementStore
+	): Promise<TFile> {
+		const manifest = await this.readManifest(settings);
+		const file = await this.ensureTranscriptionEnhancementFile(manifest);
+		const updatedStore: TranscriptionEnhancementStore = {
+			...store,
+			updatedAt: new Date().toISOString()
+		};
+		await this.app.vault.process(file, (content) =>
+			updateTranscriptionEnhancementDocument(content, updatedStore)
+		);
+		return file;
+	}
+
+	async getTranscriptionEnhancementFile(settings: EchoNotesSettings): Promise<TFile> {
+		const manifest = await this.readManifest(settings);
+		return this.ensureTranscriptionEnhancementFile(manifest);
+	}
+
+	async buildTranscriptionEnhancement(
+		settings: EchoNotesSettings,
+		sourceNote?: TFile
+	): Promise<TranscriptionEnhancementSnapshot> {
+		const manifest = await this.readManifest(settings);
+		const storeFile = await this.ensureTranscriptionEnhancementFile(manifest);
+		const store = parseTranscriptionEnhancementDocument(await this.app.vault.cachedRead(storeFile));
+		const frontmatter = sourceNote ? this.app.metadataCache.getFileCache(sourceNote)?.frontmatter : undefined;
+		const scopes = normalizeTranscriptionEnhancementScopes({
+			projects: frontmatter?.echo_notes_memory_projects,
+			people: frontmatter?.echo_notes_memory_people,
+			organizations: frontmatter?.echo_notes_memory_organizations
+		});
+		const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
+		const relationStore = await this.readMemoryRelationStore(manifest);
+		const memoryAssertions = this.createCurrentMemoryEntries(packages, relationStore).map(({ assertion }) => ({
+			id: assertion.id,
+			text: `${assertion.predicate}：${assertion.value}`,
+			observedAt: assertion.observedAt,
+			subjectType: assertion.subjectType,
+			subjectName: assertion.subjectName
+		}));
+		return buildTranscriptionEnhancementSnapshot({ store, scopes, memoryAssertions });
+	}
+
+	async generateTranscriptionTermCandidates(
+		settings: EchoNotesSettings,
+		apiKey: string
+	): Promise<{ addedCount: number; file: TFile }> {
+		const manifest = await this.readManifest(settings);
+		const storeFile = await this.ensureTranscriptionEnhancementFile(manifest);
+		const store = parseTranscriptionEnhancementDocument(await this.app.vault.cachedRead(storeFile));
+		const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
+		const relationStore = await this.readMemoryRelationStore(manifest);
+		const currentEntries = this.createCurrentMemoryEntries(packages, relationStore);
+		if (currentEntries.length === 0) {
+			throw new Error("当前没有已批准且关系解析后仍生效的记忆，无法生成术语候选。");
+		}
+		const selectedEntries = currentEntries.slice(0, 500);
+		const approvedMemoryJson = JSON.stringify(selectedEntries.map(({ assertion }) => ({
+			assertionId: assertion.id,
+			subjectType: assertion.subjectType,
+			subjectName: assertion.subjectName,
+			predicate: assertion.predicate,
+			value: assertion.value
+		}))).slice(0, 50_000);
+		const provider = new OpenAICompatibleMemoryProvider({
+			provider: settings.memoryProvider,
+			baseUrl: settings.memoryBaseUrl,
+			model: settings.memoryModel,
+			apiKey
+		});
+		const result = await provider.suggestTranscriptionTerms({
+			approvedMemoryJson,
+			copyLanguage: settings.copyLanguage
+		});
+		const suggestions = parseTranscriptionTermSuggestions(result.text);
+		const origins = new Map(currentEntries.map((entry) => [entry.assertion.id, entry]));
+		const existingKeys = new Set(Object.values(store.terms).map((term) =>
+			getTranscriptionTermKey(term.text, term.scope)
+		));
+		const at = new Date().toISOString();
+		let addedCount = 0;
+		for (const suggestion of suggestions) {
+			const origin = origins.get(suggestion.assertionId);
+			if (!origin) {
+				continue;
+			}
+			const scope: TranscriptionEnhancementScope = origin.assertion.subjectType === "user"
+				? { type: "global" }
+				: { type: origin.assertion.subjectType, value: origin.assertion.subjectName };
+			const key = getTranscriptionTermKey(suggestion.text, scope);
+			if (existingKeys.has(key)) {
+				continue;
+			}
+			const id = `term-memory-${createStableFingerprint(`${key}|${suggestion.assertionId}`)}`;
+			store.terms[id] = {
+				id,
+				text: suggestion.text,
+				weight: 3,
+				scope,
+				source: "memory",
+				status: "pending",
+				evidence: `已批准记忆断言 ${suggestion.assertionId}`,
+				backlink: origin.reviewPath,
+				updatedAt: at,
+				history: [{ at, status: "pending", note: "用户显式命令生成的 AI 候选" }]
+			};
+			existingKeys.add(key);
+			addedCount += 1;
+		}
+		store.updatedAt = at;
+		await this.app.vault.process(storeFile, (content) =>
+			updateTranscriptionEnhancementDocument(content, store)
+		);
+		return { addedCount, file: storeFile };
+	}
+
 	async getMemoryContextPackageContext(
 		settings: EchoNotesSettings
 	): Promise<MemoryContextPackageContext> {
@@ -1048,10 +1188,26 @@ export class MemoryService {
 			paths.userDir,
 			paths.aggregationsDir,
 			paths.contextPackagesDir,
+			paths.transcriptionEnhancementDir,
 			paths.logsDir
 		]) {
 			await this.files.ensureFolder(path);
 		}
+	}
+
+	private async ensureTranscriptionEnhancementFile(manifest: EchoMemoryManifest): Promise<TFile> {
+		await this.files.ensureFolder(manifest.paths.transcriptionEnhancementDir);
+		const existing = this.app.vault.getAbstractFileByPath(manifest.paths.transcriptionEnhancement);
+		if (existing instanceof TFile) {
+			return existing;
+		}
+		if (existing) {
+			throw new Error(`术语与上下文路径已被文件夹占用：${manifest.paths.transcriptionEnhancement}`);
+		}
+		return this.app.vault.create(
+			manifest.paths.transcriptionEnhancement,
+			renderTranscriptionEnhancementDocument(createTranscriptionEnhancementStore())
+		);
 	}
 
 	private createMemoryCompilationPlan(
@@ -1535,6 +1691,38 @@ function throwIfMemoryTaskAborted(signal: AbortSignal | undefined): void {
 		return;
 	}
 	throw signal.reason instanceof Error ? signal.reason : new Error("记忆提取已取消。");
+}
+
+function parseTranscriptionTermSuggestions(value: string): Array<{ text: string; assertionId: string }> {
+	const start = value.indexOf("{");
+	const end = value.lastIndexOf("}");
+	if (start < 0 || end <= start) {
+		throw new Error("术语候选响应缺少 JSON 对象。");
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value.slice(start, end + 1));
+	} catch (error) {
+		throw new Error(`术语候选 JSON 无法读取：${getErrorMessage(error)}`, { cause: error });
+	}
+	if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { terms?: unknown }).terms)) {
+		throw new Error("术语候选响应缺少 terms 数组。");
+	}
+	return (parsed as { terms: unknown[] }).terms.slice(0, 2_000).flatMap((item) => {
+		if (!item || typeof item !== "object") {
+			return [];
+		}
+		const text = (item as { text?: unknown }).text;
+		const assertionId = (item as { assertionId?: unknown }).assertionId;
+		if (typeof text !== "string" || typeof assertionId !== "string" || !text.trim() || !assertionId.trim()) {
+			return [];
+		}
+		return [{ text: text.trim().slice(0, 100), assertionId: assertionId.trim().slice(0, 200) }];
+	});
+}
+
+function getTranscriptionTermKey(text: string, scope: TranscriptionEnhancementScope): string {
+	return `${text.trim().toLocaleLowerCase()}|${scope.type}|${scope.value?.trim().toLocaleLowerCase() ?? ""}`;
 }
 
 function getErrorMessage(error: unknown): string {

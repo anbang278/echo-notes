@@ -1,5 +1,7 @@
 export type EchoNotesTaskKind = "transcription" | "analysis" | "memory";
-export type EchoNotesTaskStatus = "running" | "success" | "failed" | "skipped";
+import type { RemoteTranscriptionTaskResume } from "../providers/transcription-provider";
+
+export type EchoNotesTaskStatus = "running" | "paused" | "cancelled" | "success" | "failed" | "skipped";
 
 export type EchoNotesTaskRecovery =
 	| {
@@ -50,18 +52,19 @@ export interface EchoNotesTask {
 	updatedAt: number;
 	completedAt?: number;
 	recovery?: EchoNotesTaskRecovery;
+	remoteTask?: RemoteTranscriptionTaskResume;
 	retry?: EchoNotesTaskRetry;
 }
 
 export type PersistedEchoNotesTask = Omit<EchoNotesTask, "retry">;
 
 export interface TaskCenterState {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	tasks: PersistedEchoNotesTask[];
 }
 
 export const EMPTY_TASK_CENTER_STATE: TaskCenterState = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	tasks: []
 };
 
@@ -70,6 +73,8 @@ const MAX_PERSISTED_ERROR_LENGTH = 4000;
 
 export interface EchoNotesTaskCounts {
 	running: number;
+	paused: number;
+	cancelled: number;
 	success: number;
 	failed: number;
 	skipped: number;
@@ -168,7 +173,7 @@ export class TaskCenterStore {
 
 	clearFinishedTasks(): void {
 		for (const [id, task] of this.tasks) {
-			if (task.status !== "running") {
+			if (task.status !== "running" && task.status !== "paused") {
 				this.tasks.delete(id);
 			}
 		}
@@ -184,7 +189,7 @@ export class TaskCenterStore {
 
 export function createTaskCenterState(tasks: readonly EchoNotesTask[]): TaskCenterState {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		tasks: [...tasks]
 			.sort((left, right) => right.updatedAt - left.updatedAt)
 			.slice(0, MAX_PERSISTED_TASKS)
@@ -207,8 +212,8 @@ export function createTaskCenterState(tasks: readonly EchoNotesTask[]): TaskCent
 }
 
 export function normalizeTaskCenterState(value: unknown): TaskCenterState {
-	if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.tasks)) {
-		return { schemaVersion: 1, tasks: [] };
+	if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2) || !Array.isArray(value.tasks)) {
+		return { schemaVersion: 2, tasks: [] };
 	}
 
 	const tasks = value.tasks
@@ -216,7 +221,7 @@ export function normalizeTaskCenterState(value: unknown): TaskCenterState {
 		.filter((task): task is PersistedEchoNotesTask => Boolean(task))
 		.sort((left, right) => right.updatedAt - left.updatedAt)
 		.slice(0, MAX_PERSISTED_TASKS);
-	return { schemaVersion: 1, tasks };
+	return { schemaVersion: 2, tasks };
 }
 
 export function markInterruptedTasks(
@@ -224,7 +229,7 @@ export function markInterruptedTasks(
 	now = Date.now()
 ): PersistedEchoNotesTask[] {
 	return tasks.map((task) => {
-		if (task.status !== "running") {
+		if (task.status !== "running" || task.remoteTask) {
 			return task;
 		}
 		return {
@@ -249,7 +254,7 @@ export function summarizeTaskCounts(tasks: EchoNotesTask[]): EchoNotesTaskCounts
 			counts.total += 1;
 			return counts;
 		},
-		{ running: 0, success: 0, failed: 0, skipped: 0, total: 0 }
+		{ running: 0, paused: 0, cancelled: 0, success: 0, failed: 0, skipped: 0, total: 0 }
 	);
 }
 
@@ -295,7 +300,7 @@ function parsePersistedTask(value: unknown): PersistedEchoNotesTask | null {
 		return null;
 	}
 	const kind = readEnum(value.kind, ["transcription", "analysis", "memory"] as const);
-	const status = readEnum(value.status, ["running", "success", "failed", "skipped"] as const);
+	const status = readEnum(value.status, ["running", "paused", "cancelled", "success", "failed", "skipped"] as const);
 	const id = readRequiredString(value.id);
 	const title = readRequiredString(value.title);
 	const stage = readRequiredString(value.stage);
@@ -332,7 +337,24 @@ function parsePersistedTask(value: unknown): PersistedEchoNotesTask | null {
 	if (recovery) {
 		task.recovery = recovery;
 	}
+	const remoteTask = parseRemoteTask(value.remoteTask);
+	if (remoteTask) {
+		task.remoteTask = remoteTask;
+	}
 	return task;
+}
+
+function parseRemoteTask(value: unknown): RemoteTranscriptionTaskResume | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const taskId = readRequiredString(value.taskId);
+	const status = readEnum(value.status, ["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"] as const);
+	const submittedAt = readTimestamp(value.submittedAt);
+	const configurationFingerprint = readRequiredString(value.configurationFingerprint);
+	return taskId && status && submittedAt !== null && configurationFingerprint
+		? { taskId, status, submittedAt, configurationFingerprint }
+		: undefined;
 }
 
 function parseRecovery(value: unknown): EchoNotesTaskRecovery | undefined {

@@ -12,7 +12,7 @@
 | Echo Memory | 初始化、候选包、审核 sidecar、记忆关系、会议页、画像、跨记录聚合与上下文包编译 | `src/memory/` |
 | Obsidian IO | 文件、编辑器、链接操作 | `src/obsidian/` |
 | 安全与隐私 | SecretStorage、脱敏、上传预览、自动化排除 | `src/security/`、`src/privacy/` |
-| 任务中心 | 任务状态、恢复上下文、展示与重试入口 | `src/task-center/` |
+| 任务中心 | 任务状态、恢复上下文、百炼远端任务暂停/取消语义、展示与重试入口 | `src/task-center/` |
 
 ## 数据与状态边界
 
@@ -26,11 +26,12 @@
 - Echo Memory 按断言逐条严格校验 `evidenceQuote`：混合响应只保留能在当前分块逐字定位的断言，并在检查点、候选包、Task Center 摘要和运行日志记录拒绝数量；若非空响应中的断言全部无法定位，任务仍失败。被拒绝内容和 Provider 原始响应不持久化。
 - 用户确认的已批准记忆关系保存在 `99 系统/echo-memory-relations.json`（英文目录为 `99 System`）；记录冲突、补充、替代或作废语义、两端候选/审核/transcript 快照及不可追加覆盖的确认和撤销历史。
 - Echo Memory 会议页、候选包、同目录 `.review.md` 审核 sidecar、人物/组织/项目/User 画像、`05 聚合` 下的项目/人物/时间线视图、`06 上下文包` 和运行日志。
+- Echo Memory 的 `07 转写增强/术语与上下文.md` 同时提供可读审计表格和插件托管 JSON。转写请求只消费已批准、作用域匹配且完成关系解析的术语与记忆快照；诊断只保存 ID、数量和内容指纹。
 - 候选包内的插件托管 JSON 保留模型提取结果；审核 sidecar 记录状态、修正值和事件历史；关系存储记录跨候选的人工判断。三者共同构成编译真源，画像与跨记录聚合都是可重建派生结果。
 
 ### 插件设置与 SecretStorage
 
-- `data.json` 保存设置和最多 100 条 Task Center 摘要。任务摘要只包含类型、路径、Provider、模型、进度、脱敏错误、时间和恢复上下文，不包含音频、转写正文、模型响应或 API Key。
+- `data.json` 保存设置和最多 100 条 Task Center 摘要。百炼异步摘要可额外保存 `task_id`、提交时间、远端状态和无密钥配置指纹；不保存音频、转写正文、模型响应、临时 OSS 凭证、签名 URL 或 API Key。
 - API Key 按用途和 Provider 分别保存在 Obsidian `SecretStorage`。
 - 插件重启时，持久化为 `running` 的任务会转成明确的中断失败状态，并按恢复上下文重新绑定重试动作。
 

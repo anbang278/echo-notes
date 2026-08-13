@@ -44,6 +44,8 @@ export interface MemoryPaths {
 	peopleAggregation: string;
 	timelineAggregation: string;
 	contextPackagesDir: string;
+	transcriptionEnhancementDir: string;
+	transcriptionEnhancement: string;
 	systemDir: string;
 	manifest: string;
 	logsDir: string;

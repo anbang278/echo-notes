@@ -7,6 +7,7 @@ import {
 	Notice,
 	Platform,
 	Plugin,
+	requestUrl,
 	Setting,
 	setIcon,
 	TFile,
@@ -132,17 +133,25 @@ import { MemoryInitializationModal } from "./memory/memory-initialization-modal"
 import { MemoryContextModal } from "./memory/memory-context-modal";
 import { MemoryRelationModal } from "./memory/memory-relation-modal";
 import { MemoryReviewModal } from "./memory/memory-review-modal";
+import { TranscriptionEnhancementManagerModal } from "./memory/memory-transcription-enhancement-modal";
 import { MemoryService } from "./memory/memory-service";
 import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
 import { parseMemoryCandidate } from "./memory/memory-output";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
+import {
+	cancelAliyunFiletransTask,
+	queryAliyunFiletransTask,
+	type AliyunHttpRequester
+} from "./providers/aliyun-filetrans-client";
 import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
 import {
 	shouldWriteFailedTranscript,
 	TranscriptionError,
 	type StreamingTranscriptionState,
+	type TranscriptionEnhancementSnapshot,
 	type TranscriptionProgress,
+	type RemoteTranscriptionTaskResume,
 	type TranscriptionSegment
 } from "./providers/transcription-provider";
 import {
@@ -152,6 +161,7 @@ import {
 import { normalizeAgentPlanError } from "./providers/volcengine-agentplan-client";
 import { loadAgentPlanSocketFactory } from "./providers/volcengine-agentplan-socket";
 import {
+	ALIYUN_FILETRANS_MODEL,
 	cloneHotkey,
 	formatHotkey,
 	getSelectedTranscriptionConfig,
@@ -223,6 +233,8 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"extract-memory-from-current-transcript",
 	"review-current-memory-candidate",
 	"manage-current-memory-relations",
+	"manage-transcription-enhancement",
+	"generate-transcription-term-candidates",
 	"open-echo-memory-home",
 	"open-echo-memory-timeline",
 	"create-personal-agent-context-package",
@@ -243,6 +255,7 @@ interface ProcessAudioOptions {
 	forceTranscription?: boolean;
 	diagnosticChainId?: string;
 	diagnosticRetryOfSessionId?: string;
+	resumeRemoteTask?: RemoteTranscriptionTaskResume;
 }
 
 interface InternalPlugin {
@@ -319,6 +332,18 @@ interface ActiveMemoryTask {
 	diagnosticSessionId: string;
 }
 
+type TranscriptionSuspensionKind = "paused" | "cancelled" | "unloading";
+
+class TranscriptionSuspendedError extends Error {
+	readonly kind: TranscriptionSuspensionKind;
+
+	constructor(kind: TranscriptionSuspensionKind, message: string) {
+		super(message);
+		this.name = "TranscriptionSuspendedError";
+		this.kind = kind;
+	}
+}
+
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = normalizeEchoNotesSettings(undefined);
 
@@ -332,6 +357,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private taskCenter = new TaskCenterStore();
 	private editorService = new EditorService();
 	private processingAudio = new Map<string, Promise<ProcessAudioResult | null>>();
+	private activeTranscriptionControllers = new Map<string, AbortController>();
 	private processingAnalyses = new Set<string>();
 	private activeMemoryTasks = new Map<string, ActiveMemoryTask>();
 	private mutatingFiles = new Set<string>();
@@ -393,6 +419,7 @@ export default class EchoNotesPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			this.registerGettingStartedFileEvents();
 			void (async () => {
+				await this.resumeRestoredRemoteTranscriptionTasks();
 				try {
 					await this.reconcileGettingStartedFiles();
 				} catch (error) {
@@ -433,6 +460,10 @@ export default class EchoNotesPlugin extends Plugin {
 			this.activeRealtimeRecording.agentPlanSession.abort("Echo Notes 插件已停用。");
 			void this.stopRealtimeTranscription();
 		}
+		for (const controller of this.activeTranscriptionControllers.values()) {
+			controller.abort(new TranscriptionSuspendedError("unloading", "Echo Notes 插件已停用，本地轮询已停止。"));
+		}
+		this.activeTranscriptionControllers.clear();
 		for (const task of this.activeMemoryTasks.values()) {
 			task.controller.abort(new Error("Echo Notes 插件已停用。"));
 		}
@@ -669,6 +700,27 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			return;
 		}
+		if (progress.type === "filetrans-upload-started" || progress.type === "filetrans-upload-completed") {
+			this.diagnostics.record(sessionId, "lifecycle", progress.type, {
+				audioBytes: progress.audioBytes,
+				convertedToMono: progress.type === "filetrans-upload-started" ? progress.convertedToMono : undefined
+			});
+			return;
+		}
+		if (progress.type === "filetrans-task-submitted" || progress.type === "filetrans-task-status") {
+			this.diagnostics.record(sessionId, "progress", progress.type, {
+				remoteStatus: progress.task.status,
+				traceId: progress.traceId,
+				pollDelayMs: progress.type === "filetrans-task-status" ? progress.pollDelayMs : undefined
+			});
+			return;
+		}
+		if (progress.type === "filetrans-result-downloading") {
+			this.diagnostics.record(sessionId, "lifecycle", progress.type, {
+				remoteStatus: progress.task.status
+			});
+			return;
+		}
 		if (progress.type === "long-audio-preparing") {
 			this.diagnostics.record(sessionId, "lifecycle", "long-audio-preparing", {
 				completedSegments: progress.segments.length
@@ -816,8 +868,142 @@ export default class EchoNotesPlugin extends Plugin {
 		return this.taskCenter.retryTask(taskId);
 	}
 
+	async cancelTaskCenterRemoteTask(taskId: string): Promise<boolean> {
+		const task = this.taskCenter.getTask(taskId);
+		if (task?.kind !== "transcription" || task.status !== "running" || task.remoteTask?.status !== "PENDING") {
+			new Notice("只有仍处于待处理状态的百炼云端任务可以取消。");
+			return false;
+		}
+		const apiKey = this.getApiKey("aliyun-bailian").trim();
+		if (!apiKey) {
+			new Notice("无法取消云端任务：阿里百炼 API Key 当前不可用。");
+			return false;
+		}
+		const requester = requestUrl as unknown as AliyunHttpRequester;
+		try {
+			await cancelAliyunFiletransTask(
+				requester,
+				this.settings.offlineTranscription.baseUrl,
+				apiKey,
+				task.remoteTask
+			);
+			this.taskCenter.updateTask(taskId, {
+				status: "cancelled",
+				stage: "云端任务已取消",
+				error: undefined,
+				completedAt: Date.now()
+			});
+			this.activeTranscriptionControllers.get(taskId)?.abort(
+				new TranscriptionSuspendedError("cancelled", "百炼云端任务已取消。")
+			);
+			new Notice("百炼云端任务已确认取消。");
+			return true;
+		} catch (error) {
+			try {
+				const refreshed = await queryAliyunFiletransTask(
+					requester,
+					this.settings.offlineTranscription.baseUrl,
+					apiKey,
+					task.remoteTask
+				);
+				this.taskCenter.updateTask(taskId, {
+					remoteTask: refreshed.task,
+					stage: refreshed.task.status === "RUNNING"
+						? "任务已进入识别阶段，不能取消；可停止本地等待"
+						: `云端状态已刷新：${refreshed.task.status}`
+				});
+				if (refreshed.task.status === "RUNNING") {
+					new Notice("任务已进入运行状态，百炼不再允许取消；云端仍会执行并可能计费。可改为停止本地等待。");
+					return false;
+				}
+			} catch (refreshError) {
+				this.log("取消失败后的百炼任务状态刷新失败", refreshError);
+			}
+			new Notice(`取消云端任务失败：${getErrorMessage(error)}`);
+			return false;
+		}
+	}
+
+	pauseTaskCenterRemoteTask(taskId: string): boolean {
+		const task = this.taskCenter.getTask(taskId);
+		if (task?.kind !== "transcription" || task.status !== "running" || task.remoteTask?.status !== "RUNNING") {
+			new Notice("当前任务不处于可停止本地等待的运行状态。");
+			return false;
+		}
+		this.taskCenter.updateTask(taskId, {
+			status: "paused",
+			stage: "已停止本地等待；云端仍在执行并可能计费",
+			completedAt: undefined,
+			retry: this.createTaskRecoveryRetry(task)
+		});
+		this.activeTranscriptionControllers.get(taskId)?.abort(
+			new TranscriptionSuspendedError("paused", "用户已停止本地等待；云端任务仍会执行。")
+		);
+		new Notice("已停止本地等待。百炼云端任务仍会执行并可能计费，可稍后继续跟踪。");
+		return true;
+	}
+
+	async confirmAndPauseTaskCenterRemoteTask(taskId: string): Promise<boolean> {
+		const confirmed = await this.confirmAction(
+			"停止本地等待",
+			"停止后，百炼云端仍会继续执行并可能计费。你可以稍后使用原 task_id 继续跟踪。",
+			"停止本地等待"
+		);
+		return confirmed ? this.pauseTaskCenterRemoteTask(taskId) : false;
+	}
+
 	clearFinishedTaskCenterTasks(): void {
 		this.taskCenter.clearFinishedTasks();
+	}
+
+	private async resumeRestoredRemoteTranscriptionTasks(): Promise<void> {
+		for (const task of this.taskCenter.getTasks()) {
+			if (
+				task.status === "running" &&
+				task.remoteTask &&
+				task.recovery?.kind === "transcription"
+			) {
+				void this.resumeRemoteTranscriptionTask(task.recovery, task.remoteTask);
+			}
+		}
+	}
+
+	private async resumeRemoteTranscriptionTask(
+		recovery: Extract<EchoNotesTaskRecovery, { kind: "transcription" }>,
+		remoteTask: RemoteTranscriptionTaskResume
+	): Promise<void> {
+		if (
+			this.settings.offlineTranscription.provider !== "aliyun-bailian" ||
+			this.settings.offlineTranscription.model !== ALIYUN_FILETRANS_MODEL
+		) {
+			const taskId = createTaskId("transcription", recovery.audioPath);
+			this.taskCenter.updateTask(taskId, {
+				status: "paused",
+				stage: "当前转写配置不是百炼异步模型，无法继续跟踪",
+				error: "请把阿里百炼模型切回 qwen-audio-3.0-asr-flash-filetrans 后，再点击“继续跟踪”。",
+				retry: {
+					label: "继续跟踪",
+					run: () => this.resumeRemoteTranscriptionTask(recovery, remoteTask)
+				}
+			});
+			return;
+		}
+		const inFlight = this.processingAudio.get(recovery.audioPath);
+		if (inFlight) {
+			await inFlight.catch(() => null);
+		}
+		const current = this.taskCenter.getTask(createTaskId("transcription", recovery.audioPath));
+		if (current?.status === "cancelled") {
+			return;
+		}
+		await this.retryTranscriptionTask(
+			recovery.audioPath,
+			recovery.sourcePath,
+			recovery.audioLinkPath,
+			current?.diagnosticChainId,
+			current?.diagnosticSessionId,
+			remoteTask
+		);
 	}
 
 	private getGettingStartedHotkeys(): GettingStartedHotkeys {
@@ -911,7 +1097,12 @@ export default class EchoNotesPlugin extends Plugin {
 		return {
 			id: task.id,
 			kind: task.kind,
-			status: task.status === "skipped" ? "success" : task.status,
+			status:
+				task.status === "skipped" || task.status === "cancelled"
+					? "success"
+					: task.status === "paused"
+						? "failed"
+						: task.status,
 			stage: task.stage,
 			error: task.error,
 			canRetry: Boolean(task.retry)
@@ -1113,17 +1304,25 @@ export default class EchoNotesPlugin extends Plugin {
 	private restoreTaskCenter(): void {
 		const restoredTasks = markInterruptedTasks(this.settings.taskCenterState.tasks).map((task): EchoNotesTask => ({
 			...task,
-			retry: this.createTaskRecoveryRetry(task.recovery)
+			retry: this.createTaskRecoveryRetry(task)
 		}));
 		this.taskCenter.restoreTasks(restoredTasks);
 	}
 
-	private createTaskRecoveryRetry(recovery: EchoNotesTaskRecovery | undefined): EchoNotesTaskRetry | undefined {
+	private createTaskRecoveryRetry(task: Pick<EchoNotesTask, "status" | "remoteTask" | "recovery">): EchoNotesTaskRetry | undefined {
+		const recovery = task.recovery;
 		if (!recovery) {
 			return undefined;
 		}
 		switch (recovery.kind) {
 			case "transcription":
+				if (task.remoteTask) {
+					return {
+						label: "继续跟踪",
+						run: () => this.resumeRemoteTranscriptionTask(recovery, task.remoteTask!),
+						allowWhileRunning: false
+					};
+				}
 				return {
 					label: "重试转写",
 					run: () => this.retryTranscriptionTask(
@@ -1830,6 +2029,59 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	async openTranscriptionEnhancementManager(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		try {
+			const store = await this.memoryService.getTranscriptionEnhancementStore(this.settings);
+			new TranscriptionEnhancementManagerModal(this.app, {
+				store,
+				onSave: async (updated) => {
+					await this.memoryService.saveTranscriptionEnhancementStore(this.settings, updated);
+				},
+				onOpenFile: async () => {
+					const file = await this.memoryService.getTranscriptionEnhancementFile(this.settings);
+					await this.app.workspace.getLeaf(false).openFile(file);
+				}
+			}).open();
+		} catch (error) {
+			new Notice(`无法打开术语与转写增强：${getErrorMessage(error)}`);
+		}
+	}
+
+	async generateTranscriptionTermCandidates(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const confirmed = await this.confirmAction(
+			"生成术语候选",
+			"此操作会把已批准、关系解析后仍生效的记忆发送给当前记忆模型，用于生成待审核术语候选。候选确认前不会进入转写请求。",
+			"确认生成"
+		);
+		if (!confirmed) {
+			return;
+		}
+		try {
+			const result = await this.memoryService.generateTranscriptionTermCandidates(
+				this.settings,
+				this.getMemoryApiKey()
+			);
+			new Notice(`已生成 ${result.addedCount} 个待审核术语候选。`);
+			await this.openTranscriptionEnhancementManager();
+		} catch (error) {
+			new Notice(`生成术语候选失败：${getErrorMessage(error)}`);
+		}
+	}
+
+	private confirmAction(title: string, message: string, confirmLabel: string): Promise<boolean> {
+		return new Promise((resolve) => {
+			new EchoNotesConfirmModal(this.app, title, message, confirmLabel, resolve).open();
+		});
+	}
+
 	async openPersonalAgentContextPackage(): Promise<void> {
 		if (!this.settings.memoryInitialized) {
 			new Notice("请先初始化 Echo Memory。");
@@ -2126,6 +2378,22 @@ export default class EchoNotesPlugin extends Plugin {
 			name: "管理当前记忆关系",
 			callback: () => {
 				void this.manageCurrentMemoryRelations();
+			}
+		});
+
+		this.addCommand({
+			id: "manage-transcription-enhancement",
+			name: "管理术语与转写增强",
+			callback: () => {
+				void this.openTranscriptionEnhancementManager();
+			}
+		});
+
+		this.addCommand({
+			id: "generate-transcription-term-candidates",
+			name: "从已批准记忆生成待审核术语候选",
+			callback: () => {
+				void this.generateTranscriptionTermCandidates();
 			}
 		});
 
@@ -2524,7 +2792,17 @@ export default class EchoNotesPlugin extends Plugin {
 			audioExtension: audioFile.extension,
 			audioBytes: audioFile.stat.size
 		});
-		const checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
+		let checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
+		const isAliyunFiletrans =
+			transcriptionConfig.provider === "aliyun-bailian" && transcriptionConfig.model === ALIYUN_FILETRANS_MODEL;
+		const usesMemoryEnhancement = isAliyunFiletrans && !options.resumeRemoteTask &&
+			Boolean(transcriptionConfig.aliyunFiletrans?.memoryEnhancementEnabled);
+		if (options.resumeRemoteTask) {
+			checkpointIdentity = {
+				...checkpointIdentity,
+				configurationFingerprint: options.resumeRemoteTask.configurationFingerprint
+			};
+		}
 		let notifiedTranscriptPath: string | null = null;
 		const notifyTranscriptFileReady = async (transcriptFile: TFile): Promise<void> => {
 			if (notifiedTranscriptPath === transcriptFile.path) {
@@ -2548,11 +2826,12 @@ export default class EchoNotesPlugin extends Plugin {
 		const transcriptionTaskId = createTaskId("transcription", audioFile.path);
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
 		const reusableTranscript =
-			existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription
+			existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription && !usesMemoryEnhancement
 				? await this.transcriptService.getReusableTranscriptFile(
 						audioFile,
 						transcriptionConfig.provider,
-						transcriptionConfig.model
+						transcriptionConfig.model,
+						isAliyunFiletrans ? checkpointIdentity.configurationFingerprint : undefined
 					)
 				: null;
 		if (reusableTranscript) {
@@ -2592,7 +2871,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 		}
 
-		if (this.settings.confirmBeforeTranscription) {
+		if (this.settings.confirmBeforeTranscription && !options.resumeRemoteTask) {
 			if (options.allowUploadConfirmation === false) {
 				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "upload-confirmation-required" });
 				new Notice("已跳过自动转写：当前开启了手动转写前确认上传。");
@@ -2632,14 +2911,27 @@ export default class EchoNotesPlugin extends Plugin {
 				audioLinkPath: options.audioLinkPath
 			},
 			completedAt: undefined,
-			retry: {
-				label: "重试转写",
-				run: () => this.retryTranscriptionTask(audioFile.path, sourceNote?.path, options.audioLinkPath)
-			}
+			retry: options.resumeRemoteTask
+				? {
+					label: "继续跟踪",
+					run: () => this.resumeRemoteTranscriptionTask({
+						kind: "transcription",
+						audioPath: audioFile.path,
+						sourcePath: sourceNote?.path,
+						audioLinkPath: options.audioLinkPath
+					}, options.resumeRemoteTask!)
+				}
+				: {
+					label: "重试转写",
+					run: () => this.retryTranscriptionTask(audioFile.path, sourceNote?.path, options.audioLinkPath)
+				}
 		});
+		const transcriptionController = new AbortController();
+		this.activeTranscriptionControllers.set(transcriptionTaskId, transcriptionController);
 		await this.markGettingStartedRunning("transcription", audioFile.path);
 		let completedSegments: TranscriptionSegment[] = [];
 		let streamingState: StreamingTranscriptionState | undefined;
+		let enhancement: TranscriptionEnhancementSnapshot | undefined;
 		let diagnosticsPassed = false;
 		let longAudioNotice: Notice | null = null;
 		const updateLongAudioNotice = (message: string): void => {
@@ -2654,6 +2946,27 @@ export default class EchoNotesPlugin extends Plugin {
 			longAudioNotice = null;
 		};
 		try {
+			if (usesMemoryEnhancement) {
+				if (!this.settings.memoryInitialized) {
+					throw new Error("当前已开启 Echo Memory 转写增强，但 Echo Memory 尚未初始化。请先初始化或关闭该开关。");
+				}
+				enhancement = await this.memoryService.buildTranscriptionEnhancement(this.settings, sourceNote);
+				checkpointIdentity = createTranscriptionCheckpointIdentity(
+					audioFile,
+					transcriptionConfig,
+					enhancement.fingerprint
+				);
+				this.diagnostics.record(diagnostic.id, "configuration", "transcription-enhancement-snapshot", {
+					hotwordIds: enhancement.hotwords.map((item) => item.id),
+					memoryAssertionIds: enhancement.memoryAssertionIds,
+					hotwordCount: enhancement.hotwords.length,
+					memoryAssertionCount: enhancement.memoryAssertionIds.length,
+					omittedHotwordCount: enhancement.omittedHotwordCount,
+					omittedContextCount: enhancement.omittedContextCount,
+					scopeCount: enhancement.scopeIds.length,
+					fingerprint: enhancement.fingerprint
+				});
+			}
 			const diagnostics = diagnoseTranscriptionProviderSettings(
 				transcriptionConfig,
 				this.getApiKey(transcriptionConfig.provider),
@@ -2727,6 +3040,38 @@ export default class EchoNotesPlugin extends Plugin {
 						stage: `正在转写 ${formatSegmentTimestamp(progress.processedSeconds)} / ${formatSegmentTimestamp(progress.totalSeconds)}${stableUtteranceCount > 0 ? `，已写入 ${stableUtteranceCount} 个确定分句` : ""}`,
 						outputPath: transcriptFile.path,
 						traceId: progress.traceId
+					});
+					return;
+				}
+
+				if (progress.type === "filetrans-upload-started") {
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: progress.convertedToMono
+							? `正在上传 ${formatMegabytes(progress.audioBytes)} MB 单声道音频到百炼临时存储`
+							: `正在上传 ${formatMegabytes(progress.audioBytes)} MB 音频到百炼临时存储`,
+						outputPath: initialTranscriptFile.path
+					});
+					return;
+				}
+				if (progress.type === "filetrans-upload-completed") {
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: "临时上传完成，正在提交百炼异步任务"
+					});
+					return;
+				}
+				if (progress.type === "filetrans-task-submitted" || progress.type === "filetrans-task-status") {
+					const waitingText = progress.task.status === "PENDING" ? "排队中" : "识别中";
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: `百炼异步任务${waitingText}`,
+						remoteTask: progress.task,
+						traceId: progress.traceId
+					});
+					return;
+				}
+				if (progress.type === "filetrans-result-downloading") {
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: "识别完成，正在下载转写结果",
+						remoteTask: progress.task
 					});
 					return;
 				}
@@ -2858,9 +3203,14 @@ export default class EchoNotesPlugin extends Plugin {
 				sourceNote,
 				language: transcriptionConfig.language,
 				resumeSegments: completedSegments,
+				enhancement,
+				configurationFingerprint: checkpointIdentity.configurationFingerprint,
+				resumeRemoteTask: options.resumeRemoteTask,
+				signal: transcriptionController.signal,
 				onProgress: handleProgress,
 				diagnostics: diagnosticSink
 			});
+			result.configurationFingerprint = checkpointIdentity.configurationFingerprint;
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 			await notifyTranscriptFileReady(transcriptFile);
 			hideLongAudioNotice();
@@ -2876,6 +3226,7 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
+			this.activeTranscriptionControllers.delete(transcriptionTaskId);
 			this.diagnostics.complete(diagnostic.id, "success", {
 				traceId: result.traceId,
 				segmentCount: result.segments?.length ?? 0
@@ -2885,6 +3236,14 @@ export default class EchoNotesPlugin extends Plugin {
 			return { transcriptFile, analysisEligible: true, diagnosticChainId: diagnostic.chainId };
 		} catch (error) {
 			hideLongAudioNotice();
+			this.activeTranscriptionControllers.delete(transcriptionTaskId);
+			if (error instanceof TranscriptionSuspendedError) {
+				this.diagnostics.complete(diagnostic.id, "skipped", {
+					reason: error.kind,
+					remoteTaskPresent: Boolean(this.taskCenter.getTask(transcriptionTaskId)?.remoteTask)
+				});
+				return null;
+			}
 			const message = getErrorMessage(error);
 			const traceId = error instanceof TranscriptionError ? error.traceId ?? streamingState?.traceId : streamingState?.traceId;
 			this.taskCenter.updateTask(transcriptionTaskId, {
@@ -2938,7 +3297,8 @@ export default class EchoNotesPlugin extends Plugin {
 		sourcePath: string | undefined,
 		audioLinkPath: string | undefined,
 		diagnosticChainId?: string,
-		diagnosticRetryOfSessionId?: string
+		diagnosticRetryOfSessionId?: string,
+		resumeRemoteTask?: RemoteTranscriptionTaskResume
 	): Promise<void> {
 		const audioFile = this.app.vault.getAbstractFileByPath(audioPath);
 		if (!(audioFile instanceof TFile) || !isSupportedAudioFile(audioFile)) {
@@ -2965,6 +3325,7 @@ export default class EchoNotesPlugin extends Plugin {
 			allowUploadConfirmation: true,
 			audioLinkPath,
 			forceTranscription: true,
+			resumeRemoteTask,
 			diagnosticChainId: diagnosticChainId ?? previousTask?.diagnosticChainId,
 			diagnosticRetryOfSessionId: diagnosticRetryOfSessionId ?? previousTask?.diagnosticSessionId,
 			onTranscriptFileReady: async (transcriptFile) => {
@@ -4344,6 +4705,54 @@ class TranscriptionUploadConfirmModal extends Modal {
 			return;
 		}
 
+		this.resolved = true;
+		this.onResolved(confirmed);
+		this.close();
+	}
+}
+
+class EchoNotesConfirmModal extends Modal {
+	private readonly message: string;
+	private readonly confirmLabel: string;
+	private readonly onResolved: (confirmed: boolean) => void;
+	private resolved = false;
+
+	constructor(
+		app: App,
+		title: string,
+		message: string,
+		confirmLabel: string,
+		onResolved: (confirmed: boolean) => void
+	) {
+		super(app);
+		this.setTitle(title);
+		this.message = message;
+		this.confirmLabel = confirmLabel;
+		this.onResolved = onResolved;
+	}
+
+	onOpen(): void {
+		this.contentEl.createEl("p", { text: this.message });
+		new Setting(this.contentEl)
+			.addButton((button) => button.setButtonText("取消").onClick(() => this.resolve(false)))
+			.addButton((button) => button
+				.setButtonText(this.confirmLabel)
+				.setCta()
+				.onClick(() => this.resolve(true)));
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+		if (!this.resolved) {
+			this.resolved = true;
+			this.onResolved(false);
+		}
+	}
+
+	private resolve(confirmed: boolean): void {
+		if (this.resolved) {
+			return;
+		}
 		this.resolved = true;
 		this.onResolved(confirmed);
 		this.close();

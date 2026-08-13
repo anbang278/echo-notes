@@ -79,6 +79,9 @@ export function renderTranscriptTemplate(input: TranscriptTemplateInput): string
 		`source_note: "${escapeYaml(sourceNoteLink)}"`,
 		`provider: "${escapeYaml(input.result.provider)}"`,
 		`model: "${escapeYaml(input.result.model)}"`,
+		...(input.result.configurationFingerprint
+			? [`transcription_configuration_fingerprint: "${escapeYaml(input.result.configurationFingerprint)}"`]
+			: []),
 		`transcribed_at: ${new Date().toISOString()}`,
 		"status: done",
 		`trace_id: "${escapeYaml(input.result.traceId ?? "")}"`,

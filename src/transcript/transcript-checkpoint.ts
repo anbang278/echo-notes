@@ -27,23 +27,35 @@ export interface TranscriptionCheckpoint extends TranscriptionCheckpointIdentity
 
 export function createTranscriptionCheckpointIdentity(
 	audioFile: TFile,
-	config: TranscriptionConfig
+	config: TranscriptionConfig,
+	enhancementFingerprint?: string
 ): TranscriptionCheckpointIdentity {
 	return {
 		sourceAudio: createSourceAudioMetadata(audioFile),
 		provider: config.provider,
 		model: config.model,
-		configurationFingerprint: createTranscriptionConfigurationFingerprint(config)
+		configurationFingerprint: createTranscriptionConfigurationFingerprint(config, enhancementFingerprint)
 	};
 }
 
-export function createTranscriptionConfigurationFingerprint(config: TranscriptionConfig): string {
+export function createTranscriptionConfigurationFingerprint(
+	config: TranscriptionConfig,
+	enhancementFingerprint?: string
+): string {
 	return createStableFingerprint(JSON.stringify({
 		segmentationVersion: TRANSCRIPTION_SEGMENTATION_VERSION,
 		provider: config.provider,
 		baseUrl: config.baseUrl.trim().replace(/\/+$/, ""),
 		model: config.model.trim(),
-		language: config.language.trim()
+		language: config.language.trim(),
+		aliyunFiletrans: config.aliyunFiletrans
+			? {
+				diarizationEnabled: config.aliyunFiletrans.diarizationEnabled,
+				speakerCount: config.aliyunFiletrans.speakerCount,
+				memoryEnhancementEnabled: config.aliyunFiletrans.memoryEnhancementEnabled,
+				enhancementFingerprint
+			}
+			: undefined
 	}));
 }
 
@@ -214,7 +226,10 @@ function isContinuousSegmentPrefix(segments: readonly TranscriptionSegment[]): b
 function cloneSegment(segment: TranscriptionSegment): TranscriptionSegment {
 	return {
 		...segment,
-		utterances: segment.utterances?.map((utterance) => ({ ...utterance }))
+		utterances: segment.utterances?.map((utterance) => ({
+			...utterance,
+			words: utterance.words?.map((word) => ({ ...word }))
+		}))
 	};
 }
 

@@ -187,7 +187,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 		titleWrapEl.createDiv({ cls: "echo-notes-task-center-title", text: "任务概览" });
 		titleWrapEl.createDiv({
 			cls: "echo-notes-task-center-summary",
-			text: `运行中 ${counts.running} · 失败 ${counts.failed} · 完成 ${counts.success} · 已跳过 ${counts.skipped}`
+			text: `运行中 ${counts.running} · 已暂停 ${counts.paused} · 失败 ${counts.failed} · 完成 ${counts.success} · 已取消 ${counts.cancelled}`
 		});
 
 		const actionsEl = headerEl.createDiv({ cls: "echo-notes-task-center-actions" });
@@ -234,7 +234,9 @@ export class EchoNotesTaskCenterView extends ItemView {
 			running: "运行中",
 			failed: "失败",
 			success: "完成",
-			skipped: "已跳过"
+			skipped: "已跳过",
+			paused: "已暂停",
+			cancelled: "已取消"
 		}, (value) => {
 			this.statusFilter = value as EchoNotesTaskStatus | "all";
 			this.render();
@@ -296,6 +298,9 @@ export class EchoNotesTaskCenterView extends ItemView {
 		if (task.traceId) {
 			this.renderMeta(metaEl, "Trace ID", task.traceId, true);
 		}
+		if (task.remoteTask) {
+			this.renderMeta(metaEl, "百炼任务", `${task.remoteTask.status} · ${task.remoteTask.taskId}`, true);
+		}
 
 		if (task.error) {
 			const guidance = getTaskFailureGuidance(task.kind, task.error);
@@ -327,7 +332,23 @@ export class EchoNotesTaskCenterView extends ItemView {
 				void this.plugin.reviewMemoryCandidatePath(task.outputPath!);
 			});
 		}
-		if (task.retry && (task.status === "failed" || (task.status === "running" && task.retry.allowWhileRunning))) {
+		if (task.status === "running" && task.remoteTask?.status === "PENDING") {
+			this.createTextAction(actionsEl, "cloud-off", "取消云端任务", () => {
+				void this.plugin.cancelTaskCenterRemoteTask(task.id);
+			});
+		} else if (task.status === "running" && task.remoteTask?.status === "RUNNING") {
+			this.createTextAction(actionsEl, "pause", "停止本地等待", () => {
+				void this.plugin.confirmAndPauseTaskCenterRemoteTask(task.id);
+			});
+		} else if (task.status === "paused" && task.remoteTask && task.retry) {
+			this.createTextAction(actionsEl, "play", "继续跟踪", () => {
+				void this.plugin.retryTaskCenterTask(task.id).then((resumed) => {
+					if (!resumed) {
+						new Notice("当前任务无法继续跟踪。");
+					}
+				});
+			});
+		} else if (task.retry && (task.status === "failed" || (task.status === "running" && task.retry.allowWhileRunning))) {
 			this.createIconButton(actionsEl, "rotate-ccw", task.retry.label, async () => {
 				const retried = await this.plugin.retryTaskCenterTask(task.id);
 				if (!retried) {
@@ -433,6 +454,10 @@ function getStatusLabel(status: EchoNotesTaskStatus): string {
 			return "失败";
 		case "skipped":
 			return "已跳过";
+		case "paused":
+			return "已暂停";
+		case "cancelled":
+			return "已取消";
 	}
 }
 
@@ -445,6 +470,10 @@ function getStatusTone(status: EchoNotesTaskStatus): StatusIndicatorTone {
 		case "failed":
 			return "failed";
 		case "skipped":
+			return "neutral";
+		case "paused":
+			return "neutral";
+		case "cancelled":
 			return "neutral";
 	}
 }

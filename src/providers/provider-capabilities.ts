@@ -1,13 +1,16 @@
 import { isProviderId, type TranscriptionMode, type TranscriptionProviderId } from "../settings/settings";
+import { ALIYUN_FILETRANS_MODEL } from "../settings/settings";
 
 export type ProviderUploadMode =
 	| "multipart"
 	| "base64-data-url"
+	| "temporary-oss-url"
 	| "websocket-stream";
 
 export type ProviderEndpointShape =
 	| "openai-audio"
 	| "chat-audio"
+	| "dashscope-async-filetrans"
 	| "agentplan-asr-websocket"
 	| "mosi-transcription"
 	| "custom";
@@ -21,6 +24,9 @@ export interface ProviderCapability {
 	supportsTimestamp: boolean;
 	supportsSpeakerDiarization: boolean;
 	supportsStreaming: boolean;
+	supportsAsyncTasks?: boolean;
+	supportsNativeHotwords?: boolean;
+	supportsContextEnhancement?: boolean;
 	uploadMode: ProviderUploadMode;
 	endpointShape: ProviderEndpointShape;
 	agentPlanConnectionMode?: "realtime";
@@ -38,6 +44,7 @@ const MB = 1024 * 1024;
 const OPENAI_COMPATIBLE_MAX_AUDIO_BYTES = 25 * MB;
 const SILICONFLOW_MAX_AUDIO_BYTES = 50 * MB;
 const BAILIAN_MAX_BASE64_DATA_URL_BYTES = 10 * MB;
+const BAILIAN_TEMP_UPLOAD_MAX_AUDIO_BYTES = 1024 * MB;
 
 export const OPENAI_COMPATIBLE_TRANSCRIPTION_PROVIDER_IDS = [
 	"ollama",
@@ -102,19 +109,23 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		]
 	},
 	"aliyun-bailian": {
-		maxAudioBytes: null,
-		maxBase64DataUrlBytes: BAILIAN_MAX_BASE64_DATA_URL_BYTES,
-		supportsChunking: true,
+		maxAudioBytes: BAILIAN_TEMP_UPLOAD_MAX_AUDIO_BYTES,
+		maxAudioDurationSeconds: 12 * 60 * 60,
+		supportsChunking: false,
 		supportsLanguage: true,
-		supportsTimestamp: false,
-		supportsSpeakerDiarization: false,
+		supportsTimestamp: true,
+		supportsSpeakerDiarization: true,
 		supportsStreaming: false,
-		uploadMode: "base64-data-url",
-		endpointShape: "chat-audio",
-		recommendedModels: ["qwen3-asr-flash"],
+		supportsAsyncTasks: true,
+		supportsNativeHotwords: true,
+		supportsContextEnhancement: true,
+		uploadMode: "temporary-oss-url",
+		endpointShape: "dashscope-async-filetrans",
+		recommendedModels: [ALIYUN_FILETRANS_MODEL, "qwen3-asr-flash"],
 		notes: [
-			"整段音频会先编码为 Base64 Data URL。",
-			"如果编码后超过 10 MB，Echo Notes 会在本地解码并切成 16 kHz mono WAV 分段。"
+			"本地文件先上传到百炼临时 OSS（最高 1GB、48 小时有效），再提交异步任务并轮询结果。",
+			"支持即时热词、input.context、句子/词级时间戳和说话人分离；Memory 增强默认关闭。",
+			"说话人分离开启时整段转为 16 kHz mono WAV，建议音频不超过 2 小时且不会分段。"
 		]
 	},
 	mosi: {
@@ -145,9 +156,13 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 
 export function getTranscriptionProviderCapability(
 	providerId: string,
-	_usage: TranscriptionMode = "offline"
+	_usage: TranscriptionMode = "offline",
+	model?: string
 ): ProviderCapability {
 	const normalizedProviderId = isProviderId(providerId) ? providerId : "aliyun-bailian";
+	if (normalizedProviderId === "aliyun-bailian" && model && model !== ALIYUN_FILETRANS_MODEL) {
+		return createAliyunLegacyCapability();
+	}
 	return TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
 }
 
@@ -205,5 +220,24 @@ function createOpenAICompatibleCapability(recommendedModels: string[]): Provider
 		endpointShape: "openai-audio",
 		recommendedModels,
 		notes: ["按 OpenAI-compatible `/audio/transcriptions` 接口调用；实际可用性取决于该服务商是否实现音频端点。"]
+	};
+}
+
+function createAliyunLegacyCapability(): ProviderCapability {
+	return {
+		maxAudioBytes: null,
+		maxBase64DataUrlBytes: BAILIAN_MAX_BASE64_DATA_URL_BYTES,
+		supportsChunking: true,
+		supportsLanguage: true,
+		supportsTimestamp: false,
+		supportsSpeakerDiarization: false,
+		supportsStreaming: false,
+		uploadMode: "base64-data-url",
+		endpointShape: "chat-audio",
+		recommendedModels: [ALIYUN_FILETRANS_MODEL, "qwen3-asr-flash"],
+		notes: [
+			"旧模型整段音频先编码为 Base64 Data URL。",
+			"编码后超过 10 MB 时本地解码并切成 16 kHz mono WAV 分段。"
+		]
 	};
 }

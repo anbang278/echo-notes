@@ -112,6 +112,21 @@ import {
 } from "../src/providers/provider-capabilities";
 import { diagnoseTranscriptionProviderSettings } from "../src/providers/provider-diagnostics";
 import {
+	buildAliyunFiletransRequestBody,
+	cancelAliyunFiletransTask,
+	downloadAliyunFiletransResult,
+	exceedsAliyunDiarizationDuration,
+	getAliyunFiletransResultUrl,
+	getAliyunPollDelayMs,
+	getAliyunTemporaryUploadPolicy,
+	parseAliyunFiletransResult,
+	queryAliyunFiletransTask,
+	submitAliyunFiletransTask,
+	uploadAliyunTemporaryAudio,
+	type AliyunHttpRequest,
+	type AliyunHttpResponse
+} from "../src/providers/aliyun-filetrans-client";
+import {
 	isRetryablePolicyStatus,
 	resolveProviderTranscriptionPolicy,
 	shouldPreChunkTranscription,
@@ -164,6 +179,14 @@ import {
 	type SecretStorageLike
 } from "../src/security/provider-secrets";
 import { buildMemoryPaths } from "../src/memory/memory-paths";
+import {
+	buildTranscriptionEnhancementSnapshot,
+	createTranscriptionEnhancementStore,
+	normalizeTranscriptionEnhancementScopes,
+	parseTranscriptionEnhancementDocument,
+	renderTranscriptionEnhancementDocument,
+	updateTranscriptionEnhancementDocument
+} from "../src/memory/memory-transcription-enhancement";
 import {
 	MEMORY_AGGREGATION_MANAGED_END,
 	MEMORY_AGGREGATION_MANAGED_START,
@@ -1150,14 +1173,230 @@ assert.equal(zhMemoryPaths.userProfiles["privacy-boundary"], "Echo Memory/04 Use
 assert.equal(zhMemoryPaths.projectAggregation, "Echo Memory/05 聚合/项目.md");
 assert.equal(zhMemoryPaths.peopleAggregation, "Echo Memory/05 聚合/人物.md");
 assert.equal(zhMemoryPaths.timelineAggregation, "Echo Memory/05 聚合/时间线.md");
+assert.equal(zhMemoryPaths.transcriptionEnhancement, "Echo Memory/07 转写增强/术语与上下文.md");
 const enMemoryPaths = buildMemoryPaths("Memory", "en");
 assert.equal(enMemoryPaths.home, "Memory/00 Home.md");
 assert.equal(enMemoryPaths.manifest, "Memory/99 System/echo-memory.json");
 assert.equal(enMemoryPaths.timelineAggregation, "Memory/05 Aggregations/Timeline.md");
+assert.equal(enMemoryPaths.transcriptionEnhancement, "Memory/07 Transcription Enhancement/Terms and Context.md");
 assert.equal(
 	getMemoryExtractionCheckpointStorePath(zhMemoryPaths.systemDir),
 	"Echo Memory/99 系统/echo-memory-checkpoints.json"
 );
+
+const transcriptionEnhancementStore = createTranscriptionEnhancementStore("2026-08-13T00:00:00.000Z");
+transcriptionEnhancementStore.terms = {
+	globalManual: {
+		id: "globalManual",
+		text: "Echo Notes",
+		weight: 3,
+		scope: { type: "global" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T00:00:00.000Z",
+		updatedAt: "2026-08-13T00:00:00.000Z",
+		history: []
+	},
+	projectManual: {
+		id: "projectManual",
+		text: "Echo Notes",
+		weight: 4,
+		scope: { type: "project", value: "Echo Notes" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T01:00:00.000Z",
+		updatedAt: "2026-08-13T01:00:00.000Z",
+		history: []
+	},
+	pending: {
+		id: "pending",
+		text: "不得外发",
+		weight: 50,
+		scope: { type: "global" },
+		source: "memory",
+		status: "pending",
+		updatedAt: "2026-08-13T02:00:00.000Z",
+		history: []
+	}
+};
+transcriptionEnhancementStore.prompts = {
+	globalPrompt: {
+		id: "globalPrompt",
+		text: "固定 Prompt 优先。",
+		scope: { type: "global" },
+		status: "approved",
+		updatedAt: "2026-08-13T00:00:00.000Z",
+		history: []
+	}
+};
+const renderedTranscriptionEnhancement = renderTranscriptionEnhancementDocument(transcriptionEnhancementStore);
+assert.deepEqual(parseTranscriptionEnhancementDocument(renderedTranscriptionEnhancement), transcriptionEnhancementStore);
+const updatedTranscriptionEnhancement = updateTranscriptionEnhancementDocument(
+	renderedTranscriptionEnhancement.replace("## 人工补充", "## 人工补充\n\n用户说明"),
+	transcriptionEnhancementStore
+);
+assert.match(updatedTranscriptionEnhancement, /用户说明/);
+const normalizedEnhancementScopes = normalizeTranscriptionEnhancementScopes({
+	projects: ["Echo Notes", " Echo Notes "],
+	people: "安邦",
+	organizations: 123
+});
+assert.deepEqual(normalizedEnhancementScopes, {
+	projects: ["Echo Notes"],
+	people: ["安邦"],
+	organizations: []
+});
+const composedTranscriptionEnhancement = buildTranscriptionEnhancementSnapshot({
+	store: transcriptionEnhancementStore,
+	scopes: normalizedEnhancementScopes,
+	memoryAssertions: [
+		{ id: "memory-global", text: "全局已批准记忆。", observedAt: "2026-08-13T00:00:00.000Z", subjectType: "user", subjectName: "安邦" },
+		{ id: "memory-project", text: "项目已批准记忆。", observedAt: "2026-08-13T02:00:00.000Z", subjectType: "project", subjectName: "Echo Notes" },
+		{ id: "memory-other", text: "其他项目不得进入。", observedAt: "2026-08-13T03:00:00.000Z", subjectType: "project", subjectName: "Other" }
+	]
+});
+assert.deepEqual(composedTranscriptionEnhancement.hotwords, [{ id: "projectManual", text: "Echo Notes", weight: 4 }]);
+assert.equal(composedTranscriptionEnhancement.contextText, "固定 Prompt 优先。\n项目已批准记忆。\n全局已批准记忆。");
+assert.deepEqual(composedTranscriptionEnhancement.memoryAssertionIds, ["memory-project", "memory-global"]);
+assert.doesNotMatch(JSON.stringify(composedTranscriptionEnhancement), /不得外发|其他项目不得进入/);
+
+const conflictEnhancementStore = createTranscriptionEnhancementStore("2026-08-13T00:00:00.000Z");
+conflictEnhancementStore.terms = {
+	manualPreferred: {
+		id: "manualPreferred",
+		text: "同权重冲突",
+		weight: 5,
+		scope: { type: "project", value: "Echo Notes" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T01:00:00.000Z",
+		updatedAt: "2026-08-13T01:00:00.000Z",
+		history: []
+	},
+	newerMemoryCandidate: {
+		id: "newerMemoryCandidate",
+		text: "同权重冲突",
+		weight: 5,
+		scope: { type: "project", value: "Echo Notes" },
+		source: "memory",
+		status: "approved",
+		approvedAt: "2026-08-13T02:00:00.000Z",
+		updatedAt: "2026-08-13T02:00:00.000Z",
+		history: []
+	},
+	olderManual: {
+		id: "olderManual",
+		text: "最新批准冲突",
+		weight: 4,
+		scope: { type: "project", value: "Echo Notes" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T01:00:00.000Z",
+		updatedAt: "2026-08-13T01:00:00.000Z",
+		history: []
+	},
+	newerManual: {
+		id: "newerManual",
+		text: "最新批准冲突",
+		weight: 4,
+		scope: { type: "project", value: "Echo Notes" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T03:00:00.000Z",
+		updatedAt: "2026-08-13T03:00:00.000Z",
+		history: []
+	},
+	disabled: {
+		id: "disabled",
+		text: "已撤销术语",
+		weight: 50,
+		scope: { type: "global" },
+		source: "manual",
+		status: "disabled",
+		updatedAt: "2026-08-13T04:00:00.000Z",
+		history: []
+	},
+	rejected: {
+		id: "rejected",
+		text: "已拒绝术语",
+		weight: 50,
+		scope: { type: "global" },
+		source: "memory",
+		status: "rejected",
+		updatedAt: "2026-08-13T04:00:00.000Z",
+		history: []
+	}
+};
+const conflictEnhancement = buildTranscriptionEnhancementSnapshot({
+	store: conflictEnhancementStore,
+	scopes: normalizedEnhancementScopes,
+	memoryAssertions: []
+});
+assert.deepEqual(conflictEnhancement.hotwords, [
+	{ id: "manualPreferred", text: "同权重冲突", weight: 5 },
+	{ id: "newerManual", text: "最新批准冲突", weight: 4 }
+]);
+assert.doesNotMatch(JSON.stringify(conflictEnhancement), /已撤销术语|已拒绝术语/);
+
+const limitedEnhancementStore = createTranscriptionEnhancementStore("2026-08-13T00:00:00.000Z");
+for (let index = 0; index < 55; index += 1) {
+	const id = `super-${String(index).padStart(2, "0")}`;
+	limitedEnhancementStore.terms[id] = {
+		id,
+		text: `超级热词-${index}`,
+		weight: 50,
+		scope: { type: "global" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T00:00:00.000Z",
+		updatedAt: "2026-08-13T00:00:00.000Z",
+		history: []
+	};
+}
+for (let index = 0; index < 2000; index += 1) {
+	const id = `normal-${String(index).padStart(4, "0")}`;
+	limitedEnhancementStore.terms[id] = {
+		id,
+		text: `普通热词-${index}`,
+		weight: 5,
+		scope: { type: "global" },
+		source: "manual",
+		status: "approved",
+		approvedAt: "2026-08-13T00:00:00.000Z",
+		updatedAt: "2026-08-13T00:00:00.000Z",
+		history: []
+	};
+}
+const limitedEnhancement = buildTranscriptionEnhancementSnapshot({
+	store: limitedEnhancementStore,
+	scopes: { projects: [], people: [], organizations: [] },
+	memoryAssertions: []
+});
+assert.equal(limitedEnhancement.hotwords.length, 2000);
+assert.equal(limitedEnhancement.hotwords.filter((term) => term.weight === 50).length, 50);
+assert.equal(limitedEnhancement.omittedHotwordCount, 55);
+
+const boundaryContextStore = createTranscriptionEnhancementStore("2026-08-13T00:00:00.000Z");
+boundaryContextStore.prompts.prompt = {
+	id: "prompt",
+	text: "P".repeat(390),
+	scope: { type: "global" },
+	status: "approved",
+	updatedAt: "2026-08-13T00:00:00.000Z",
+	history: []
+};
+const boundaryContext = buildTranscriptionEnhancementSnapshot({
+	store: boundaryContextStore,
+	scopes: { projects: [], people: [], organizations: [] },
+	memoryAssertions: [
+		{ id: "fits", text: "M".repeat(9), observedAt: "2026-08-13T02:00:00.000Z", subjectType: "user", subjectName: "安邦" },
+		{ id: "omitted", text: "X", observedAt: "2026-08-13T01:00:00.000Z", subjectType: "user", subjectName: "安邦" }
+	]
+});
+assert.equal(boundaryContext.contextText?.length, 400);
+assert.equal(boundaryContext.contextText, `${"P".repeat(390)}\n${"M".repeat(9)}`);
+assert.deepEqual(boundaryContext.memoryAssertionIds, ["fits"]);
+assert.equal(boundaryContext.omittedContextCount, 1);
 
 const aggregateProjectOld: MemoryAggregationEntry = {
 	assertion: {
@@ -1615,6 +1854,8 @@ taskCenter.upsertTask({
 });
 assert.deepEqual(summarizeTaskCounts(taskCenter.getTasks()), {
 	running: 1,
+	paused: 0,
+	cancelled: 0,
 	success: 0,
 	failed: 1,
 	skipped: 0,
@@ -1626,7 +1867,7 @@ assert.equal(await taskCenter.retryTask(failedTaskId), true);
 assert.equal(retriedTask, true);
 assert.equal(await taskCenter.retryTask("missing"), false);
 const persistedTaskCenter = createTaskCenterState(taskCenter.getTasks());
-assert.equal(persistedTaskCenter.schemaVersion, 1);
+assert.equal(persistedTaskCenter.schemaVersion, 2);
 assert.equal(Object.prototype.hasOwnProperty.call(persistedTaskCenter.tasks[0], "retry"), false);
 assert.equal(
 	persistedTaskCenter.tasks.find((task) => task.id === runningTaskId)?.recovery?.kind,
@@ -1640,16 +1881,30 @@ assert.equal(interruptedTask?.status, "failed");
 assert.equal(interruptedTask?.stage, "插件重启前任务已中断");
 assert.equal(interruptedTask?.completedAt, 7000);
 assert.equal(interruptedTask?.recovery?.kind, "transcription");
-assert.deepEqual(normalizeTaskCenterState({ schemaVersion: 2, tasks: persistedTaskCenter.tasks }), {
+const resumableRemoteTask = {
+	...normalizedTaskCenter.tasks.find((task) => task.id === runningTaskId)!,
+	remoteTask: {
+		taskId: "remote-task-restart",
+		status: "RUNNING" as const,
+		submittedAt: 1234,
+		configurationFingerprint: "configuration-fingerprint"
+	}
+};
+assert.deepEqual(markInterruptedTasks([resumableRemoteTask], 7000), [resumableRemoteTask]);
+const migratedTaskCenterV1 = normalizeTaskCenterState({
 	schemaVersion: 1,
-	tasks: []
+	tasks: [resumableRemoteTask]
 });
+assert.equal(migratedTaskCenterV1.schemaVersion, 2);
+assert.equal(migratedTaskCenterV1.tasks[0].remoteTask?.taskId, "remote-task-restart");
+assert.equal(migratedTaskCenterV1.tasks[0].remoteTask?.status, "RUNNING");
+assert.deepEqual(normalizeTaskCenterState({ schemaVersion: 2, tasks: persistedTaskCenter.tasks }), persistedTaskCenter);
 assert.deepEqual(
 	normalizeTaskCenterState({
 		schemaVersion: 1,
 		tasks: [{ id: "invalid", kind: "unknown", status: "running" }]
 	}),
-	{ schemaVersion: 1, tasks: [] }
+	{ schemaVersion: 2, tasks: [] }
 );
 taskCenter.clearFinishedTasks();
 assert.equal(taskCenter.getTasks().length, 1);
@@ -2997,14 +3252,16 @@ assert.throws(
 );
 assert.equal(DEFAULT_SETTINGS.transcriptionMode, "offline");
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.provider, "aliyun-bailian");
-assert.equal(DEFAULT_SETTINGS.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
-assert.equal(DEFAULT_SETTINGS.offlineTranscription.model, "qwen3-asr-flash");
+assert.equal(DEFAULT_SETTINGS.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com");
+assert.equal(DEFAULT_SETTINGS.offlineTranscription.model, "qwen-audio-3.0-asr-flash-filetrans");
+assert.equal(DEFAULT_SETTINGS.offlineTranscription.aliyunFiletrans?.diarizationEnabled, true);
+assert.equal(DEFAULT_SETTINGS.offlineTranscription.aliyunFiletrans?.memoryEnhancementEnabled, false);
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.language, "zh");
 assert.equal(DEFAULT_SETTINGS.realtimeTranscription.provider, "volcengine-agentplan");
 assert.equal(DEFAULT_SETTINGS.realtimeTranscription.inputDeviceId, "");
 assert.equal(DEFAULT_SETTINGS.agentPlanSpeakerLabelStyle, "speaker-with-time");
 assert.equal(DEFAULT_SETTINGS.mosiSpeakerDiarizationEnabled, true);
-assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen3-asr-flash");
+assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen-audio-3.0-asr-flash-filetrans");
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall");
@@ -3019,6 +3276,164 @@ assert.equal(getMosiTranscriptionModel(true), MOSI_TRANSCRIPTION_MODEL);
 assert.equal(getMosiTranscriptionModel(false), MOSI_PLAIN_TRANSCRIPTION_MODEL);
 assert.equal(isMosiSpeakerDiarizationModel(MOSI_TRANSCRIPTION_MODEL), true);
 assert.equal(isMosiSpeakerDiarizationModel(MOSI_PLAIN_TRANSCRIPTION_MODEL), false);
+
+const aliyunEnhancementSnapshot = {
+	hotwords: [{ id: "term-1", text: "Echo Notes", weight: 50 as const }],
+	contextText: "固定 Prompt\n已批准记忆",
+	scopeIds: ["global", "project:Echo Notes"],
+	memoryAssertionIds: ["memory-1"],
+	omittedHotwordCount: 0,
+	omittedContextCount: 0,
+	fingerprint: "enhancement-fingerprint"
+};
+assert.deepEqual(buildAliyunFiletransRequestBody({
+	baseUrl: "https://dashscope.aliyuncs.com",
+	apiKey: "secret",
+	model: "qwen-audio-3.0-asr-flash-filetrans",
+	fileUrl: "oss://temporary/audio.wav",
+	language: "zh",
+	diarizationEnabled: true,
+	speakerCount: 2,
+	enhancement: aliyunEnhancementSnapshot
+}), {
+	model: "qwen-audio-3.0-asr-flash-filetrans",
+	input: {
+		file_urls: ["oss://temporary/audio.wav"],
+		context: [{ role: "user", content: [{ type: "input_text", text: "固定 Prompt\n已批准记忆" }] }]
+	},
+	parameters: {
+		diarization_enabled: true,
+		vocabulary: { "Echo Notes": 50 },
+		speaker_count: 2,
+		language_hints: ["zh"]
+	}
+});
+assert.deepEqual([0, 2, 3, 6].map((attempt) => getAliyunPollDelayMs(attempt)), [2000, 2000, 5000, 10000]);
+assert.equal(getAliyunPollDelayMs(8, "7"), 7000);
+
+const aliyunRequests: AliyunHttpRequest[] = [];
+const aliyunResponses: AliyunHttpResponse[] = [];
+const createAliyunResponse = (status: number, json: unknown, headers: Record<string, string> = {}): AliyunHttpResponse => ({
+	status,
+	headers,
+	text: JSON.stringify(json),
+	json,
+	arrayBuffer: new ArrayBuffer(0)
+});
+const aliyunRequester = async (request: AliyunHttpRequest): Promise<AliyunHttpResponse> => {
+	aliyunRequests.push(request);
+	const response = aliyunResponses.shift();
+	assert.ok(response, "测试必须提供百炼模拟响应");
+	return response;
+};
+aliyunResponses.push(createAliyunResponse(200, {
+	request_id: "policy-request",
+	data: {
+		oss_access_key_id: "temporary-id",
+		signature: "temporary-signature",
+		policy: "temporary-policy",
+		x_oss_object_acl: "private",
+		x_oss_forbid_overwrite: "true",
+		upload_dir: "upload/prefix",
+		upload_host: "https://temporary.example.com"
+	}
+}));
+const aliyunUploadPolicy = await getAliyunTemporaryUploadPolicy(
+	aliyunRequester,
+	"https://dashscope.aliyuncs.com/compatible-mode/v1",
+	"secret",
+	"qwen-audio-3.0-asr-flash-filetrans"
+);
+assert.equal(aliyunUploadPolicy.uploadHost, "https://temporary.example.com");
+assert.match(aliyunRequests[0].url, /^https:\/\/dashscope\.aliyuncs\.com\/api\/v1\/uploads\?/);
+aliyunResponses.push(createAliyunResponse(200, {}));
+assert.equal(await uploadAliyunTemporaryAudio(
+	aliyunRequester,
+	aliyunUploadPolicy,
+	"private meeting.wav",
+	"audio/wav",
+	new TextEncoder().encode("audio-bytes").buffer
+), "oss://upload/prefix/audio.wav");
+const aliyunMultipart = new TextDecoder().decode(aliyunRequests[1].body as ArrayBuffer);
+assert.ok(aliyunMultipart.lastIndexOf('name="file"') > aliyunMultipart.lastIndexOf('name="key"'));
+assert.ok(aliyunMultipart.lastIndexOf('name="file"') > aliyunMultipart.lastIndexOf('name="success_action_status"'));
+assert.doesNotMatch(aliyunMultipart, /private meeting/);
+
+aliyunResponses.push(createAliyunResponse(200, {
+	request_id: "submit-request",
+	output: { task_id: "remote-task-1", task_status: "PENDING" }
+}));
+const submittedAliyun = await submitAliyunFiletransTask(aliyunRequester, {
+	baseUrl: "https://dashscope.aliyuncs.com",
+	apiKey: "secret",
+	model: "qwen-audio-3.0-asr-flash-filetrans",
+	fileUrl: "oss://upload/prefix/audio.wav",
+	language: "zh",
+	diarizationEnabled: true,
+	speakerCount: 2,
+	enhancement: aliyunEnhancementSnapshot
+}, "configuration-fingerprint", 1234);
+assert.equal(submittedAliyun.task.taskId, "remote-task-1");
+assert.equal(aliyunRequests[2].headers?.["X-DashScope-Async"], "enable");
+assert.equal(aliyunRequests[2].headers?.["X-DashScope-OssResourceResolve"], "enable");
+assert.doesNotMatch(JSON.stringify(submittedAliyun), /temporary-signature|temporary-id|oss:\/\//);
+
+aliyunResponses.push(createAliyunResponse(200, {
+	request_id: "query-request",
+	output: { task_id: "remote-task-1", task_status: "RUNNING" }
+}, { "Retry-After": "7" }));
+const runningAliyun = await queryAliyunFiletransTask(
+	aliyunRequester,
+	"https://dashscope.aliyuncs.com",
+	"secret",
+	submittedAliyun.task
+);
+assert.equal(runningAliyun.task.status, "RUNNING");
+assert.equal(runningAliyun.retryAfter, "7");
+aliyunResponses.push(createAliyunResponse(200, {
+	request_id: "cancel-request",
+	output: { task_id: "remote-task-1", task_status: "CANCELED" }
+}));
+await cancelAliyunFiletransTask(aliyunRequester, "https://dashscope.aliyuncs.com", "secret", submittedAliyun.task);
+assert.match(aliyunRequests[4].url, /\/api\/v1\/tasks\/remote-task-1\/cancel$/);
+
+const successfulAliyunQuery = {
+	task: { ...submittedAliyun.task, status: "SUCCEEDED" as const },
+	requestId: "result-request",
+	results: [{ subtaskStatus: "SUCCEEDED", transcriptionUrl: "https://result.example.com/output.json" }]
+};
+assert.equal(getAliyunFiletransResultUrl(successfulAliyunQuery), "https://result.example.com/output.json");
+assert.throws(() => getAliyunFiletransResultUrl({
+	...successfulAliyunQuery,
+	results: [
+		{ subtaskStatus: "SUCCEEDED", transcriptionUrl: "https://result.example.com/output.json" },
+		{ subtaskStatus: "FAILED", code: "SUBTASK_FAILED" }
+	]
+}), /子任务失败/);
+const parsedAliyunResult = parseAliyunFiletransResult({
+	transcripts: [{
+		text: "你好 Echo Notes",
+		sentences: [{
+			text: "你好 Echo Notes",
+			speaker_id: 1,
+			begin_time: 100,
+			end_time: 1500,
+			words: [{ text: "Echo", begin_time: 500, end_time: 900 }]
+		}]
+	}]
+});
+assert.equal(parsedAliyunResult.text, "你好 Echo Notes");
+assert.equal(parsedAliyunResult.utterances?.[0].speakerId, "1");
+assert.equal(parsedAliyunResult.utterances?.[0].startSeconds, 0.1);
+assert.deepEqual(parsedAliyunResult.utterances?.[0].words, [{ text: "Echo", startSeconds: 0.5, endSeconds: 0.9 }]);
+const twoHourMonoWavBytes = 44 + 16_000 * 2 * 2 * 60 * 60;
+assert.equal(exceedsAliyunDiarizationDuration(twoHourMonoWavBytes), false);
+assert.equal(exceedsAliyunDiarizationDuration(twoHourMonoWavBytes + 2), true);
+aliyunResponses.push(createAliyunResponse(403, { message: "expired" }));
+await assert.rejects(
+	downloadAliyunFiletransResult(aliyunRequester, "https://result.example.com/expired.json"),
+	/请重新转写原音频/
+);
 assert.equal(isOfflineTranscriptionProviderId("mosi"), true);
 assert.equal(PROVIDER_DEFAULTS.ollama.baseUrl, "http://localhost:11434/v1");
 assert.equal(PROVIDER_DEFAULTS["lm-studio"].baseUrl, "http://localhost:1234/v1");
@@ -3039,10 +3454,17 @@ assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisModel, "Qwen/Qwen3.5
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"].analysisModel, "deepseek-v4-pro");
 assert.deepEqual(Object.keys(TRANSCRIPTION_PROVIDER_CAPABILITIES).sort(), Object.keys(PROVIDER_LABELS).sort());
 assert.equal(formatProviderCapabilityBytes(25 * 1024 * 1024), "25 MB");
-assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsChunking, true);
-assert.equal(getTranscriptionProviderCapability("aliyun-bailian").uploadMode, "base64-data-url");
-assert.equal(getTranscriptionProviderCapability("aliyun-bailian").endpointShape, "chat-audio");
-assert.equal(getTranscriptionProviderCapability("aliyun-bailian").maxBase64DataUrlBytes, 10 * 1024 * 1024);
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsChunking, false);
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").uploadMode, "temporary-oss-url");
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").endpointShape, "dashscope-async-filetrans");
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsAsyncTasks, true);
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsNativeHotwords, true);
+assert.equal(getTranscriptionProviderCapability("aliyun-bailian").supportsContextEnhancement, true);
+const aliyunLegacyCapability = getTranscriptionProviderCapability("aliyun-bailian", "offline", "qwen3-asr-flash");
+assert.equal(aliyunLegacyCapability.supportsChunking, true);
+assert.equal(aliyunLegacyCapability.uploadMode, "base64-data-url");
+assert.equal(aliyunLegacyCapability.endpointShape, "chat-audio");
+assert.equal(aliyunLegacyCapability.maxBase64DataUrlBytes, 10 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("siliconflow").maxAudioBytes, 50 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("siliconflow").maxAudioDurationSeconds, 3600);
 assert.equal(getTranscriptionProviderCapability("siliconflow").supportsChunking, true);
@@ -3075,9 +3497,9 @@ assert.equal(
 	getTranscriptionProviderCapability("mosi").transcriptionPolicy?.targetSegmentSeconds,
 	180
 );
-assert.equal(getTranscriptionProviderCapability("openai").endpointShape, "chat-audio");
-assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "chat-audio");
-assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：支持"));
+assert.equal(getTranscriptionProviderCapability("openai").endpointShape, "dashscope-async-filetrans");
+assert.equal(getTranscriptionProviderCapability("unknown-provider").endpointShape, "dashscope-async-filetrans");
+assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("aliyun-bailian")).includes("长音频分段：暂不支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("siliconflow")).includes("长音频分段：支持"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("siliconflow")).includes("单次时长上限：1 小时"));
 assert.ok(getProviderCapabilitySummary(getTranscriptionProviderCapability("ollama")).includes("长音频分段：暂不支持"));
@@ -4240,8 +4662,8 @@ const normalizedSettings = normalizeEchoNotesSettings({
 assert.equal(normalizedSettings.analysisEnabled, true);
 assert.equal(normalizedSettings.transcriptionMode, "offline");
 assert.equal(normalizedSettings.offlineTranscription.provider, "aliyun-bailian");
-assert.equal(normalizedSettings.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
-assert.equal(normalizedSettings.offlineTranscription.model, "qwen3-asr-flash");
+assert.equal(normalizedSettings.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com");
+assert.equal(normalizedSettings.offlineTranscription.model, "qwen-audio-3.0-asr-flash-filetrans");
 assert.equal(normalizedSettings.agentPlanSpeakerLabelStyle, "speaker-with-time");
 assert.equal(normalizedSettings.mosiSpeakerDiarizationEnabled, true);
 assert.equal(normalizedSettings.analysisProvider, "aliyun-bailian");
@@ -4912,7 +5334,7 @@ assert.equal(
 const normalizedTaskCenterSettings = normalizeEchoNotesSettings({ taskCenterState: persistedTaskCenter });
 assert.deepEqual(normalizedTaskCenterSettings.taskCenterState, persistedTaskCenter);
 assert.deepEqual(normalizeEchoNotesSettings({ taskCenterState: { schemaVersion: 1, tasks: "invalid" } }).taskCenterState, {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	tasks: []
 });
 const normalizedMemorySettings = normalizeEchoNotesSettings({
@@ -4988,8 +5410,8 @@ const invalidTranscriptionProviderSettings = normalizeEchoNotesSettings({
 	language: "en"
 });
 assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.provider, "aliyun-bailian");
-assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
-assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.model, "qwen3-asr-flash");
+assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com");
+assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.model, "qwen-audio-3.0-asr-flash-filetrans");
 assert.equal(invalidTranscriptionProviderSettings.offlineTranscription.language, "zh");
 const removedLegacyTranscriptionProviderSettings = normalizeEchoNotesSettings({
 	provider: "openai",
@@ -5010,9 +5432,22 @@ for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
 	};
 	assert.deepEqual(
 		normalizeEchoNotesSettings({ offlineTranscription: customConfig }).offlineTranscription,
-		customConfig
+		provider === "aliyun-bailian"
+			? {
+				...customConfig,
+				aliyunFiletrans: { diarizationEnabled: true, memoryEnhancementEnabled: false }
+			}
+			: customConfig
 	);
 }
+assert.equal(normalizeEchoNotesSettings({
+	offlineTranscription: {
+		provider: "aliyun-bailian",
+		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		model: "qwen3-asr-flash",
+		language: "zh"
+	}
+}).offlineTranscription.model, "qwen3-asr-flash");
 assert.deepEqual(
 	normalizeEchoNotesSettings({
 		offlineTranscription: {

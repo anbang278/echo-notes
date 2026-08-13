@@ -10,6 +10,7 @@ export interface TranscriptReuseCriteria {
 	sourceAudio: SourceAudioMetadata;
 	provider: string;
 	model: string;
+	configurationFingerprint?: string;
 }
 
 export function createSourceAudioMetadata(audioFile: TFile): SourceAudioMetadata {
@@ -40,7 +41,9 @@ export function isReusableTranscriptForAudio(content: string, criteria: Transcri
 		frontmatter.model === criteria.model &&
 		frontmatter.source_audio_path === criteria.sourceAudio.path &&
 		Number(frontmatter.source_audio_size) === criteria.sourceAudio.size &&
-		Number(frontmatter.source_audio_mtime) === criteria.sourceAudio.mtime
+		Number(frontmatter.source_audio_mtime) === criteria.sourceAudio.mtime &&
+		(criteria.configurationFingerprint === undefined ||
+			frontmatter.transcription_configuration_fingerprint === criteria.configurationFingerprint)
 	);
 }
 

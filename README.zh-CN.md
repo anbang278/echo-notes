@@ -67,8 +67,8 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 在设置页展示当前转写 Provider 的上传方式、接口形态、文件限制、长音频分段、语言参数、时间戳和说话人分离能力。
 - 可在设置页本地自检转写 Provider 配置，检查 API Key、Base URL、模型、HTTP 风险、接口形态和能力限制，不上传音频。
 - 标准化转写 Provider 错误，并在展示或写入失败信息前脱敏 API Key、Authorization header、Base64 音频载荷和过长响应。
-- 使用共享 AudioChunkPipeline 核心处理长音频准备、分段进度事件、逐段转写、文本合并、trace id 汇总、raw segment 收集，并释放已完成分段的音频 buffer。阿里百炼、SiliconFlow 和 MOSI 的成功分段会在 transcript 托管区块内建立检查点；失败或重启后，源音频与 Provider 配置仍匹配时只处理剩余分段。
-- 可从 Ribbon 或命令面板打开任务中心，查看转写、AI 分析和记忆任务的状态、失败原因、耗时、Provider、模型与输出。最多 100 条安全任务摘要会跨重启保留；重启前未完成的任务会标记为失败，并恢复转写、分析、记忆提取或画像重建的重试入口，不保存正文或 API Key。
+- 使用共享 AudioChunkPipeline 核心处理长音频准备、分段进度事件、逐段转写、文本合并、trace id 汇总、raw segment 收集，并释放已完成分段的音频 buffer。旧版阿里百炼 `qwen3-asr-flash`、SiliconFlow 和 MOSI 的成功分段会在 transcript 托管区块内建立检查点；失败或重启后，源音频与 Provider 配置仍匹配时只处理剩余分段。
+- 可从 Ribbon 或命令面板打开任务中心，查看转写、AI 分析和记忆任务的状态、失败原因、耗时、Provider、模型与输出。最多 100 条安全任务摘要会跨重启保留；普通运行中任务在重启后恢复重试入口，已提交的百炼异步任务则自动使用原 `task_id` 继续轮询。任务摘要不保存正文、临时上传凭证、签名结果地址或 API Key。
 - 任务中心每张任务卡可导出同一链路的诊断 ZIP；设置页“自动化与日志”和命令 `Echo Notes: 导出诊断日志包` 可导出近期记录。诊断默认开启，最多保留最近 20 次、最长 7 天，始终只在本地保存。
 - 可选开启手动上传前确认：上传前预览 Provider、Base URL、模型、文件大小和 HTTP 风险；开启后自动化会跳过需要确认的上传。
 - 离线模式可控制 Obsidian 核心插件录音机开关并配置核心命令快捷键；实时模式不劫持或读取核心录音机的私有状态。
@@ -82,6 +82,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 可选初始化 Echo Memory 工作区，把转写正文和本批成功纪要提取为带原文证据、置信度和稳定 ID 的候选记忆。
 - Echo Memory 的 Provider、API Key、Base URL、模型和长文本分块配置与 AI 分析阶段完全隔离，功能默认关闭。
 - Echo Memory 长文本提取会把每个已通过证据校验的成功分块写入系统目录检查点；重试只复用 transcript、纳入分析、初始化用户、Schema/Prompt/Pipeline、Provider 配置、模型、语言和分块边界仍严格匹配的连续前缀。
+- Echo Memory 的“转写增强”页签统一管理原生热词、固定提示词和已批准记忆上下文。只有已批准且命中全局或来源笔记作用域的内容会进入请求；功能默认关闭，待审核、拒绝或禁用内容不会外发。
 - 每个候选包都有同目录 `.review.md` 审核 sidecar，可逐条批准、修正、拒绝或重置为待审核，并保存完整事件历史。
 - 可在同一主体、不同候选的已批准断言之间人工确认冲突、补充、替代或作废关系；关系独立于不可变候选保存，只记录结构化端点元数据、回链与确认/撤销历史，撤销后可恢复此前画像。原文证据仅从当前已批准候选包读取供即时对比，不会在关系 JSON 中重复持久化。
 - 支持“只保存审核”和“保存审核后自动编译画像与跨记录视图”两种沉淀模式；只有已批准且未被替代/作废的断言进入 User、人物、组织和项目画像。
@@ -98,7 +99,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 离线转写 Provider：
 
-- 阿里百炼（Alibaba Bailian）：默认模型 `qwen3-asr-flash`
+- 阿里百炼（Alibaba Bailian）：新安装默认异步模型 `qwen-audio-3.0-asr-flash-filetrans`；现有用户继续保留原模型，可在下拉框切换到 `qwen3-asr-flash`
 - 【免费】硅基流动（SiliconFlow）：官方模型可选 `FunAudioLLM/SenseVoiceSmall`、`TeleAI/TeleSpeechASR`，也可填写自定义模型 ID
 - MOSI（可选说话人分离）：可在普通转写 `moss-transcribe` 与多说话人转写 `moss-transcribe-diarize` 之间切换
 - Ollama：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
@@ -117,7 +118,7 @@ AgentPlan 套餐官方限定文本生成与向量化能力用于 AI 工具场景
 Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时发起网络请求。
 
 - 硅基流动默认地址：`https://api.siliconflow.cn`
-- 阿里百炼默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- 阿里百炼异步转写默认地址：`https://dashscope.aliyuncs.com`；旧兼容转写与文本分析继续使用 `/compatible-mode/v1`
 - MOSI 转写地址：`https://api.mosi.cn/v1/audio/transcriptions`
 - 火山引擎 AgentPlan 实时 ASR 地址：`wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
 - 火山引擎 AgentPlan 文本分析地址：`https://ark.cn-beijing.volces.com/api/plan/v3`
@@ -128,7 +129,7 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 - 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL；OpenCode Go 与 AgentPlan 的专属地址保持只读。
 - Echo Memory 使用独立选择的记忆 Provider Base URL，并调用其 OpenAI-compatible `/chat/completions` 端点。
 
-离线转写会把所选音频发送到当前离线 Provider。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求；开启说话人分离时请求说话人和时间范围，关闭时只请求普通正文。Vault 中不会生成临时分段文件。
+离线转写会把所选音频发送到当前离线 Provider。百炼新模型先获取短期 OSS 表单凭证，把本地文件上传到百炼临时存储，再用 `oss://` 地址提交异步任务；临时凭证仅存在于内存，不写入设置、任务或日志。开启说话人分离时，Echo Notes 会先生成整段 16 千赫兹单声道 WAV；超过 2 小时、解码失败或内存不足会阻止提交，不会静默降级。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求。Vault 中不会生成临时分段文件。
 
 实时模式不会先生成或转换整段 WAV：Echo Notes 在本地同时执行两条链路，一条使用 `MediaRecorder` 将 WebM Opus 分片约每秒顺序追加到 Vault 附件，另一条把麦克风音频连续降混并重采样为 16 kHz、16-bit、mono PCM，再通过同一条鉴权优化双流 WebSocket 以 200 ms 音频包发送给 AgentPlan。录音附件、转写稿、音频嵌入和“查看转写稿”链接会在开始时立即创建。服务端确认的二遍高精度分句会持续写入转写稿，未确定文字只显示在临时区域；AgentPlan 中断不会停止本地录音，已经落盘的录音和正文会保留。
 
@@ -162,7 +163,8 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 - 小音频遇到 HTTP `500/502/503/504` 时会按 1 秒、3 秒退避重试；仍失败则自动进入分段。单个分段持续失败时只二分该段，`413` 会直接触发二分，最短 60 秒、最多四层；鉴权、额度、限流和模型错误不会拆分。
 - 自动重试和缩段会产生额外 Provider 请求，但不会自动切换 Provider、API Key 或模型。已经成功的分段不会重传，失败时会保留已写入正文、Trace ID 和失败时间范围。
 - 限制与模型列表以[硅基流动转写接口文档](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions)为准。
-- 阿里百炼 `qwen3-asr-flash`：本地音频会编码为 Base64 Data URL。如果整段音频编码后会超过 10 MB 输入限制，Echo Notes 会先在本地解码，把音频转换成 16 kHz mono WAV 分段，再按顺序逐段转写，并把已完成分段持续写回同一个 transcript 草稿。
+- 阿里百炼 `qwen-audio-3.0-asr-flash-filetrans`：使用临时上传、异步提交、轮询和结果下载链路。当前临时上传模式按 1 GB 上限设计，不宣称支持用户自有 OSS 场景的完整 2 GB；结果地址默认 24 小时有效。说话人分离默认开启、人数默认自动识别，可选填 2～100。关闭分离后仍使用整段异步任务。
+- 阿里百炼旧模型 `qwen3-asr-flash`：继续使用 Base64 Data URL；编码后超过 10 MB 时在本地转换为 16 千赫兹单声道 WAV 分段，并持续回写已完成分段。
 - MOSI：开启“说话人分离”时使用 `moss-transcribe-diarize`、版本 `moss-transcribe-diarize-20260325` 并传入 `diarize=true`；关闭时使用普通模型 `moss-transcribe` 和版本 `moss-transcribe-v1`，不发送 `diarize`。两种模式都使用官方同步非流式 multipart 请求。超过 3 分钟时在本地切成约 3 分钟的 WAV 分段并逐段回写；HTTP `500/502/503/504` 按 1 秒、3 秒重试，仍失败、收到 `413` 或明确过长/过大响应时，只缩小当前失败段，最短 30 秒、最多四层。MOSI 未公布稳定的文件大小上限；详见 [MOSI 转写接口文档](https://platform.mosi.cn/docs/reference/transcriptions)。
 - Ollama 和 LM Studio：超过 25 MB 的文件会在上传前被阻止。
 
@@ -171,6 +173,7 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 | Provider 类型 | 上传方式 | 接口形态 | 限制 | Echo Notes 分段 | 语言参数 | 时间戳 | 说话人分离 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 火山引擎 AgentPlan 实时 `doubao-seed-asr-2.0` | 麦克风 PCM 鉴权优化双流 WebSocket | `/api/v3/plan/sauc/bigmodel_async` | 仅桌面端、本地文件系统 Vault | 不分段，单实时会话 | 中文或 auto | utterance 级支持 | 支持 |
+| 阿里百炼 `qwen-audio-3.0-asr-flash-filetrans` | 百炼临时 OSS | `/api/v1/services/audio/asr/transcription` + Task API | 临时上传 1 GB；模型最长 12 小时 | 不分段，整段异步任务 | 支持 | 句子与词级支持 | 默认开启 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
 | 硅基流动 `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
 | MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | 仅分离模式支持 segment 级时间 | 可选 |
@@ -209,7 +212,7 @@ AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签�
 | 服务商 | Base URL | Model | 默认语言 |
 | --- | --- | --- | --- |
 | 火山引擎 AgentPlan（实时） | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
-| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
+| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com` | `qwen-audio-3.0-asr-flash-filetrans` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
 | MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | 默认 `moss-transcribe-diarize`；关闭后 `moss-transcribe` | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
@@ -265,6 +268,7 @@ Echo Memory 默认关闭。进入设置页“记忆提取”阶段后：
 3. 在“模型配置”中选择独立的记忆 Provider，并填写独立 API Key、Base URL 和模型。记忆密钥按 Provider 保存在 Obsidian `SecretStorage`，不会复用分析密钥。
 4. 在“编译策略”中选择沉淀模式。两种模式都会生成会议页、候选包和审核 sidecar；自动编译模式会在保存审核后更新 User、人物、组织和项目画像，以及项目、人物和时间线聚合。
 5. 长文本默认按 24,000 字符的自然边界顺序提取，最多 20 块。所有新旧候选默认待审核，只有人工批准的断言会进入画像；批准时可以修正实际生效内容。
+6. 在“转写增强”中管理术语和固定提示词。来源笔记可用 `echo_notes_memory_projects`、`echo_notes_memory_people`、`echo_notes_memory_organizations` 声明字符串或字符串数组作用域；无来源笔记时只使用全局作用域。
 
 默认中文目录如下：
 
@@ -277,6 +281,7 @@ Echo Memory/
 ├── 04 User/SOUL.md、01～08 个人画像文档
 ├── 05 聚合/项目.md、人物.md、时间线.md
 ├── 06 上下文包/（Personal Agent 预览 Markdown）
+├── 07 转写增强/术语与上下文.md
 └── 99 系统/echo-memory.json、echo-memory-checkpoints.json、echo-memory-relations.json、运行日志/
 ```
 
@@ -298,6 +303,8 @@ Echo Memory/
 - `Echo Notes: Extract memory from current transcript`
 - `Echo Notes: Review current memory candidate`
 - `Echo Notes: Manage current memory relations`
+- `Echo Notes: Manage transcription enhancement`
+- `Echo Notes: Generate pending transcription term candidates from approved memory`
 - `Echo Notes: Open Echo Memory home`
 - `Echo Notes: Open Echo Memory timeline`
 - `Echo Notes: Create personal agent context package`
@@ -471,11 +478,11 @@ unset SILICONFLOW_API_KEY AGENTPLAN_API_KEY
 - 火山引擎 AgentPlan 实时转写始终提供说话人分离和时间范围，MOSI 离线转写可选择开启；这些标签只能标记说话人编号，不能识别真实姓名。
 - 实时转写仅支持 Obsidian 桌面端和本地文件系统 Vault。
 - 首版实时录音只有开始和停止，没有暂停/恢复；异常退出最多可能丢失尚未产生的最后一个短 WebM 分片。
-- 暂不输出逐词时间戳。
+- 百炼新异步模型会解析句子与逐词时间戳；其他不提供该字段的 Provider 仍不输出逐词时间戳。
 - 暂不支持所有 Provider 通用的大文件自动切片；共享 AudioChunkPipeline 已覆盖阿里百炼 `qwen3-asr-flash`、硅基流动官方或自定义模型与 MOSI。
 - 不支持本地 Whisper。
 - 长文本分析采用“逐块提取 + 最终汇总”，会增加模型调用次数和成本。失败或重启后可复用严格匹配的已完成分块，但最终汇总仍会重新调用；未分块的单次分析也会完整重试。
-- 任务中心会持久化最多 100 条安全任务摘要，并在重启后恢复重试入口，但它不是后台队列，仍不支持暂停/取消。分段级续跑仅覆盖阿里百炼、SiliconFlow 和 MOSI 的长音频管线；整段请求和其他 Provider 重试时会重新发起请求。
+- 任务中心会持久化最多 100 条安全任务摘要。百炼异步任务在 `PENDING` 时可取消云端任务，在 `RUNNING` 时只能停止本地等待并保留继续跟踪入口；普通同步 Provider 仍不是后台队列，也不会获得云端暂停能力。
 - Echo Memory 关系必须由用户明确确认，不会自动检测或裁决冲突；跨记录视图依赖明确的主体规范化，不进行语义实体消歧，暂不包含主题聚合、多审核人身份、PM 等角色包、向量检索和外部 Agent 动作。
 
 ## 联系与反馈

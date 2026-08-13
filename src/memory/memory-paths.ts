@@ -28,6 +28,8 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 			peopleAggregation: "People.md",
 			timelineAggregation: "Timeline.md",
 			contextPackages: "06 Context Packages",
+			transcriptionEnhancement: "07 Transcription Enhancement",
+			transcriptionEnhancementFile: "Terms and Context.md",
 			system: "99 System",
 			logs: "Run Logs"
 		}
@@ -45,6 +47,8 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 			peopleAggregation: "人物.md",
 			timelineAggregation: "时间线.md",
 			contextPackages: "06 上下文包",
+			transcriptionEnhancement: "07 转写增强",
+			transcriptionEnhancementFile: "术语与上下文.md",
 			system: "99 系统",
 			logs: "运行日志"
 		};
@@ -60,6 +64,7 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 	const entitiesDir = joinVaultPath(root, names.entities);
 	const aggregationsDir = joinVaultPath(root, names.aggregations);
 	const systemDir = joinVaultPath(root, names.system);
+	const transcriptionEnhancementDir = joinVaultPath(root, names.transcriptionEnhancement);
 	return {
 		home: joinVaultPath(root, names.home),
 		meetingsDir: joinVaultPath(root, names.meetings),
@@ -75,6 +80,8 @@ export function buildMemoryPaths(rootFolder: string, language: "zh" | "en"): Mem
 		peopleAggregation: joinVaultPath(aggregationsDir, names.peopleAggregation),
 		timelineAggregation: joinVaultPath(aggregationsDir, names.timelineAggregation),
 		contextPackagesDir: joinVaultPath(root, names.contextPackages),
+		transcriptionEnhancementDir,
+		transcriptionEnhancement: joinVaultPath(transcriptionEnhancementDir, names.transcriptionEnhancementFile),
 		systemDir,
 		manifest: joinVaultPath(systemDir, "echo-memory.json"),
 		logsDir: joinVaultPath(systemDir, names.logs)

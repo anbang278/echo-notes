@@ -57,7 +57,12 @@ export class TranscriptService {
 		return legacyFile instanceof TFile ? legacyFile : null;
 	}
 
-	async getReusableTranscriptFile(audioFile: TFile, provider: string, model: string): Promise<TFile | null> {
+	async getReusableTranscriptFile(
+		audioFile: TFile,
+		provider: string,
+		model: string,
+		configurationFingerprint?: string
+	): Promise<TFile | null> {
 		const transcriptFile = this.getTranscriptFile(audioFile);
 		if (!transcriptFile) {
 			return null;
@@ -67,7 +72,8 @@ export class TranscriptService {
 		return isReusableTranscriptForAudio(content, {
 			sourceAudio: createSourceAudioMetadata(audioFile),
 			provider,
-			model
+			model,
+			configurationFingerprint
 		})
 			? transcriptFile
 			: null;

@@ -40,7 +40,7 @@ export function diagnoseTranscriptionProviderSettings(
 	const usage = options.usage ?? "offline";
 	const providerId = isProviderId(settings.provider) ? settings.provider : "aliyun-bailian";
 	const providerLabel = PROVIDER_LABELS[providerId] ?? settings.provider;
-	const capability = getTranscriptionProviderCapability(providerId, usage);
+	const capability = getTranscriptionProviderCapability(providerId, usage, settings.model);
 	const trimmedApiKey = apiKey.trim();
 	const trimmedBaseUrl = settings.baseUrl.trim();
 	const trimmedModel = settings.model.trim();

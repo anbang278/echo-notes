@@ -62,11 +62,18 @@ export type TranscriptionProviderId = OfflineTranscriptionProviderId | RealtimeT
 
 export type TranscriptionMode = "realtime" | "offline";
 
+export interface AliyunFileTranscriptionSettings {
+	diarizationEnabled: boolean;
+	speakerCount?: number;
+	memoryEnhancementEnabled: boolean;
+}
+
 export interface TranscriptionConfig<TProvider extends TranscriptionProviderId = TranscriptionProviderId> {
 	provider: TProvider;
 	baseUrl: string;
 	model: string;
 	language: string;
+	aliyunFiletrans?: AliyunFileTranscriptionSettings;
 }
 
 export interface RealtimeTranscriptionConfig extends TranscriptionConfig<RealtimeTranscriptionProviderId> {
@@ -94,6 +101,16 @@ export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
 export const MOSI_TRANSCRIPTION_VERSION = "moss-transcribe-diarize-20260325";
 export const MOSI_PLAIN_TRANSCRIPTION_MODEL = "moss-transcribe";
 export const MOSI_PLAIN_TRANSCRIPTION_VERSION = "moss-transcribe-v1";
+export const ALIYUN_FILETRANS_MODEL = "qwen-audio-3.0-asr-flash-filetrans";
+export const ALIYUN_LEGACY_ASR_MODEL = "qwen3-asr-flash";
+export const ALIYUN_TRANSCRIPTION_MODELS = [
+	ALIYUN_FILETRANS_MODEL,
+	ALIYUN_LEGACY_ASR_MODEL
+] as const;
+export const DEFAULT_ALIYUN_FILETRANS_SETTINGS: AliyunFileTranscriptionSettings = {
+	diarizationEnabled: true,
+	memoryEnhancementEnabled: false
+};
 
 export interface AgentPlanAnalysisModelOption {
 	id: string;
@@ -256,9 +273,10 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 		language: "auto"
 	},
 	"aliyun-bailian": {
-		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		model: "qwen3-asr-flash",
-		language: "zh"
+		baseUrl: "https://dashscope.aliyuncs.com",
+		model: ALIYUN_FILETRANS_MODEL,
+		language: "zh",
+		aliyunFiletrans: { ...DEFAULT_ALIYUN_FILETRANS_SETTINGS }
 	},
 	mosi: {
 		baseUrl: MOSI_TRANSCRIPTION_BASE_URL,
@@ -977,9 +995,10 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	transcriptionMode: "offline",
 	offlineTranscription: {
 		provider: "aliyun-bailian",
-		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-		model: "qwen3-asr-flash",
-		language: "zh"
+		baseUrl: "https://dashscope.aliyuncs.com",
+		model: ALIYUN_FILETRANS_MODEL,
+		language: "zh",
+		aliyunFiletrans: { ...DEFAULT_ALIYUN_FILETRANS_SETTINGS }
 	},
 	realtimeTranscription: {
 		provider: "volcengine-agentplan",
@@ -1222,7 +1241,10 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 					legacyProvider === offlineProvider ? raw.language : undefined,
 					offlineDefaults.language
 				)
-			: offlineDefaults.language
+			: offlineDefaults.language,
+		...(offlineProvider === "aliyun-bailian"
+			? { aliyunFiletrans: normalizeAliyunFiletransSettings(nestedOffline.aliyunFiletrans) }
+			: {})
 	};
 	settings.realtimeTranscription = {
 		provider: "volcengine-agentplan",
@@ -1396,6 +1418,25 @@ function normalizeConfidence(value: unknown, fallback: number): number {
 	return Math.min(1, Math.max(0.75, value));
 }
 
+function normalizeAliyunFiletransSettings(value: unknown): AliyunFileTranscriptionSettings {
+	const raw = isRecord(value) ? value : {};
+	const rawSpeakerCount = typeof raw.speakerCount === "number" ? raw.speakerCount : Number.NaN;
+	const speakerCount = Number.isInteger(rawSpeakerCount) && rawSpeakerCount >= 2 && rawSpeakerCount <= 100
+		? rawSpeakerCount
+		: undefined;
+	return {
+		diarizationEnabled:
+			typeof raw.diarizationEnabled === "boolean"
+				? raw.diarizationEnabled
+				: DEFAULT_ALIYUN_FILETRANS_SETTINGS.diarizationEnabled,
+		...(speakerCount !== undefined ? { speakerCount } : {}),
+		memoryEnhancementEnabled:
+			typeof raw.memoryEnhancementEnabled === "boolean"
+				? raw.memoryEnhancementEnabled
+				: DEFAULT_ALIYUN_FILETRANS_SETTINGS.memoryEnhancementEnabled
+	};
+}
+
 export function getSelectedTranscriptionConfig(settings: EchoNotesSettings): TranscriptionConfig {
 	return settings.transcriptionMode === "realtime"
 		? settings.realtimeTranscription
@@ -1411,7 +1452,11 @@ export function getMosiTranscriptionModel(speakerDiarizationEnabled: boolean): s
 export function getOfflineTranscriptionProviderDefaults(
 	provider: OfflineTranscriptionProviderId
 ): Omit<TranscriptionConfig, "provider"> {
-	return PROVIDER_DEFAULTS[provider];
+	const defaults = PROVIDER_DEFAULTS[provider];
+	return {
+		...defaults,
+		...(defaults.aliyunFiletrans ? { aliyunFiletrans: { ...defaults.aliyunFiletrans } } : {})
+	};
 }
 
 export function isMosiSpeakerDiarizationModel(model: string): boolean {
