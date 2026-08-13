@@ -44,12 +44,21 @@ import {
 } from "./memory-checkpoint";
 import { buildMemoryPaths, MEMORY_USER_PROFILE_TITLES, normalizeMemoryRoot } from "./memory-paths";
 import {
+	TRANSCRIPTION_ENHANCEMENT_MANAGED_START,
+	TranscriptionEnhancementDocumentError,
 	buildTranscriptionEnhancementSnapshot,
 	createTranscriptionEnhancementStore,
+	getEffectiveTranscriptionTermText,
+	getTranscriptionEnhancementDocumentStats,
+	mergeTranscriptionEnhancementStores,
 	normalizeTranscriptionEnhancementScopes,
+	parseManualTranscriptionEnhancementDocument,
+	parseTranscriptionEnhancementCandidateDocument,
 	parseTranscriptionEnhancementDocument,
-	renderTranscriptionEnhancementDocument,
-	updateTranscriptionEnhancementDocument,
+	renderManualTranscriptionEnhancementDocument,
+	renderTranscriptionEnhancementCandidateDocument,
+	updateTranscriptionEnhancementCandidateDocument,
+	type TranscriptionEnhancementDocumentStats,
 	type TranscriptionEnhancementScope,
 	type TranscriptionEnhancementStore
 } from "./memory-transcription-enhancement";
@@ -193,6 +202,20 @@ export interface MemoryContextPackageSaveResult {
 	preview: MemoryContextPackagePreview;
 }
 
+export interface TranscriptionEnhancementDocuments {
+	manual: TranscriptionEnhancementStore;
+	candidates: TranscriptionEnhancementStore;
+	stats: TranscriptionEnhancementDocumentStats;
+	manualFile: TFile;
+	candidateFile: TFile;
+}
+
+export interface TranscriptionEnhancementResetResult {
+	manualFile: TFile;
+	candidateFile: TFile;
+	backupPath: string;
+}
+
 interface ProfileCompilation {
 	path: string;
 	title: string;
@@ -243,7 +266,11 @@ export class MemoryService {
 		}
 		await this.writeIfMissing(
 			paths.transcriptionEnhancement,
-			renderTranscriptionEnhancementDocument(createTranscriptionEnhancementStore())
+			renderManualTranscriptionEnhancementDocument(createTranscriptionEnhancementStore())
+		);
+		await this.writeIfMissing(
+			paths.transcriptionEnhancementCandidates,
+			renderTranscriptionEnhancementCandidateDocument(createTranscriptionEnhancementStore())
 		);
 
 		const now = new Date().toISOString();
@@ -766,9 +793,8 @@ export class MemoryService {
 	}
 
 	async getTranscriptionEnhancementStore(settings: EchoNotesSettings): Promise<TranscriptionEnhancementStore> {
-		const manifest = await this.readManifest(settings);
-		const file = await this.ensureTranscriptionEnhancementFile(manifest);
-		return parseTranscriptionEnhancementDocument(await this.app.vault.cachedRead(file));
+		const documents = await this.getTranscriptionEnhancementDocuments(settings);
+		return mergeTranscriptionEnhancementStores(documents.manual, documents.candidates);
 	}
 
 	async saveTranscriptionEnhancementStore(
@@ -776,29 +802,105 @@ export class MemoryService {
 		store: TranscriptionEnhancementStore
 	): Promise<TFile> {
 		const manifest = await this.readManifest(settings);
-		const file = await this.ensureTranscriptionEnhancementFile(manifest);
+		const { candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
 		const updatedStore: TranscriptionEnhancementStore = {
-			...store,
+			...createTranscriptionEnhancementStore(),
+			terms: Object.fromEntries(Object.entries(store.terms).filter(([, term]) => term.source === "memory")),
 			updatedAt: new Date().toISOString()
 		};
-		await this.app.vault.process(file, (content) =>
-			updateTranscriptionEnhancementDocument(content, updatedStore)
+		await this.app.vault.process(candidateFile, (content) =>
+			updateTranscriptionEnhancementCandidateDocument(content, updatedStore)
 		);
-		return file;
+		return candidateFile;
 	}
 
 	async getTranscriptionEnhancementFile(settings: EchoNotesSettings): Promise<TFile> {
 		const manifest = await this.readManifest(settings);
-		return this.ensureTranscriptionEnhancementFile(manifest);
+		return (await this.ensureTranscriptionEnhancementFiles(manifest)).manualFile;
+	}
+
+	async getTranscriptionEnhancementCandidateFile(settings: EchoNotesSettings): Promise<TFile> {
+		const manifest = await this.readManifest(settings);
+		return (await this.ensureTranscriptionEnhancementFiles(manifest)).candidateFile;
+	}
+
+	async getTranscriptionEnhancementDocuments(settings: EchoNotesSettings): Promise<TranscriptionEnhancementDocuments> {
+		const manifest = await this.readManifest(settings);
+		const { manualFile, candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
+		const manual = parseManualTranscriptionEnhancementDocument(
+			await this.app.vault.cachedRead(manualFile),
+			manualFile.path
+		);
+		const candidates = parseTranscriptionEnhancementCandidateDocument(
+			await this.app.vault.cachedRead(candidateFile),
+			candidateFile.path
+		);
+		return {
+			manual,
+			candidates,
+			stats: getTranscriptionEnhancementDocumentStats(manual, candidates),
+			manualFile,
+			candidateFile
+		};
+	}
+
+	async resetTranscriptionEnhancementExamples(
+		settings: EchoNotesSettings
+	): Promise<TranscriptionEnhancementResetResult> {
+		const manifest = await this.readManifest(settings);
+		const { manualFile, candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
+		const manualContent = await this.app.vault.cachedRead(manualFile);
+		const candidateContent = await this.app.vault.cachedRead(candidateFile);
+		const resetAt = new Date().toISOString();
+		const backupPath = normalizePath(
+			`${manifest.paths.systemDir}/transcription-enhancement-reset-${resetAt.replace(/[:.]/g, "-")}.json`
+		);
+		await this.app.vault.create(backupPath, `${JSON.stringify({
+			schemaVersion: 1,
+			resetAt,
+			manualPath: manualFile.path,
+			candidatePath: candidateFile.path,
+			manualContent,
+			candidateContent
+		}, null, 2)}\n`);
+
+		const emptyStore = createTranscriptionEnhancementStore(resetAt);
+		const nextManualContent = renderManualTranscriptionEnhancementDocument(emptyStore);
+		const nextCandidateContent = renderTranscriptionEnhancementCandidateDocument(emptyStore);
+		try {
+			await this.app.vault.modify(manualFile, nextManualContent);
+			await this.app.vault.modify(candidateFile, nextCandidateContent);
+		} catch (error) {
+			const restoreErrors: string[] = [];
+			try {
+				await this.app.vault.modify(manualFile, manualContent);
+			} catch (restoreError) {
+				restoreErrors.push(`人工配置恢复失败：${getErrorMessage(restoreError)}`);
+			}
+			try {
+				await this.app.vault.modify(candidateFile, candidateContent);
+			} catch (restoreError) {
+				restoreErrors.push(`候选文件恢复失败：${getErrorMessage(restoreError)}`);
+			}
+			throw new Error(
+				`重置示例配置失败：${getErrorMessage(error)}。备份已保存至 ${backupPath}${restoreErrors.length ? `；${restoreErrors.join("；")}` : "，原内容已恢复"}。`,
+				{ cause: error }
+			);
+		}
+		await this.appendLog(manifest, `重置转写增强为空配置与不生效示例，备份 ${backupPath}。`);
+		return { manualFile, candidateFile, backupPath };
 	}
 
 	async buildTranscriptionEnhancement(
 		settings: EchoNotesSettings,
-		sourceNote?: TFile
+		sourceNote?: TFile,
+		options: { enableHotwords?: boolean; enableContext?: boolean } = {}
 	): Promise<TranscriptionEnhancementSnapshot> {
 		const manifest = await this.readManifest(settings);
-		const storeFile = await this.ensureTranscriptionEnhancementFile(manifest);
-		const store = parseTranscriptionEnhancementDocument(await this.app.vault.cachedRead(storeFile));
+		const { manualFile, candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
+		const manual = parseManualTranscriptionEnhancementDocument(await this.app.vault.cachedRead(manualFile), manualFile.path);
+		const candidates = parseTranscriptionEnhancementCandidateDocument(await this.app.vault.cachedRead(candidateFile), candidateFile.path);
+		const store = mergeTranscriptionEnhancementStores(manual, candidates);
 		const frontmatter = sourceNote ? this.app.metadataCache.getFileCache(sourceNote)?.frontmatter : undefined;
 		const scopes = normalizeTranscriptionEnhancementScopes({
 			projects: frontmatter?.echo_notes_memory_projects,
@@ -814,7 +916,13 @@ export class MemoryService {
 			subjectType: assertion.subjectType,
 			subjectName: assertion.subjectName
 		}));
-		return buildTranscriptionEnhancementSnapshot({ store, scopes, memoryAssertions });
+		return buildTranscriptionEnhancementSnapshot({
+			store,
+			scopes,
+			memoryAssertions,
+			enableHotwords: options.enableHotwords,
+			enableContext: options.enableContext
+		});
 	}
 
 	async generateTranscriptionTermCandidates(
@@ -822,8 +930,9 @@ export class MemoryService {
 		apiKey: string
 	): Promise<{ addedCount: number; file: TFile }> {
 		const manifest = await this.readManifest(settings);
-		const storeFile = await this.ensureTranscriptionEnhancementFile(manifest);
-		const store = parseTranscriptionEnhancementDocument(await this.app.vault.cachedRead(storeFile));
+		const { manualFile, candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
+		const manual = parseManualTranscriptionEnhancementDocument(await this.app.vault.cachedRead(manualFile), manualFile.path);
+		const store = parseTranscriptionEnhancementCandidateDocument(await this.app.vault.cachedRead(candidateFile), candidateFile.path);
 		const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
 		const relationStore = await this.readMemoryRelationStore(manifest);
 		const currentEntries = this.createCurrentMemoryEntries(packages, relationStore);
@@ -850,8 +959,8 @@ export class MemoryService {
 		});
 		const suggestions = parseTranscriptionTermSuggestions(result.text);
 		const origins = new Map(currentEntries.map((entry) => [entry.assertion.id, entry]));
-		const existingKeys = new Set(Object.values(store.terms).map((term) =>
-			getTranscriptionTermKey(term.text, term.scope)
+		const existingKeys = new Set([...Object.values(manual.terms), ...Object.values(store.terms)].map((term) =>
+			getTranscriptionTermKey(getEffectiveTranscriptionTermText(term), term.scope)
 		));
 		const at = new Date().toISOString();
 		let addedCount = 0;
@@ -871,6 +980,7 @@ export class MemoryService {
 			store.terms[id] = {
 				id,
 				text: suggestion.text,
+				effectiveText: suggestion.text,
 				weight: 3,
 				scope,
 				source: "memory",
@@ -884,10 +994,10 @@ export class MemoryService {
 			addedCount += 1;
 		}
 		store.updatedAt = at;
-		await this.app.vault.process(storeFile, (content) =>
-			updateTranscriptionEnhancementDocument(content, store)
+		await this.app.vault.process(candidateFile, (content) =>
+			updateTranscriptionEnhancementCandidateDocument(content, store)
 		);
-		return { addedCount, file: storeFile };
+		return { addedCount, file: candidateFile };
 	}
 
 	async getMemoryContextPackageContext(
@@ -1195,19 +1305,114 @@ export class MemoryService {
 		}
 	}
 
-	private async ensureTranscriptionEnhancementFile(manifest: EchoMemoryManifest): Promise<TFile> {
+	private async ensureTranscriptionEnhancementFiles(
+		manifest: EchoMemoryManifest
+	): Promise<{ manualFile: TFile; candidateFile: TFile }> {
 		await this.files.ensureFolder(manifest.paths.transcriptionEnhancementDir);
-		const existing = this.app.vault.getAbstractFileByPath(manifest.paths.transcriptionEnhancement);
-		if (existing instanceof TFile) {
-			return existing;
-		}
-		if (existing) {
+		const existingManualFile = this.app.vault.getAbstractFileByPath(manifest.paths.transcriptionEnhancement);
+		if (existingManualFile && !(existingManualFile instanceof TFile)) {
 			throw new Error(`术语与上下文路径已被文件夹占用：${manifest.paths.transcriptionEnhancement}`);
 		}
-		return this.app.vault.create(
-			manifest.paths.transcriptionEnhancement,
-			renderTranscriptionEnhancementDocument(createTranscriptionEnhancementStore())
+		const manualFile = existingManualFile instanceof TFile
+			? existingManualFile
+			: await this.app.vault.create(
+				manifest.paths.transcriptionEnhancement,
+				renderManualTranscriptionEnhancementDocument(createTranscriptionEnhancementStore())
+			);
+
+		const manualContent = await this.app.vault.cachedRead(manualFile);
+		if (manualContent.includes(TRANSCRIPTION_ENHANCEMENT_MANAGED_START)) {
+			return this.migrateLegacyTranscriptionEnhancement(manifest, manualFile, manualContent);
+		}
+
+		const existingCandidateFile = this.app.vault.getAbstractFileByPath(manifest.paths.transcriptionEnhancementCandidates);
+		if (existingCandidateFile && !(existingCandidateFile instanceof TFile)) {
+			throw new Error(`术语候选路径已被文件夹占用：${manifest.paths.transcriptionEnhancementCandidates}`);
+		}
+		const candidateFile = existingCandidateFile instanceof TFile
+			? existingCandidateFile
+			: await this.app.vault.create(
+				manifest.paths.transcriptionEnhancementCandidates,
+				renderTranscriptionEnhancementCandidateDocument(createTranscriptionEnhancementStore())
+			);
+		return { manualFile, candidateFile };
+	}
+
+	private async migrateLegacyTranscriptionEnhancement(
+		manifest: EchoMemoryManifest,
+		manualFile: TFile,
+		legacyContent: string
+	): Promise<{ manualFile: TFile; candidateFile: TFile }> {
+		let legacy: TranscriptionEnhancementStore;
+		try {
+			legacy = parseTranscriptionEnhancementDocument(legacyContent);
+		} catch (error) {
+			throw new TranscriptionEnhancementDocumentError(
+				manualFile.path,
+				1,
+				`旧版术语与上下文无法迁移：${getErrorMessage(error)}`
+			);
+		}
+		const backup = this.app.vault.getAbstractFileByPath(manifest.paths.transcriptionEnhancementLegacyBackup);
+		if (backup && !(backup instanceof TFile)) {
+			throw new Error(`转写增强迁移备份路径已被文件夹占用：${manifest.paths.transcriptionEnhancementLegacyBackup}`);
+		}
+		if (!(backup instanceof TFile)) {
+			await this.app.vault.create(manifest.paths.transcriptionEnhancementLegacyBackup, `${JSON.stringify({
+				schemaVersion: 1,
+				migratedAt: new Date().toISOString(),
+				sourcePath: manualFile.path,
+				originalContent: legacyContent
+			}, null, 2)}\n`);
+		}
+
+		const candidateTerms = Object.fromEntries(
+			Object.entries(legacy.terms).filter(([, term]) => term.source === "memory")
 		);
+		let candidateStore: TranscriptionEnhancementStore = {
+			...createTranscriptionEnhancementStore(legacy.updatedAt),
+			terms: candidateTerms
+		};
+		const candidateFile = this.app.vault.getAbstractFileByPath(manifest.paths.transcriptionEnhancementCandidates);
+		let resolvedCandidateFile: TFile;
+		if (candidateFile && !(candidateFile instanceof TFile)) {
+			throw new Error(`术语候选路径已被文件夹占用：${manifest.paths.transcriptionEnhancementCandidates}`);
+		}
+		if (candidateFile instanceof TFile) {
+			resolvedCandidateFile = candidateFile;
+			const existingCandidates = parseTranscriptionEnhancementCandidateDocument(
+				await this.app.vault.cachedRead(candidateFile),
+				candidateFile.path
+			);
+			candidateStore = {
+				...candidateStore,
+				updatedAt: existingCandidates.updatedAt || candidateStore.updatedAt,
+				terms: { ...candidateStore.terms, ...existingCandidates.terms }
+			};
+			await this.app.vault.process(candidateFile, (content) =>
+				updateTranscriptionEnhancementCandidateDocument(content, candidateStore)
+			);
+		} else {
+			resolvedCandidateFile = await this.app.vault.create(
+				manifest.paths.transcriptionEnhancementCandidates,
+				renderTranscriptionEnhancementCandidateDocument(candidateStore)
+			);
+		}
+
+		const manualStore: TranscriptionEnhancementStore = {
+			...createTranscriptionEnhancementStore(legacy.updatedAt),
+			terms: Object.fromEntries(Object.entries(legacy.terms).filter(([, term]) =>
+				term.source === "manual" && term.status === "approved"
+			)),
+			prompts: Object.fromEntries(Object.entries(legacy.prompts).filter(([, prompt]) =>
+				prompt.status === "approved"
+			))
+		};
+		await this.app.vault.modify(
+			manualFile,
+			renderManualTranscriptionEnhancementDocument(manualStore, extractLegacyTranscriptionEnhancementNotes(legacyContent))
+		);
+		return { manualFile, candidateFile: resolvedCandidateFile };
 	}
 
 	private createMemoryCompilationPlan(
@@ -1723,6 +1928,15 @@ function parseTranscriptionTermSuggestions(value: string): Array<{ text: string;
 
 function getTranscriptionTermKey(text: string, scope: TranscriptionEnhancementScope): string {
 	return `${text.trim().toLocaleLowerCase()}|${scope.type}|${scope.value?.trim().toLocaleLowerCase() ?? ""}`;
+}
+
+function extractLegacyTranscriptionEnhancementNotes(content: string): string {
+	const manualHeading = content.indexOf("## 人工补充");
+	const managedStart = content.indexOf(TRANSCRIPTION_ENHANCEMENT_MANAGED_START);
+	if (manualHeading < 0 || managedStart <= manualHeading) return "";
+	return content
+		.slice(manualHeading + "## 人工补充".length, managedStart)
+		.trim();
 }
 
 function getErrorMessage(error: unknown): string {

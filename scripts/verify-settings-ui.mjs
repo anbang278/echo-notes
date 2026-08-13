@@ -1936,7 +1936,7 @@ function getActivePanel(page) {
 }
 
 async function getActiveSetting(page, name) {
-	const settingItems = getActivePanel(page).locator(".setting-item");
+	const settingItems = getActivePanel(page).locator(".setting-item:not(.setting-item-heading)");
 	for (let index = 0; index < (await settingItems.count()); index += 1) {
 		const settingItem = settingItems.nth(index);
 		const settingName = (await settingItem.locator(".setting-item-name").textContent())?.trim();
@@ -1994,11 +1994,18 @@ async function setSettingToggle(page, name, enabled) {
 		await checkboxEl.evaluate((element) => element.click());
 		await waitForSettingsRerender(page, previousRenderId);
 		const updatedSettingItem = await getActiveSetting(page, name);
+		const updatedEnabled = await updatedSettingItem
+			.locator(".checkbox-container")
+			.evaluate((element) => element.classList.contains("is-enabled"));
+		const settingsState = name === "说话人分离"
+			? await page.evaluate((pluginId) => ({
+				provider: window.app.plugins.plugins[pluginId].settings.offlineTranscription.provider,
+				diarizationEnabled: window.app.plugins.plugins[pluginId].settings.offlineTranscription.aliyunFiletrans?.diarizationEnabled
+			}), PLUGIN_ID)
+			: null;
 		assert(
-			(await updatedSettingItem
-				.locator(".checkbox-container")
-				.evaluate((element) => element.classList.contains("is-enabled"))) === enabled,
-			`${name} 重绘后的开关状态不正确`
+			updatedEnabled === enabled,
+			`${name} 重绘后的开关状态不正确：期望 ${enabled}，实际 ${updatedEnabled}，设置 ${JSON.stringify(settingsState)}`
 		);
 	}
 }
@@ -2045,12 +2052,12 @@ async function verifySettingsHotkeyConflicts(page) {
 		window.app.plugins.plugins[pluginId].settingTab.showDestination("transcription-recording");
 	}, PLUGIN_ID);
 
-	const settingItem = await getActiveSetting(page, "Obsidian 核心插件录音机开启快捷键");
-	const input = settingItem.locator('input[type="text"]');
-	const saveButton = settingItem.getByRole("button", { name: "保存", exact: true });
+	const settingItem = await getActiveSetting(page, "开始录音");
+	const captureButton = settingItem.locator('.echo-notes-quick-recording-hotkey-capture');
 	const status = settingItem.locator('.echo-notes-hotkey-validation[role="status"]');
-	await input.fill("Ctrl+Shift+R");
-	assert(await saveButton.isDisabled(), "设置页快捷键与其他命令冲突时保存按钮仍可用");
+	await captureButton.click();
+	assert((await captureButton.textContent())?.includes("请按组合键"), "快捷键记录状态不明确");
+	await page.keyboard.press("Control+Shift+R");
 	assert(
 		(await status.getAttribute("aria-live")) === "polite" &&
 		(await status.getAttribute("data-status-tone")) === "failed" &&
@@ -2058,6 +2065,13 @@ async function verifySettingsHotkeyConflicts(page) {
 		await status.locator(".echo-notes-status-indicator-icon svg").count() === 1 &&
 		Boolean((await status.locator(".echo-notes-status-indicator-text").textContent())?.trim()),
 		"设置页快捷键冲突提示不明确或缺少可访问状态播报"
+	);
+	assert(
+		await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.officialRecorderStartHotkey,
+			PLUGIN_ID
+		) === null,
+		"冲突快捷键不应覆盖原绑定"
 	);
 	const bypassResult = await page.evaluate(async ({ pluginId, targetCommandId }) => {
 		const plugin = window.app.plugins.plugins[pluginId];
@@ -2084,12 +2098,26 @@ async function verifySettingsHotkeyConflicts(page) {
 		window.app.hotkeyManager.setHotkeys(commandId, []);
 		await window.app.hotkeyManager.save();
 	}, setup.conflictCommandId);
-	await input.fill("Ctrl+Shift+Y");
-	assert(await saveButton.isEnabled(), "合法设置页快捷键未恢复保存能力");
-	await saveButton.click();
+	const refreshedSettingItem = await getActiveSetting(page, "开始录音");
+	const refreshedCaptureButton = refreshedSettingItem.locator('.echo-notes-quick-recording-hotkey-capture');
+	await refreshedCaptureButton.click();
+	await page.keyboard.press("Escape");
+	const cancelledCaptureButton = (await getActiveSetting(page, "开始录音")).locator('.echo-notes-quick-recording-hotkey-capture');
+	assert((await cancelledCaptureButton.textContent())?.trim() === "记录热键", "Esc 未取消热键记录或修改原绑定");
+	await cancelledCaptureButton.click();
+	await page.keyboard.press("Control+Shift+Y");
 	await page.waitForFunction((pluginId) => (
 		window.app.plugins.plugins[pluginId].settings.officialRecorderStartHotkey?.key === "Y"
 	), PLUGIN_ID);
+	const savedSettingItem = await getActiveSetting(page, "开始录音");
+	const savedCaptureButton = savedSettingItem.locator('.echo-notes-quick-recording-hotkey-capture');
+	assert((await savedCaptureButton.textContent())?.trim() === "Ctrl+Shift+Y", "合法快捷键未即时显示");
+	const clearButton = savedSettingItem.getByRole("button", { name: "清除“开始录音”快捷键", exact: true });
+	await clearButton.click();
+	await page.waitForFunction((pluginId) => (
+		window.app.plugins.plugins[pluginId].settings.officialRecorderStartHotkey === null
+	), PLUGIN_ID);
+	assert((await (await getActiveSetting(page, "开始录音")).locator('.echo-notes-quick-recording-hotkey-capture').textContent())?.trim() === "记录热键", "清除后未恢复记录热键状态");
 
 	await page.evaluate(async ({ pluginId, setup }) => {
 		const plugin = window.app.plugins.plugins[pluginId];
@@ -2225,9 +2253,9 @@ async function verifyTabs(page) {
 	await transcriptionTab.click();
 	const activePanel = getActivePanel(page);
 	const sectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
-	assert((await sectionTabs.allTextContents()).join("|") === "转写服务|录音控制|输出规则|自动化与日志", "转写二级分类不完整");
+	assert((await sectionTabs.allTextContents()).join("|") === "转写服务|能力增强|输出规则|自动化与日志", "转写二级分类不完整");
 	const serviceTab = sectionTabs.filter({ hasText: "转写服务" });
-	const recordingTab = sectionTabs.filter({ hasText: "录音控制" });
+	const advancedTab = sectionTabs.filter({ hasText: "能力增强" });
 	const outputTab = sectionTabs.filter({ hasText: "输出规则" });
 	const automationTab = sectionTabs.filter({ hasText: "自动化与日志" });
 	await outputTab.click();
@@ -2245,6 +2273,10 @@ async function verifyTabs(page) {
 	await automationTab.press("ArrowRight");
 	assert(await serviceTab.getAttribute("aria-selected") === "true", "二级右方向键应循环切换");
 	assert(
+		await activePanel.locator(".echo-notes-settings-section-tabs").evaluate((element) => getComputedStyle(element).position) !== "sticky",
+		"转写二级分类不应在滚动时遮挡内容"
+	);
+	assert(
 		JSON.stringify(await getSettingOptionValues(page, "服务商")) ===
 			JSON.stringify(["aliyun-bailian", "siliconflow", "mosi", "ollama", "lm-studio"]),
 		"离线转写服务商的成员或顺序不正确"
@@ -2253,6 +2285,40 @@ async function verifyTabs(page) {
 		JSON.stringify(await getSettingOptionValues(page, "转写模型")) ===
 			JSON.stringify(["qwen-audio-3.0-asr-flash-filetrans", "qwen3-asr-flash"]),
 		"阿里百炼转写模型选项不完整"
+	);
+	await advancedTab.click();
+	const serviceContext = activePanel.locator('.echo-notes-transcription-context');
+	assert(await serviceContext.locator('.echo-notes-transcription-context-provider').count() === 1, "当前服务卡缺少服务商主信息");
+	assert(await serviceContext.locator('.echo-notes-transcription-context-model').count() === 1, "当前服务卡缺少模型主信息");
+	assert(await serviceContext.locator('.echo-notes-transcription-context-mode').count() === 1, "当前服务卡缺少转写模式标签");
+	const capabilityTags = serviceContext.locator('.echo-notes-transcription-context-chip');
+	assert(
+		JSON.stringify(await capabilityTags.allTextContents()) === JSON.stringify([
+			"说话人分离",
+			"时间戳",
+			"热词增强",
+			"上下文增强"
+		]),
+		"阿里 filetrans 的模型支持 Tag 不正确"
+	);
+	assert(
+		await capabilityTags.evaluateAll((tags) => tags.every((tag) => (
+			![...tag.classList].some((className) => className.startsWith("is-")) &&
+			tag.getAttribute("role") !== "button" &&
+			Boolean(tag.getAttribute("aria-label")?.includes("当前模型支持"))
+		))),
+		"模型支持 Tag 混入开关状态或缺少可访问名称"
+	);
+	assert(await serviceContext.locator('.echo-notes-transcription-context-details').count() === 1, "当前服务卡缺少技术详情折叠区");
+	const capabilityCards = activePanel.locator('.echo-notes-transcription-capability-card');
+	assert(
+		JSON.stringify(await capabilityCards.locator('.echo-notes-transcription-capability-card-title').allTextContents()) ===
+			JSON.stringify(["说话人分离", "术语增强", "上下文增强", "快捷录音"]),
+		"能力增强未按四张能力卡片组织"
+	);
+	assert(
+		await activePanel.locator('.echo-notes-transcription-capability-fact').count() === 0,
+		"时间戳不应在能力 Tag 之外重复渲染"
 	);
 	assert(
 		await (await getActiveSetting(page, "说话人分离"))
@@ -2264,32 +2330,130 @@ async function verifyTabs(page) {
 		(await getSettingTextValue(page, "说话人数")) === "",
 		"阿里 filetrans 说话人数应默认自动判断"
 	);
-	const memoryEnhancementSetting = await getActiveSetting(page, "使用 Echo Memory 转写增强");
+	const hotwordEnhancementSetting = await getActiveSetting(page, "术语增强");
+	const contextEnhancementSetting = await getActiveSetting(page, "上下文增强");
 	const memoryInitialized = await page.evaluate(
 		(pluginId) => window.app.plugins.plugins[pluginId].settings.memoryInitialized,
 		PLUGIN_ID
 	);
 	assert(
-		await memoryEnhancementSetting
+		await hotwordEnhancementSetting
 			.locator(".checkbox-container")
 			.evaluate((element) => element.classList.contains("is-disabled")) === !memoryInitialized,
-		"转写增强开关的 Memory 初始化限制不正确"
+		"热词增强开关的 Memory 初始化限制不正确"
 	);
 	assert(
-		!await memoryEnhancementSetting
+		!await hotwordEnhancementSetting
 			.locator(".checkbox-container")
 			.evaluate((element) => element.classList.contains("is-enabled")),
-		"阿里 filetrans 的 Memory 转写增强应默认关闭"
+		"阿里 filetrans 的热词增强应默认关闭"
 	);
+	assert(
+		!await contextEnhancementSetting.locator(".checkbox-container")
+			.evaluate((element) => element.classList.contains("is-enabled")),
+		"阿里 filetrans 的上下文增强应默认关闭"
+	);
+	assert(
+		(await activePanel.getByRole("button", { name: "前往记忆提取配置", exact: true }).count()) === 2,
+		"Memory 未初始化时应分别提供术语和上下文恢复入口"
+	);
+	assert(
+		(await activePanel.getByText("已开启", { exact: true }).count()) === 0,
+		"普通开关状态不应重复显示“已开启”标签"
+	);
+	await activePanel.getByRole("button", { name: "前往记忆提取配置", exact: true }).first().click();
+	await page.waitForFunction(() => (
+		document.activeElement?.closest('[data-echo-notes-memory-initialization="true"]') !== null
+	));
+	assert(await memoryTab.getAttribute("aria-selected") === "true", "Memory 恢复入口未切换到记忆提取阶段");
+	assert(
+		await getActivePanel(page).getByRole("tab", { name: "记忆工作区", exact: true }).getAttribute("aria-selected") === "true",
+		"Memory 恢复入口未定位到记忆工作区"
+	);
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.memoryInitialized = true;
+		plugin.settings.offlineTranscription.aliyunFiletrans.hotwordEnhancementEnabled = false;
+		plugin.settings.offlineTranscription.aliyunFiletrans.contextEnhancementEnabled = false;
+		await plugin.saveSettings();
+		plugin.settingTab.showDestination("transcription-recording");
+	}, PLUGIN_ID);
+	await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
+	assert(
+		(await activePanel.getByText("人工术语", { exact: true }).count()) === 0 &&
+		(await activePanel.getByText("预览实际内容", { exact: true }).count()) === 0,
+		"父能力关闭时仍显示后续配置"
+	);
+	const speakerCountSetting = await getActiveSetting(page, "说话人数");
+	const speakerCountInput = speakerCountSetting.locator('input[type="text"]');
+	await speakerCountInput.fill("3");
+	await speakerCountInput.blur();
+	await speakerCountSetting.getByText("已保存", { exact: true }).waitFor({ state: "visible" });
+	await setSettingToggle(page, "说话人分离", false);
+	assert(
+		(await activePanel.getByText("说话人数", { exact: true }).count()) === 0 &&
+		(await activePanel.getByText("说话人标签样式", { exact: true }).count()) === 0,
+		"关闭说话人分离后仍显示从属配置"
+	);
+	assert(
+		await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.aliyunFiletrans.speakerCount,
+			PLUGIN_ID
+		) === 3,
+		"关闭说话人分离时不应清除已保存的说话人数"
+	);
+	await setSettingToggle(page, "说话人分离", true);
+	assert((await getSettingTextValue(page, "说话人数")) === "3", "重新开启后未恢复说话人数");
+	await setSettingToggle(page, "术语增强", true);
+	assert(await (await getActiveSetting(page, "人工术语")).isVisible(), "开启术语增强后未显示人工配置入口");
+	assert(await (await getActiveSetting(page, "AI 术语候选")).isVisible(), "开启术语增强后未显示候选审核入口");
+	await setSettingToggle(page, "术语增强", false);
+	assert((await activePanel.getByText("人工术语", { exact: true }).count()) === 0, "关闭术语增强后未隐藏人工配置入口");
+	await setSettingToggle(page, "上下文增强", true);
+	assert(await (await getActiveSetting(page, "预览实际内容")).isVisible(), "开启上下文增强后未显示预览入口");
+	await setSettingToggle(page, "上下文增强", false);
+	assert((await activePanel.getByText("预览实际内容", { exact: true }).count()) === 0, "关闭上下文增强后未隐藏预览入口");
+	for (const [capabilityName, expanded] of [["说话人分离", true], ["术语增强", false], ["上下文增强", false]]) {
+		const toggle = (await getActiveSetting(page, capabilityName)).locator(".checkbox-container");
+		assert(Boolean(await toggle.getAttribute("aria-controls")), `${capabilityName} 开关缺少 aria-controls`);
+		assert((await toggle.getAttribute("aria-expanded")) === String(expanded), `${capabilityName} 的 aria-expanded 不正确`);
+	}
+	await page.evaluate(async ({ pluginId, memoryInitialized }) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.memoryInitialized = memoryInitialized;
+		plugin.settings.offlineTranscription.aliyunFiletrans.hotwordEnhancementEnabled = false;
+		plugin.settings.offlineTranscription.aliyunFiletrans.contextEnhancementEnabled = false;
+		delete plugin.settings.offlineTranscription.aliyunFiletrans.speakerCount;
+		await plugin.saveSettings();
+		plugin.settingTab.showDestination("transcription-recording");
+	}, { pluginId: PLUGIN_ID, memoryInitialized });
+	await transcriptionTab.click();
+	await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
+	await serviceTab.click();
 	await selectSettingOption(page, "服务商", "siliconflow");
+	await advancedTab.click();
+	assert(
+		JSON.stringify(await serviceContext.locator('.echo-notes-transcription-context-chip').allTextContents()) === JSON.stringify(["长音频分段"]),
+		"SiliconFlow 只应展示长音频分段能力 Tag"
+	);
+	assert(
+		await activePanel.locator('.echo-notes-transcription-capability-empty').count() === 3,
+		"SiliconFlow 不支持的能力组应显示三个紧凑空状态"
+	);
+	assert(
+		await activePanel.locator('.echo-notes-transcription-capability-card .checkbox-container').count() === 0 &&
+		await activePanel.locator('.echo-notes-transcription-capability-status.is-unsupported').count() === 3,
+		"不支持的能力仍被渲染成可操作开关或缺少状态说明"
+	);
+	await activePanel.getByRole("button", { name: "前往转写服务", exact: true }).first().click();
+	await page.waitForFunction(() => (
+		document.activeElement?.closest('[data-echo-notes-guide-target="transcription-provider"]') !== null
+	));
+	assert(await serviceTab.getAttribute("aria-selected") === "true", "空状态操作未返回转写服务");
 	const transcriptionAdvanced = activePanel.locator(
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
 	).first();
 	assert(await transcriptionAdvanced.getAttribute("open") === null, "转写高级配置应默认折叠");
-	assert(
-		await activePanel.getByText("当前服务商能力", { exact: true }).isVisible(),
-		"当前服务商能力应在基础配置中可见"
-	);
 	assert(await (await getActiveSetting(page, "转写模型")).isVisible(), "转写模型应在基础配置中可见");
 	assert(await (await getActiveSetting(page, "转写配置自检")).isVisible(), "转写配置自检应在基础配置中可见");
 	const serviceOrder = await activePanel.locator('.echo-notes-settings-section-panel:not([hidden])').evaluate((panel) => (
@@ -2313,8 +2477,7 @@ async function verifyTabs(page) {
 		orderIndex("服务商") < orderIndex("API Key") &&
 		orderIndex("API Key") < orderIndex("转写模型") &&
 		orderIndex("转写模型") < orderIndex("转写配置自检") &&
-		orderIndex("转写配置自检") < orderIndex("当前服务商能力") &&
-		orderIndex("当前服务商能力") < orderIndex("高级配置"),
+		orderIndex("转写配置自检") < orderIndex("高级配置"),
 		`转写服务设置顺序不符合信息架构：${JSON.stringify(serviceOrder)}`
 	);
 	assert(
@@ -2373,29 +2536,34 @@ async function verifyTabs(page) {
 	);
 
 	await selectSettingOption(page, "服务商", "mosi");
-	let fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
+	const fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
 	assert(await fixedTranscriptionModel.isDisabled(), "MOSI 固定模型应不可编辑");
+	await advancedTab.click();
 	await setSettingToggle(page, "说话人分离", false);
-	fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
 	assert(
-		await fixedTranscriptionModel.inputValue() === "moss-transcribe",
+		(await serviceContext.locator('.echo-notes-transcription-context-model').textContent()) === "moss-transcribe",
 		"关闭 MOSI 说话人分离后固定模型不正确"
 	);
 	await setSettingToggle(page, "说话人分离", true);
-	fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
 	assert(
-		await fixedTranscriptionModel.inputValue() === "moss-transcribe-diarize",
+		(await serviceContext.locator('.echo-notes-transcription-context-model').textContent()) === "moss-transcribe-diarize",
 		"开启 MOSI 说话人分离后固定模型不正确"
 	);
 
 	await selectSettingOption(page, "转写模式", "realtime");
-	fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
 	assert(
-		await fixedTranscriptionModel.isDisabled() &&
-		await fixedTranscriptionModel.inputValue() === "doubao-seed-asr-2.0",
-		"AgentPlan 实时转写固定模型应在基础配置中只读展示"
+		(await serviceContext.locator('.echo-notes-transcription-context-model').textContent()) === "doubao-seed-asr-2.0",
+		"AgentPlan 实时转写固定模型未在摘要中展示"
+	);
+	assert(
+		await (await getActiveSetting(page, "说话人分离"))
+			.locator('.echo-notes-transcription-capability-status.is-fixed')
+			.getByText("始终开启", { exact: true })
+			.count() === 1,
+		"AgentPlan 说话人分离缺少“始终开启”特殊状态"
 	);
 	await selectSettingOption(page, "转写模式", "offline");
+	await serviceTab.click();
 	await selectSettingOption(page, "服务商", "siliconflow");
 	await transcriptionAdvanced.locator("summary").click();
 	for (const advancedSettingName of ["Base URL", "默认转写语言", "自定义语言代码"]) {
@@ -2407,13 +2575,84 @@ async function verifyTabs(page) {
 	await activePanel.getByText("自定义输出目录", { exact: true }).waitFor({ state: "visible" });
 	assert(await outputTab.getAttribute("aria-selected") === "true", "输出策略重绘后应保留输出规则分类");
 
-	await recordingTab.click();
+	await serviceTab.click();
 	await selectSettingOption(page, "转写模式", "realtime");
 	await activePanel.getByText("麦克风", { exact: true }).waitFor({ state: "visible" });
-	assert(await recordingTab.getAttribute("aria-selected") === "true", "实时模式重绘后应保留录音控制分类");
+	assert(await serviceTab.getAttribute("aria-selected") === "true", "实时模式重绘后应保留转写服务分类");
 	await selectSettingOption(page, "转写模式", "offline");
-	await activePanel.getByText("Obsidian 核心插件录音机", { exact: true }).waitFor({ state: "visible" });
-	assert(await recordingTab.getAttribute("aria-selected") === "true", "离线模式重绘后应保留录音控制分类");
+	const activeServiceSection = activePanel.locator('.echo-notes-settings-section-panel:not([hidden])');
+	assert((await activeServiceSection.getByText("快捷录音", { exact: true }).count()) === 0, "快捷录音不应显示在转写服务");
+	assert(await serviceTab.getAttribute("aria-selected") === "true", "离线模式重绘后应保留转写服务分类");
+	await advancedTab.click();
+	const activeAdvancedSection = activePanel.locator('.echo-notes-settings-section-panel:not([hidden])');
+	const recordingSection = activeAdvancedSection.locator('[data-capability-card="quick-recording"]');
+	await recordingSection.getByText("快捷录音", { exact: true }).waitFor({ state: "visible" });
+	assert(
+		await recordingSection.getAttribute("aria-label") === "快捷录音" &&
+		(await recordingSection.getByText("与服务商和模型能力无关", { exact: false }).count()) === 1,
+		"高级功能末尾的快捷录音卡缺少标准结构或非模型能力说明"
+	);
+	assert(
+		await recordingSection.locator('.checkbox-container, input[type="text"]').count() === 0 &&
+		await recordingSection.getByRole("button", { name: "保存", exact: true }).count() === 0 &&
+		await recordingSection.locator('.echo-notes-quick-recording-hotkey-capture').count() === 3,
+		"快捷录音仍包含开关、文本框、保存按钮，或缺少三项热键记录控件"
+	);
+	assert(
+		await recordingSection.evaluate((section, cardsSelector) => {
+			const cards = [...document.querySelectorAll(cardsSelector)];
+			return cards.at(-1) === section;
+		}, '.echo-notes-settings-section-panel:not([hidden]) .echo-notes-transcription-capability-card'),
+		"快捷录音未作为最后一张高级能力卡片"
+	);
+	const recorderAutoEnable = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const manager = window.app.internalPlugins;
+		if (typeof manager?.setEnable !== "function") {
+			return { supported: false };
+		}
+		await manager.setEnable("audio-recorder", false);
+		const before = plugin.isOfficialAudioRecorderEnabled();
+		const result = await plugin.ensureOfficialAudioRecorderEnabled();
+		return { supported: true, before, result, after: plugin.isOfficialAudioRecorderEnabled() };
+	}, PLUGIN_ID);
+	assert(
+		!recorderAutoEnable.supported || (
+			recorderAutoEnable.before === false &&
+			recorderAutoEnable.result === "enabled" &&
+			recorderAutoEnable.after === true
+		),
+		`核心录音机未按约定自动开启：${JSON.stringify(recorderAutoEnable)}`
+	);
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesQuickRecordingMocks = {
+			isEnabled: plugin.isOfficialAudioRecorderEnabled,
+			ensureEnabled: plugin.ensureOfficialAudioRecorderEnabled,
+			canWriteShortcuts: plugin.canWriteObsidianShortcutBindings
+		};
+		plugin.isOfficialAudioRecorderEnabled = () => false;
+		plugin.ensureOfficialAudioRecorderEnabled = async () => "failed";
+		plugin.canWriteObsidianShortcutBindings = () => false;
+		plugin.settingTab.showDestination("transcription-recording");
+	}, PLUGIN_ID);
+	const failedRecordingCard = getActivePanel(page).locator('[data-capability-card="quick-recording"]');
+	await failedRecordingCard.getByText("自动开启失败", { exact: true }).waitFor({ state: "visible" });
+	assert(
+		await failedRecordingCard.locator('.echo-notes-quick-recording-hotkey-capture:disabled').count() === 3 &&
+		await failedRecordingCard.getByRole("button", { name: "打开快捷键设置", exact: true }).count() === 1 &&
+		await failedRecordingCard.getByRole("button", { name: "打开核心插件设置", exact: true }).count() === 1,
+		"自动开启失败或快捷键管理器不可写时缺少正确降级入口"
+	);
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const mocks = window.__echoNotesQuickRecordingMocks;
+		plugin.isOfficialAudioRecorderEnabled = mocks.isEnabled;
+		plugin.ensureOfficialAudioRecorderEnabled = mocks.ensureEnabled;
+		plugin.canWriteObsidianShortcutBindings = mocks.canWriteShortcuts;
+		delete window.__echoNotesQuickRecordingMocks;
+		plugin.settingTab.showDestination("transcription-recording");
+	}, PLUGIN_ID);
 
 	await memoryTab.click();
 	const memorySectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
@@ -2452,10 +2691,18 @@ async function verifyTabs(page) {
 	await memoryAdvanced.locator("summary").click();
 	await activePanel.getByText("记忆分块字符数", { exact: true }).waitFor({ state: "visible" });
 	await memoryEnhancementTab.click();
-	assert(await (await getActiveSetting(page, "术语与上下文")).isVisible(), "转写增强管理入口应可见");
+	assert(await (await getActiveSetting(page, "人工术语与上下文")).isVisible(), "转写增强人工配置入口应可见");
+	assert(await (await getActiveSetting(page, "AI 术语候选")).isVisible(), "AI 术语候选审核入口应可见");
+	assert(await (await getActiveSetting(page, "实际生效内容")).isVisible(), "转写增强预览入口应可见");
 	assert(
 		await (await getActiveSetting(page, "从已批准记忆生成候选")).isVisible(),
 		"转写增强候选生成入口应可见"
+	);
+	const resetExampleSetting = await getActiveSetting(page, "重置示例配置");
+	assert(await resetExampleSetting.isVisible(), "转写增强示例重置入口应可见");
+	assert(
+		await resetExampleSetting.getByRole("button", { name: "重置并生成示例", exact: true }).evaluate((button) => button.classList.contains("mod-warning")),
+		"重置示例应使用危险操作视觉语义"
 	);
 
 	await analysisTab.click();
@@ -2756,6 +3003,8 @@ async function verifyMemoryInitialization(page) {
 			"Echo Memory/04 User/SOUL.md",
 			"Echo Memory/04 User/01 使命与目标.md",
 			"Echo Memory/04 User/08 隐私与授权边界.md",
+			"Echo Memory/07 转写增强/术语与上下文.md",
+			"Echo Memory/07 转写增强/术语候选.md",
 			"Echo Memory/99 系统/echo-memory.json"
 		];
 		const missingPaths = expectedPaths.filter((path) => !window.app.vault.getAbstractFileByPath(path));
@@ -2897,6 +3146,210 @@ async function verifyMemoryCheckpointResume(page, mock) {
 	assert(result.reviewPath.endsWith(".review.md"), "Memory 续跑未生成审核 sidecar 路径");
 	assert(result.checkpointFileStillExists, "Memory 成功清理不应删除共享检查点存储文件");
 	assert(result.checkpointRemoved, "Memory 续跑成功后未清理当前转写稿检查点");
+}
+
+async function verifyTranscriptionEnhancementMarkdown(page) {
+	const migration = await page.evaluate(async (pluginId) => {
+		window.app.setting.close();
+		const plugin = window.app.plugins.plugins[pluginId];
+		const manualPath = "Echo Memory/07 转写增强/术语与上下文.md";
+		const candidatePath = "Echo Memory/07 转写增强/术语候选.md";
+		const backupPath = "Echo Memory/99 系统/transcription-enhancement-v1-backup.json";
+		const at = "2026-08-13T08:00:00.000Z";
+		const store = {
+			schemaVersion: 1,
+			updatedAt: at,
+			terms: {
+				manualApproved: { id: "manualApproved", text: "Echo Notes", weight: 3, scope: { type: "global" }, source: "manual", status: "approved", approvedAt: at, updatedAt: at, history: [] },
+				projectManual: { id: "projectManual", text: "项目专词", weight: 5, scope: { type: "project", value: "Echo Notes" }, source: "manual", status: "approved", approvedAt: at, updatedAt: at, history: [] },
+				manualDisabled: { id: "manualDisabled", text: "不应生效", weight: 50, scope: { type: "global" }, source: "manual", status: "disabled", updatedAt: at, history: [{ at, status: "disabled", note: "保留备份" }] },
+				candidateA: { id: "candidateA", text: "EchoNote", weight: 3, scope: { type: "global" }, source: "memory", status: "pending", evidence: "依据 A", backlink: "Echo Memory/02 记忆候选/source-a.review.md", updatedAt: at, history: [{ at, status: "pending", note: "AI 生成" }] },
+				candidateB: { id: "candidateB", text: "Dash Scope", weight: 4, scope: { type: "project", value: "Echo Notes" }, source: "memory", status: "pending", evidence: "依据 B", backlink: "Echo Memory/02 记忆候选/source-b.review.md", updatedAt: at, history: [{ at, status: "pending", note: "AI 生成" }] },
+				candidateApproved: { id: "candidateApproved", text: "OpenAI", effectiveText: "OpenAI", weight: 3, scope: { type: "global" }, source: "memory", status: "approved", evidence: "依据 C", backlink: "Echo Memory/02 记忆候选/source-c.review.md", approvedAt: at, updatedAt: at, history: [{ at, status: "approved", note: "旧审核" }] }
+			},
+			prompts: {
+				globalPrompt: { id: "globalPrompt", text: "保留产品名称。", scope: { type: "global" }, status: "approved", updatedAt: at, history: [] },
+				projectPrompt: { id: "projectPrompt", text: "当前是 Echo Notes 项目。", scope: { type: "project", value: "Echo Notes" }, status: "approved", updatedAt: at, history: [] }
+			}
+		};
+		const legacy = [
+			"---", "echo_memory_type: transcription-enhancement", "---", "", "# 术语与上下文", "",
+			"## 人工补充", "", "这段人工说明必须保留。", "",
+			"<!-- echo-memory-transcription-enhancement:managed:start -->", "## 术语", "",
+			"<!-- echo-memory-transcription-enhancement-data:start -->", "```json", JSON.stringify(store, null, 2), "```",
+			"<!-- echo-memory-transcription-enhancement-data:end -->", "<!-- echo-memory-transcription-enhancement:managed:end -->", ""
+		].join("\n");
+		const manualFile = window.app.vault.getAbstractFileByPath(manualPath);
+		await window.app.vault.modify(manualFile, legacy);
+		const first = await plugin.memoryService.getTranscriptionEnhancementDocuments(plugin.settings);
+		const firstManual = await window.app.vault.read(first.manualFile);
+		const firstCandidates = await window.app.vault.read(first.candidateFile);
+		const backupFile = window.app.vault.getAbstractFileByPath(backupPath);
+		const backup = backupFile ? await window.app.vault.read(backupFile) : "";
+		const second = await plugin.memoryService.getTranscriptionEnhancementDocuments(plugin.settings);
+		return {
+			manualPath,
+			candidatePath,
+			backupPath,
+			firstManual,
+			firstCandidates,
+			backup,
+			secondManual: await window.app.vault.read(second.manualFile),
+			secondCandidates: await window.app.vault.read(second.candidateFile),
+			stats: first.stats
+		};
+	}, PLUGIN_ID);
+
+	assert(migration.firstManual.includes("## 全局") && migration.firstManual.includes("## 项目：Echo Notes"), "旧人工术语未迁移为作用域 Markdown");
+	assert(migration.firstManual.includes("这段人工说明必须保留"), "迁移未保留人工正文");
+	assert(!migration.firstManual.includes("不应生效"), "未启用的旧人工术语不应迁移为生效配置");
+	assert(migration.firstCandidates.includes("candidateA") && migration.firstCandidates.includes("依据 A"), "AI 候选状态与依据未迁移");
+	assert(migration.backup.includes("不应生效") && migration.backup.includes("manualDisabled"), "系统迁移备份未保留未启用记录");
+	assert(migration.firstManual === migration.secondManual && migration.firstCandidates === migration.secondCandidates, "重复迁移不是零变化");
+	assert(migration.stats.manualTermCount === 2 && migration.stats.manualPromptCount === 2 && migration.stats.pendingCandidateCount === 2, "迁移后统计不正确");
+
+	const openedPaths = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		await plugin.openTranscriptionEnhancementManualFile();
+		const manual = window.app.workspace.getActiveFile()?.path;
+		await plugin.openTranscriptionEnhancementCandidateFile();
+		return { manual, candidate: window.app.workspace.getActiveFile()?.path };
+	}, PLUGIN_ID);
+	assert(openedPaths.manual === migration.manualPath && openedPaths.candidate === migration.candidatePath, "双文件入口未打开约定路径");
+
+	await page.evaluate((pluginId) => {
+		document.querySelectorAll(".notice").forEach((notice) => notice.remove());
+		window.app.plugins.plugins[pluginId].openTranscriptionEnhancementManager();
+	}, PLUGIN_ID);
+	const modal = page.locator(".echo-notes-transcription-candidate-review-modal");
+	await modal.waitFor({ state: "visible" });
+	assert((await modal.locator('.echo-notes-candidate-review-card').count()) === 2, "候选审核应默认只显示待审核项");
+	assert((await modal.locator('[role="tablist"]').count()) === 1, "候选审核缺少可访问状态分类");
+
+	const layouts = [];
+	for (const viewport of VIEWPORTS) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			const metrics = await modal.evaluate((element, requireTouchTargets) => {
+				const cards = [...element.querySelectorAll('.echo-notes-candidate-review-card')];
+				const buttons = [...element.querySelectorAll('button')];
+				return {
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					contentOverflow: element.scrollWidth - element.clientWidth,
+					modalFits: element.getBoundingClientRect().width <= window.innerWidth + 1,
+					cardsFit: cards.every((card) => card.scrollWidth <= card.clientWidth + 1),
+					touchTargetsMeetMinimum: !requireTouchTargets || buttons.every((button) => button.getBoundingClientRect().height >= 44)
+				};
+			}, viewport.mobileShell);
+			const context = `transcription-candidates/${viewport.name}/${theme}`;
+			assert(metrics.documentOverflow <= 1 && metrics.contentOverflow <= 1, `${context} 出现水平溢出`);
+			assert(metrics.modalFits && metrics.cardsFit, `${context} 候选弹窗或卡片超出 viewport`);
+			assert(metrics.touchTargetsMeetMinimum, `${context} 移动操作区小于 44px`);
+			const fileName = `transcription-candidates-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await modal.screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+			layouts.push({ viewport: viewport.name, theme, fileName, metrics });
+		}
+	}
+
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	let card = modal.locator('.echo-notes-candidate-review-card').filter({ hasText: "EchoNote" });
+	await card.locator('input[type="text"]').first().fill("Echo Notes AI");
+	await card.getByRole("button", { name: "批准候选 EchoNote", exact: true }).click();
+	card = modal.locator('.echo-notes-candidate-review-card').filter({ hasText: "Dash Scope" });
+	await card.getByRole("button", { name: "拒绝候选 Dash Scope", exact: true }).click();
+	assert((await modal.locator('.echo-notes-candidate-review-card').count()) === 0, "候选批准与拒绝后未移出待审核列表");
+	await modal.getByRole("button", { name: "保存审核", exact: true }).click();
+	await modal.waitFor({ state: "detached" });
+	await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].openTranscriptionEnhancementManager(), PLUGIN_ID);
+	const reopened = page.locator(".echo-notes-transcription-candidate-review-modal");
+	await reopened.waitFor({ state: "visible" });
+	await reopened.getByRole("tab", { name: /已批准/ }).click();
+	const corrected = reopened.locator('.echo-notes-candidate-review-card').filter({ hasText: "EchoNote" });
+	assert(await corrected.locator('input[type="text"]').first().inputValue() === "Echo Notes AI", "审核修正后的生效词未保存");
+	await reopened.getByRole("tab", { name: /已拒绝/ }).click();
+	assert((await reopened.getByText("Dash Scope", { exact: true }).count()) >= 1, "拒绝状态未持久化");
+	await reopened.locator(".modal-close-button").click();
+	await reopened.waitFor({ state: "detached" });
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.offlineTranscription.provider = "aliyun-bailian";
+		plugin.settings.offlineTranscription.model = "qwen-audio-3.0-asr-flash-filetrans";
+		plugin.settings.offlineTranscription.aliyunFiletrans = {
+			...(plugin.settings.offlineTranscription.aliyunFiletrans ?? {}),
+			diarizationEnabled: true,
+			hotwordEnhancementEnabled: true,
+			contextEnhancementEnabled: true,
+			memoryEnhancementEnabled: true
+		};
+		await plugin.saveSettings();
+		const path = "Echo Notes 术语作用域预览.md";
+		const content = "---\necho_notes_memory_projects:\n  - Echo Notes\n---\n\n# 作用域预览\n";
+		const existing = window.app.vault.getAbstractFileByPath(path);
+		const file = existing ?? await window.app.vault.create(path, content);
+		if (existing) await window.app.vault.modify(existing, content);
+		await window.app.workspace.getLeaf(false).openFile(file);
+		await new Promise((resolve) => window.setTimeout(resolve, 100));
+		await plugin.openTranscriptionEnhancementPreview();
+	}, PLUGIN_ID);
+	const preview = page.locator(".echo-notes-transcription-enhancement-preview-modal");
+	await preview.waitFor({ state: "visible" });
+	assert((await preview.getByText("项目：Echo Notes", { exact: true }).count()) === 1, "预览未使用当前笔记的项目作用域");
+	assert((await preview.getByText(/项目专词/).count()) >= 1, "预览未展示作用域匹配热词");
+	assert((await preview.getByText(/当前是 Echo Notes 项目/).count()) >= 1, "预览未展示作用域匹配 Prompt");
+	await preview.getByRole("button", { name: "关闭", exact: true }).click();
+
+	await page.evaluate(async (pluginId) => {
+		window.app.setting.open();
+		await window.app.setting.openTabById(pluginId);
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settingTab.showDestination("memory-transcription-enhancement");
+	}, PLUGIN_ID);
+	const resetSetting = await getActiveSetting(page, "重置示例配置");
+	await resetSetting.getByRole("button", { name: "重置并生成示例", exact: true }).click();
+	const confirmModal = page.locator(".modal").filter({ hasText: "重置转写增强示例" });
+	await confirmModal.waitFor({ state: "visible" });
+	assert(
+		(await confirmModal.textContent())?.includes("将清空当前人工术语") &&
+		(await confirmModal.textContent())?.includes("99 系统"),
+		"重置确认未明确告知清空范围与备份位置"
+	);
+	const destructiveConfirm = confirmModal.getByRole("button", { name: "确认重置", exact: true });
+	assert(await destructiveConfirm.evaluate((button) => button.classList.contains("mod-warning")), "重置确认按钮缺少危险操作语义");
+	await destructiveConfirm.click();
+	await confirmModal.waitFor({ state: "detached" });
+	await page.waitForFunction(() => window.app.workspace.getActiveFile()?.path === "Echo Memory/07 转写增强/术语与上下文.md");
+	const resetResult = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const documents = await plugin.memoryService.getTranscriptionEnhancementDocuments(plugin.settings);
+		const manualContent = await window.app.vault.read(documents.manualFile);
+		const candidateContent = await window.app.vault.read(documents.candidateFile);
+		const backups = window.app.vault.getFiles()
+			.filter((file) => file.path.startsWith("Echo Memory/99 系统/transcription-enhancement-reset-") && file.extension === "json")
+			.sort((left, right) => right.stat.mtime - left.stat.mtime);
+		const backupContent = backups[0] ? await window.app.vault.read(backups[0]) : "";
+		const snapshot = await plugin.memoryService.buildTranscriptionEnhancement(plugin.settings, undefined, {
+			enableHotwords: true,
+			enableContext: true
+		});
+		return {
+			stats: documents.stats,
+			manualContent,
+			candidateContent,
+			backupPath: backups[0]?.path ?? "",
+			backupContent,
+			hotwordCount: snapshot.hotwords.length,
+			contextText: snapshot.contextText ?? ""
+		};
+	}, PLUGIN_ID);
+	assert(resetResult.stats.manualTermCount === 0 && resetResult.stats.manualPromptCount === 0 && resetResult.stats.pendingCandidateCount === 0, "重置后仍存在生效配置或待审核候选");
+	assert(resetResult.hotwordCount === 0 && resetResult.contextText === "", "教学示例被错误纳入实际转写增强");
+	assert(resetResult.manualContent.includes("配置示例（不会被读取）") && resetResult.manualContent.includes("> ## 项目：Echo Notes"), "重置未生成人工配置教学示例");
+	assert(resetResult.candidateContent.includes("候选示例（不会被读取）"), "重置未生成候选审核教学示例");
+	assert(resetResult.backupPath.endsWith(".json") && resetResult.backupContent.includes("Echo Notes AI") && resetResult.backupContent.includes("项目专词"), "重置备份未保留两份原始内容");
+	return layouts;
 }
 
 async function verifyMemoryReview(page) {
@@ -3973,7 +4426,7 @@ async function verifyCompositeControlLayouts(page) {
 		await setViewportMode(page, viewport, "light");
 		await page.locator('[data-settings-stage="transcription"]').click();
 		await selectSettingOption(page, "转写模式", "realtime");
-		await getActivePanel(page).getByRole("tab", { name: "录音控制", exact: true }).click();
+		await getActivePanel(page).getByRole("tab", { name: "转写服务", exact: true }).click();
 		const microphone = await inspectCompositeControl(page, "麦克风");
 		assert(
 			microphone.markedComposite && microphone.childCount === 2,
@@ -3996,25 +4449,30 @@ async function verifyCompositeControlLayouts(page) {
 		);
 
 		await selectSettingOption(page, "转写模式", "offline");
-		const hotkey = await inspectCompositeControl(page, "Obsidian 核心插件录音机开启快捷键");
-		assert(
-			hotkey.markedComposite && hotkey.childCount === 2,
-			`${viewport.name} 快捷键未使用复合控制列`
-		);
+		await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
+		const hotkey = await (await getActiveSetting(page, "开始录音")).evaluate((item) => {
+			const control = item.querySelector(":scope > .setting-item-control");
+			const capture = control?.querySelector(".echo-notes-quick-recording-hotkey-capture");
+			const clear = control?.querySelector(".echo-notes-quick-recording-hotkey-clear");
+			const controlRect = control?.getBoundingClientRect();
+			const captureRect = capture?.getBoundingClientRect();
+			const clearRect = clear?.getBoundingClientRect();
+			return {
+				controlOverflow: control ? control.scrollWidth - control.clientWidth : Number.POSITIVE_INFINITY,
+				captureHeight: captureRect?.height ?? 0,
+				clearHeight: clearRect?.height ?? 0,
+				childrenFit: Boolean(controlRect && captureRect && clearRect &&
+					captureRect.left >= controlRect.left - 1 && clearRect.right <= controlRect.right + 1),
+				childrenOverlap: Boolean(captureRect && clearRect && captureRect.right > clearRect.left + 1)
+			};
+		});
 		assert(
 			hotkey.controlOverflow <= 1 && hotkey.childrenFit && !hotkey.childrenOverlap,
 			`${viewport.name} 快捷键控件溢出或重叠：${JSON.stringify(hotkey)}`
 		);
 		assert(
-			hotkey.fieldMarkedUniform && hotkey.fieldFillsControl && hotkey.buttonBelowField &&
-			Math.abs(hotkey.fieldHeight - hotkey.expectedFieldHeight) <= 1,
-			`${viewport.name} 快捷键字段尺寸或按钮位置不正确：${JSON.stringify(hotkey)}`
-		);
-		assert(
-			hotkey.compactLayout
-				? Math.abs(hotkey.buttonLeftDelta) <= 1.5
-				: Math.abs(hotkey.buttonRightDelta) <= 1.5,
-			`${viewport.name} 快捷键辅助按钮对齐不正确：${JSON.stringify(hotkey)}`
+			viewport.width > 375 || (hotkey.captureHeight >= 44 && hotkey.clearHeight >= 44),
+			`${viewport.name} 快捷键移动操作区不足 44px：${JSON.stringify(hotkey)}`
 		);
 		results.push({ viewport: viewport.name, microphone, hotkey });
 	}
@@ -4100,6 +4558,136 @@ async function captureViewports(page) {
 				results.push({ stage: stage.id, viewport: viewport.name, theme, fileName, metrics });
 			}
 		}
+	}
+	return results;
+}
+
+async function captureAdvancedCapabilityViewports(page) {
+	const original = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const snapshot = {
+			transcriptionMode: plugin.settings.transcriptionMode,
+			memoryInitialized: plugin.settings.memoryInitialized,
+			offlineTranscription: JSON.parse(JSON.stringify(plugin.settings.offlineTranscription))
+		};
+		plugin.settings.transcriptionMode = "offline";
+		plugin.settings.memoryInitialized = false;
+		plugin.settings.offlineTranscription.provider = "aliyun-bailian";
+		plugin.settings.offlineTranscription.model = "qwen-audio-3.0-asr-flash-filetrans";
+		plugin.settings.offlineTranscription.aliyunFiletrans = {
+			...(plugin.settings.offlineTranscription.aliyunFiletrans ?? {}),
+			diarizationEnabled: true,
+			hotwordEnhancementEnabled: false,
+			contextEnhancementEnabled: false,
+			memoryEnhancementEnabled: false
+		};
+		delete plugin.settings.offlineTranscription.aliyunFiletrans.speakerCount;
+		await plugin.saveSettings();
+		plugin.settingTab.showDestination("transcription-recording");
+		return snapshot;
+	}, PLUGIN_ID);
+
+	const results = [];
+	try {
+		for (const viewport of VIEWPORTS) {
+			for (const theme of THEMES) {
+				await setViewportMode(page, viewport, theme);
+				await page.locator('[data-settings-stage="transcription"]').click();
+				await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
+				await page.evaluate(() => {
+					const content = document.querySelector(".vertical-tab-content");
+					if (content) content.scrollTop = 0;
+				});
+				await page.mouse.move(1, 1);
+
+				const metrics = await page.evaluate(() => {
+					const content = document.querySelector(".vertical-tab-content");
+					const panel = document.querySelector(".echo-notes-settings-panel:not([hidden])");
+					const section = panel?.querySelector(".echo-notes-settings-section-panel:not([hidden])");
+					const summary = section?.querySelector(".echo-notes-transcription-context");
+					const model = summary?.querySelector(".echo-notes-transcription-context-model");
+					const tags = [...(summary?.querySelectorAll(".echo-notes-transcription-context-chip") ?? [])];
+					const actions = [...(section?.querySelectorAll(".echo-notes-transcription-capability-action") ?? [])];
+					const hotkeyControls = [...(section?.querySelectorAll(".echo-notes-quick-recording-hotkey-capture, .echo-notes-quick-recording-hotkey-clear") ?? [])];
+					const sectionRect = section?.getBoundingClientRect();
+					return {
+						innerWidth: window.innerWidth,
+						contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+						panelOverflow: panel ? panel.scrollWidth - panel.clientWidth : Number.POSITIVE_INFINITY,
+						documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+						summaryFits: Boolean(summary && summary.scrollWidth <= summary.clientWidth + 1),
+						modelFits: Boolean(model && model.scrollWidth <= model.clientWidth + 1),
+						tagsFit: tags.every((tag) => {
+							const rect = tag.getBoundingClientRect();
+							return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
+						}),
+						tagLabels: tags.map((tag) => tag.textContent?.trim()),
+						cardLabels: [...(section?.querySelectorAll(".echo-notes-transcription-capability-card-title") ?? [])]
+							.map((label) => label.textContent?.trim()),
+						actionCount: actions.length,
+						minimumActionHeight: actions.length > 0
+							? Math.min(...actions.map((action) => action.getBoundingClientRect().height))
+							: 0,
+						actionsFit: actions.every((action) => {
+							const rect = action.getBoundingClientRect();
+							return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
+						}),
+						hotkeyControlsFit: hotkeyControls.every((control) => {
+							const rect = control.getBoundingClientRect();
+							return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
+						}),
+						minimumHotkeyControlHeight: hotkeyControls.length > 0
+							? Math.min(...hotkeyControls.map((control) => control.getBoundingClientRect().height))
+							: 0
+					};
+				});
+				const context = `advanced-capabilities/${viewport.name}/${theme}`;
+				assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
+				assert(metrics.contentOverflow <= 1, `${context} 设置内容出现横向溢出`);
+				assert(metrics.panelOverflow <= 1, `${context} 插件面板出现横向溢出`);
+				assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
+				assert(metrics.summaryFits && metrics.modelFits && metrics.tagsFit, `${context} 服务摘要或能力 Tag 溢出`);
+				assert(
+					JSON.stringify(metrics.tagLabels) === JSON.stringify([
+						"说话人分离",
+						"时间戳",
+						"热词增强",
+						"上下文增强"
+					]),
+					`${context} 模型支持 Tag 不正确`
+				);
+				assert(
+					JSON.stringify(metrics.cardLabels) === JSON.stringify(["说话人分离", "术语增强", "上下文增强", "快捷录音"]),
+					`${context} 能力卡片结构不正确`
+				);
+				assert(metrics.actionCount >= 2 && metrics.actionsFit, `${context} 恢复操作缺失或溢出`);
+				assert(metrics.hotkeyControlsFit, `${context} 快捷录音控件溢出`);
+				if (viewport.mobileShell) {
+					assert(metrics.minimumActionHeight >= 44, `${context} 恢复操作小于 44px`);
+					assert(metrics.minimumHotkeyControlHeight >= 44, `${context} 快捷录音控件小于 44px`);
+				}
+
+				const fileName = `settings-advanced-capabilities-${viewport.name}-${theme}.png`;
+				const screenshotPath = path.join(OUTPUT_DIR, fileName);
+				await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
+				const screenshotStat = await stat(screenshotPath);
+				assert(screenshotStat.size > 10_000, `${fileName} 截图可能为空白`);
+				results.push({ viewport: viewport.name, theme, fileName, metrics });
+				const quickRecordingFileName = `settings-quick-recording-${viewport.name}-${theme}.png`;
+				const quickRecordingPath = path.join(OUTPUT_DIR, quickRecordingFileName);
+				await getActivePanel(page).locator('[data-capability-card="quick-recording"]').screenshot({ path: quickRecordingPath });
+				assert((await stat(quickRecordingPath)).size > 4_000, `${quickRecordingFileName} 截图可能为空白`);
+			}
+		}
+	} finally {
+		await page.evaluate(async ({ pluginId, snapshot }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.transcriptionMode = snapshot.transcriptionMode;
+			plugin.settings.memoryInitialized = snapshot.memoryInitialized;
+			plugin.settings.offlineTranscription = snapshot.offlineTranscription;
+			await plugin.saveSettings();
+			plugin.settingTab.showDestination("transcription-service");
+		}, { pluginId: PLUGIN_ID, snapshot: original });
 	}
 	return results;
 }
@@ -4323,8 +4911,10 @@ try {
 	const compositeControlLayouts = await verifyCompositeControlLayouts(page);
 	const diagnosticPackageLayouts = await verifyDiagnosticPackageUi(page);
 	const screenshots = await captureViewports(page);
+	const advancedCapabilityLayouts = await captureAdvancedCapabilityViewports(page);
 	const templateLayouts = await verifyTemplateResponsiveLayouts(page);
 	await verifyMemoryInitialization(page);
+	const transcriptionEnhancementLayouts = await verifyTranscriptionEnhancementMarkdown(page);
 	await verifyMemoryCheckpointResume(page, memoryProviderMock);
 	const memoryReviewLayouts = await verifyMemoryReview(page);
 	const memoryRelationLayouts = await verifyMemoryRelations(page);
@@ -4350,9 +4940,13 @@ try {
 			settingsFeedbackSemantics: true,
 			settingsApiKeyLinks: true,
 			settingsCompositeControls: true,
+			advancedCapabilities: true,
 			diagnosticPackageUi: true,
 			templateGrouping: true,
 			memoryInitialization: true,
+			transcriptionEnhancementMarkdown: true,
+			transcriptionEnhancementMigration: true,
+			transcriptionCandidateReview: true,
 			memoryCheckpointResume: true,
 			memoryReview: true,
 			memoryRelations: true,
@@ -4378,7 +4972,9 @@ try {
 		compositeControlLayouts,
 		diagnosticPackageLayouts,
 		screenshots,
+		advancedCapabilityLayouts,
 		templateLayouts,
+		transcriptionEnhancementLayouts,
 		memoryReviewLayouts,
 		memoryRelationLayouts,
 		memoryContextLayouts
@@ -4390,7 +4986,7 @@ try {
 	);
 
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
-	console.log(`耗时：${summary.durationMs} ms；新人边栏初始截图：${gettingStartedLayouts.initialLayouts.length} 张；新人阶段截图：${gettingStartedLayouts.guideLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；任务中心截图：${taskCenterLayouts.length} 张；标准截图：${screenshots.length} 张；模板管理截图：${templateLayouts.length} 张；候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
+	console.log(`耗时：${summary.durationMs} ms；新人边栏初始截图：${gettingStartedLayouts.initialLayouts.length} 张；新人阶段截图：${gettingStartedLayouts.guideLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；任务中心截图：${taskCenterLayouts.length} 张；标准截图：${screenshots.length} 张；高级能力截图：${advancedCapabilityLayouts.length} 张；模板管理截图：${templateLayouts.length} 张；术语候选截图：${transcriptionEnhancementLayouts.length} 张；记忆候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);

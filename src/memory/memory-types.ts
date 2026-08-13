@@ -46,6 +46,8 @@ export interface MemoryPaths {
 	contextPackagesDir: string;
 	transcriptionEnhancementDir: string;
 	transcriptionEnhancement: string;
+	transcriptionEnhancementCandidates: string;
+	transcriptionEnhancementLegacyBackup: string;
 	systemDir: string;
 	manifest: string;
 	logsDir: string;

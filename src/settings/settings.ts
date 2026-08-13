@@ -65,6 +65,9 @@ export type TranscriptionMode = "realtime" | "offline";
 export interface AliyunFileTranscriptionSettings {
 	diarizationEnabled: boolean;
 	speakerCount?: number;
+	hotwordEnhancementEnabled: boolean;
+	contextEnhancementEnabled: boolean;
+	/** @deprecated 仅用于兼容旧版设置；新代码应读取两个独立开关。 */
 	memoryEnhancementEnabled: boolean;
 }
 
@@ -109,6 +112,8 @@ export const ALIYUN_TRANSCRIPTION_MODELS = [
 ] as const;
 export const DEFAULT_ALIYUN_FILETRANS_SETTINGS: AliyunFileTranscriptionSettings = {
 	diarizationEnabled: true,
+	hotwordEnhancementEnabled: false,
+	contextEnhancementEnabled: false,
 	memoryEnhancementEnabled: false
 };
 
@@ -1430,10 +1435,29 @@ function normalizeAliyunFiletransSettings(value: unknown): AliyunFileTranscripti
 				? raw.diarizationEnabled
 				: DEFAULT_ALIYUN_FILETRANS_SETTINGS.diarizationEnabled,
 		...(speakerCount !== undefined ? { speakerCount } : {}),
+		hotwordEnhancementEnabled:
+			typeof raw.hotwordEnhancementEnabled === "boolean"
+				? raw.hotwordEnhancementEnabled
+				: typeof raw.memoryEnhancementEnabled === "boolean"
+					? raw.memoryEnhancementEnabled
+					: DEFAULT_ALIYUN_FILETRANS_SETTINGS.hotwordEnhancementEnabled,
+		contextEnhancementEnabled:
+			typeof raw.contextEnhancementEnabled === "boolean"
+				? raw.contextEnhancementEnabled
+				: typeof raw.memoryEnhancementEnabled === "boolean"
+					? raw.memoryEnhancementEnabled
+					: DEFAULT_ALIYUN_FILETRANS_SETTINGS.contextEnhancementEnabled,
 		memoryEnhancementEnabled:
-			typeof raw.memoryEnhancementEnabled === "boolean"
-				? raw.memoryEnhancementEnabled
-				: DEFAULT_ALIYUN_FILETRANS_SETTINGS.memoryEnhancementEnabled
+			(typeof raw.hotwordEnhancementEnabled === "boolean"
+				? raw.hotwordEnhancementEnabled
+				: typeof raw.memoryEnhancementEnabled === "boolean"
+					? raw.memoryEnhancementEnabled
+					: DEFAULT_ALIYUN_FILETRANS_SETTINGS.hotwordEnhancementEnabled) ||
+			(typeof raw.contextEnhancementEnabled === "boolean"
+				? raw.contextEnhancementEnabled
+				: typeof raw.memoryEnhancementEnabled === "boolean"
+					? raw.memoryEnhancementEnabled
+					: DEFAULT_ALIYUN_FILETRANS_SETTINGS.contextEnhancementEnabled)
 	};
 }
 

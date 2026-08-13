@@ -134,6 +134,8 @@ import { MemoryContextModal } from "./memory/memory-context-modal";
 import { MemoryRelationModal } from "./memory/memory-relation-modal";
 import { MemoryReviewModal } from "./memory/memory-review-modal";
 import { TranscriptionEnhancementManagerModal } from "./memory/memory-transcription-enhancement-modal";
+import { TranscriptionEnhancementPreviewModal } from "./memory/memory-transcription-enhancement-preview-modal";
+import { TranscriptionEnhancementDocumentError } from "./memory/memory-transcription-enhancement";
 import { MemoryService } from "./memory/memory-service";
 import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
 import { parseMemoryCandidate } from "./memory/memory-output";
@@ -419,6 +421,7 @@ export default class EchoNotesPlugin extends Plugin {
 		this.app.workspace.onLayoutReady(() => {
 			this.registerGettingStartedFileEvents();
 			void (async () => {
+				await this.ensureOfficialAudioRecorderEnabled();
 				await this.resumeRestoredRemoteTranscriptionTasks();
 				try {
 					await this.reconcileGettingStartedFiles();
@@ -1053,6 +1056,15 @@ export default class EchoNotesPlugin extends Plugin {
 		).hotkey ?? [];
 	}
 
+	canWriteObsidianShortcutBindings(): boolean {
+		const hotkeyManager = this.getHotkeyManager();
+		return Boolean(
+			(this.app as unknown as AppWithInternals).commands?.commands &&
+			typeof hotkeyManager?.setHotkeys === "function" &&
+			typeof hotkeyManager?.save === "function"
+		);
+	}
+
 	private getGettingStartedHotkeyAssignments(
 		hotkeys: GettingStartedHotkeys
 	): HotkeyCommandAssignment<GettingStartedHotkeyId>[] {
@@ -1147,7 +1159,7 @@ export default class EchoNotesPlugin extends Plugin {
 			openTranscriptionSettings: () => this.openGettingStartedSettings("transcription-service"),
 			openAnalysisSettings: () => this.openGettingStartedSettings("analysis-model"),
 			enableRecorder: async () => {
-				await this.setOfficialAudioRecorderEnabled(true);
+				await this.ensureOfficialAudioRecorderEnabled(true);
 				this.notifyGettingStartedChanged();
 			},
 			confirmRecorder: async () => {
@@ -1208,11 +1220,19 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async openNativeSettingsForGettingStarted(kind: "core" | "hotkeys"): Promise<void> {
-		const settingsManager = (this.app as unknown as AppWithInternals).setting;
-		if (!settingsManager?.open || !settingsManager.openTabById) {
-			new Notice("无法自动打开 Obsidian 设置，请手动完成后重新打开新人指引。");
+		const opened = await this.openObsidianSettings(kind);
+		if (!opened) {
 			await this.activateTaskCenterView({ revealGettingStarted: true });
 			return;
+		}
+		this.watchNativeSettingsClose();
+	}
+
+	async openObsidianSettings(kind: "core" | "hotkeys"): Promise<boolean> {
+		const settingsManager = (this.app as unknown as AppWithInternals).setting;
+		if (!settingsManager?.open || !settingsManager.openTabById) {
+			new Notice("无法自动打开 Obsidian 设置，请手动打开对应设置页。");
+			return false;
 		}
 		settingsManager.open();
 		const tabs = settingsManager.tabs ?? [];
@@ -1223,7 +1243,7 @@ export default class EchoNotesPlugin extends Plugin {
 				: haystack.includes("core") || haystack.includes("核心插件");
 		});
 		await settingsManager.openTabById(tab?.id ?? (kind === "hotkeys" ? "hotkeys" : "core"));
-		this.watchNativeSettingsClose();
+		return true;
 	}
 
 	private watchNativeSettingsClose(): void {
@@ -1861,37 +1881,53 @@ export default class EchoNotesPlugin extends Plugin {
 		return null;
 	}
 
-	async setOfficialAudioRecorderEnabled(enabled: boolean): Promise<boolean> {
+	async ensureOfficialAudioRecorderEnabled(notify = false): Promise<"enabled" | "unavailable" | "failed"> {
+		if (this.isOfficialAudioRecorderEnabled() === true) {
+			return "enabled";
+		}
 		const internalPlugins = this.getInternalPlugins();
 		const internalPlugin = this.getInternalPlugin(AUDIO_RECORDER_PLUGIN_ID);
 		if (!internalPlugins || !internalPlugin) {
-			new Notice("当前 Obsidian 版本未暴露核心插件录音机内部 API，请到核心插件设置中手动开启“录音机”。");
-			return false;
+			if (notify) {
+				new Notice("当前 Obsidian 版本无法自动开启核心录音机，请到核心插件设置中手动开启“录音机”。");
+			}
+			return "unavailable";
 		}
 
 		try {
 			if (typeof internalPlugins.setEnable === "function") {
-				await internalPlugins.setEnable(AUDIO_RECORDER_PLUGIN_ID, enabled);
-			} else if (enabled && typeof internalPlugin.enable === "function") {
+				await internalPlugins.setEnable(AUDIO_RECORDER_PLUGIN_ID, true);
+			} else if (typeof internalPlugin.enable === "function") {
 				await internalPlugin.enable(true);
-			} else if (!enabled && typeof internalPlugin.disable === "function") {
-				await internalPlugin.disable(true);
-			} else if (enabled && typeof internalPlugins.enablePlugin === "function") {
+			} else if (typeof internalPlugins.enablePlugin === "function") {
 				await internalPlugins.enablePlugin(AUDIO_RECORDER_PLUGIN_ID);
-			} else if (!enabled && typeof internalPlugins.disablePlugin === "function") {
-				await internalPlugins.disablePlugin(AUDIO_RECORDER_PLUGIN_ID);
 			} else {
-				new Notice("无法切换 Obsidian 核心插件录音机，请到核心插件设置中手动调整“录音机”。");
-				return false;
+				if (notify) {
+					new Notice("无法自动开启 Obsidian 核心录音机，请到核心插件设置中手动开启“录音机”。");
+				}
+				return "unavailable";
 			}
 		} catch (error) {
-			new Notice(`切换 Obsidian 核心插件录音机失败：${getErrorMessage(error)}`);
-			this.log("切换 Obsidian 核心插件录音机失败", error);
-			return false;
+			if (notify) {
+				new Notice(`自动开启 Obsidian 核心录音机失败：${getErrorMessage(error)}`);
+			}
+			this.log("自动开启 Obsidian 核心录音机失败", error);
+			return "failed";
+		}
+		const enabledState = this.isOfficialAudioRecorderEnabled();
+		if (enabledState !== true) {
+			if (notify) {
+				new Notice(enabledState === null
+					? "无法确认 Obsidian 核心录音机是否已开启，请到核心插件设置中检查。"
+					: "Obsidian 核心录音机未能自动开启，请到核心插件设置中手动开启。");
+			}
+			return enabledState === null ? "unavailable" : "failed";
 		}
 
-		new Notice(enabled ? "已开启 Obsidian 核心插件录音机。" : "已关闭 Obsidian 核心插件录音机。");
-		return true;
+		if (notify) {
+			new Notice("已开启 Obsidian 核心插件录音机。");
+		}
+		return "enabled";
 	}
 
 	getOfficialAudioRecorderStartHotkey(): EchoNotesHotkeySetting {
@@ -1903,28 +1939,34 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	async setOfficialAudioRecorderStartHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
-		const saved = await this.setObsidianCommandHotkey(AUDIO_RECORDER_START_COMMAND_ID, hotkey, "开始录音");
-		if (saved) {
-			this.settings.officialRecorderStartHotkey = cloneHotkey(hotkey);
-		}
-		return saved;
+		return this.setObsidianCommandHotkey(
+			AUDIO_RECORDER_START_COMMAND_ID,
+			hotkey,
+			"开始录音",
+			"Obsidian 核心插件录音机",
+			"officialRecorderStartHotkey"
+		);
 	}
 
 	async setOfficialAudioRecorderStopHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
-		const saved = await this.setObsidianCommandHotkey(AUDIO_RECORDER_STOP_COMMAND_ID, hotkey, "停止录音");
-		if (saved) {
-			this.settings.officialRecorderStopHotkey = cloneHotkey(hotkey);
-		}
-		return saved;
+		return this.setObsidianCommandHotkey(
+			AUDIO_RECORDER_STOP_COMMAND_ID,
+			hotkey,
+			"停止录音",
+			"Obsidian 核心插件录音机",
+			"officialRecorderStopHotkey"
+		);
 	}
 
 	async setTranscribeAllAudioHotkey(hotkey: EchoNotesHotkeySetting): Promise<boolean> {
 		const commandId = `${this.manifest.id}:transcribe-all-audio-files-in-current-note`;
-		const saved = await this.setObsidianCommandHotkey(commandId, hotkey, "转写当前笔记全部音频", "Echo Notes");
-		if (saved) {
-			this.settings.transcribeAllAudioHotkey = cloneHotkey(hotkey);
-		}
-		return saved;
+		return this.setObsidianCommandHotkey(
+			commandId,
+			hotkey,
+			"转写当前笔记全部音频",
+			"Echo Notes",
+			"transcribeAllAudioHotkey"
+		);
 	}
 
 	getApiKey(provider: TranscriptionProviderId = getSelectedTranscriptionConfig(this.settings).provider): string {
@@ -2035,19 +2077,89 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		try {
-			const store = await this.memoryService.getTranscriptionEnhancementStore(this.settings);
+			const documents = await this.memoryService.getTranscriptionEnhancementDocuments(this.settings);
 			new TranscriptionEnhancementManagerModal(this.app, {
-				store,
+				store: documents.candidates,
 				onSave: async (updated) => {
 					await this.memoryService.saveTranscriptionEnhancementStore(this.settings, updated);
 				},
-				onOpenFile: async () => {
-					const file = await this.memoryService.getTranscriptionEnhancementFile(this.settings);
-					await this.app.workspace.getLeaf(false).openFile(file);
+				onOpenManualFile: () => this.openTranscriptionEnhancementManualFile(),
+				onOpenCandidateFile: () => this.openTranscriptionEnhancementCandidateFile(),
+				onOpenSource: async (path) => {
+					await this.app.workspace.openLinkText(path, "", false);
 				}
 			}).open();
 		} catch (error) {
-			new Notice(`无法打开术语与转写增强：${getErrorMessage(error)}`);
+			new Notice(`无法打开 AI 术语候选审核：${getErrorMessage(error)}`);
+		}
+	}
+
+	async openTranscriptionEnhancementManualFile(): Promise<void> {
+		try {
+			const file = await this.memoryService.getTranscriptionEnhancementFile(this.settings);
+			await this.app.workspace.getLeaf(false).openFile(file);
+		} catch (error) {
+			new Notice(`无法打开人工配置：${getErrorMessage(error)}`);
+		}
+	}
+
+	async openTranscriptionEnhancementCandidateFile(): Promise<void> {
+		try {
+			const file = await this.memoryService.getTranscriptionEnhancementCandidateFile(this.settings);
+			await this.app.workspace.getLeaf(false).openFile(file);
+		} catch (error) {
+			new Notice(`无法打开术语候选文件：${getErrorMessage(error)}`);
+		}
+	}
+
+	async getTranscriptionEnhancementSummary(): Promise<{
+		manualTermCount: number;
+		manualPromptCount: number;
+		pendingCandidateCount: number;
+	}> {
+		const { stats } = await this.memoryService.getTranscriptionEnhancementDocuments(this.settings);
+		return stats;
+	}
+
+	async openTranscriptionEnhancementPreview(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		try {
+			const activeFile = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? undefined;
+			const config = getSelectedTranscriptionConfig(this.settings);
+			const snapshot = await this.memoryService.buildTranscriptionEnhancement(this.settings, activeFile, {
+				enableHotwords: config.aliyunFiletrans?.hotwordEnhancementEnabled ?? false,
+				enableContext: config.aliyunFiletrans?.contextEnhancementEnabled ?? false
+			});
+			new TranscriptionEnhancementPreviewModal(this.app, {
+				snapshot,
+				sourceLabel: activeFile ? `当前笔记：${activeFile.basename}` : "无活动 Markdown 笔记 · 仅全局"
+			}).open();
+		} catch (error) {
+			new Notice(`无法预览转写增强：${getErrorMessage(error)}`);
+		}
+	}
+
+	async resetTranscriptionEnhancementExamples(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const confirmed = await this.confirmAction(
+			"重置转写增强示例",
+			"将清空当前人工术语、固定 Prompt 和所有 AI 候选审核数据，然后重新生成一套不会生效的教学示例。重置前会在 Echo Memory 的 99 系统目录中保存完整备份。",
+			"确认重置",
+			true
+		);
+		if (!confirmed) return;
+		try {
+			const result = await this.memoryService.resetTranscriptionEnhancementExamples(this.settings);
+			await this.app.workspace.getLeaf(false).openFile(result.manualFile);
+			new Notice(`已重置示例配置。原内容已备份至：${result.backupPath}`);
+		} catch (error) {
+			new Notice(`重置示例配置失败：${getErrorMessage(error)}`);
 		}
 	}
 
@@ -2076,9 +2188,9 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private confirmAction(title: string, message: string, confirmLabel: string): Promise<boolean> {
+	private confirmAction(title: string, message: string, confirmLabel: string, warning = false): Promise<boolean> {
 		return new Promise((resolve) => {
-			new EchoNotesConfirmModal(this.app, title, message, confirmLabel, resolve).open();
+			new EchoNotesConfirmModal(this.app, title, message, confirmLabel, resolve, warning).open();
 		});
 	}
 
@@ -2499,7 +2611,8 @@ export default class EchoNotesPlugin extends Plugin {
 		commandId: string,
 		hotkey: EchoNotesHotkeySetting,
 		actionLabel: string,
-		commandOwner = "Obsidian 核心插件录音机"
+		commandOwner: string,
+		settingKey: "officialRecorderStartHotkey" | "officialRecorderStopHotkey" | "transcribeAllAudioHotkey"
 	): Promise<boolean> {
 		const hotkeyManager = this.getHotkeyManager();
 		const commands = (this.app as unknown as AppWithInternals).commands?.commands;
@@ -2521,16 +2634,38 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`快捷键与其他命令冲突，未保存：${result.conflicts.hotkey.join("、")}`);
 			return false;
 		}
-		if (result.saved) {
-			new Notice(`已保存${commandOwner}${actionLabel}快捷键。`);
+		if (!result.saved) {
+			if (result.rollbackError) {
+				this.log("回滚快捷键失败", { commandId, error: result.rollbackError });
+			}
+			new Notice(`保存${commandOwner}“${actionLabel}”快捷键失败：${getErrorMessage(result.error)}`);
+			this.log(`保存${commandOwner}快捷键失败`, { commandId, error: result.error });
+			return false;
+		}
+
+		const originalSetting = cloneHotkey(this.settings[settingKey]);
+		this.settings[settingKey] = cloneHotkey(hotkey);
+		try {
+			await this.saveSettings();
+			new Notice(hotkey
+				? `已保存${commandOwner}“${actionLabel}”快捷键。`
+				: `已清除${commandOwner}“${actionLabel}”快捷键。`);
 			return true;
+		} catch (error) {
+			this.settings[settingKey] = originalSetting;
+			try {
+				await result.rollback?.();
+			} catch (rollbackError) {
+				this.log("回滚快捷键失败", { commandId, error: rollbackError });
+			}
+			try {
+				await this.saveSettings();
+			} catch (rollbackSettingsError) {
+				this.log("回滚快捷键设置失败", rollbackSettingsError);
+			}
+			new Notice(`保存${commandOwner}“${actionLabel}”快捷键失败：${getErrorMessage(error)}`);
+			return false;
 		}
-		if (result.rollbackError) {
-			this.log("回滚快捷键失败", { commandId, error: result.rollbackError });
-		}
-		new Notice(`保存${commandOwner}快捷键失败：${getErrorMessage(result.error)}`);
-		this.log(`保存${commandOwner}快捷键失败`, { commandId, error: result.error });
-		return false;
 	}
 
 	private getInternalPlugin(pluginId: string): InternalPlugin | null {
@@ -2795,8 +2930,12 @@ export default class EchoNotesPlugin extends Plugin {
 		let checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
 		const isAliyunFiletrans =
 			transcriptionConfig.provider === "aliyun-bailian" && transcriptionConfig.model === ALIYUN_FILETRANS_MODEL;
+		const hotwordEnhancementEnabled = isAliyunFiletrans &&
+			Boolean(transcriptionConfig.aliyunFiletrans?.hotwordEnhancementEnabled);
+		const contextEnhancementEnabled = isAliyunFiletrans &&
+			Boolean(transcriptionConfig.aliyunFiletrans?.contextEnhancementEnabled);
 		const usesMemoryEnhancement = isAliyunFiletrans && !options.resumeRemoteTask &&
-			Boolean(transcriptionConfig.aliyunFiletrans?.memoryEnhancementEnabled);
+			(hotwordEnhancementEnabled || contextEnhancementEnabled);
 		if (options.resumeRemoteTask) {
 			checkpointIdentity = {
 				...checkpointIdentity,
@@ -2932,6 +3071,7 @@ export default class EchoNotesPlugin extends Plugin {
 		let completedSegments: TranscriptionSegment[] = [];
 		let streamingState: StreamingTranscriptionState | undefined;
 		let enhancement: TranscriptionEnhancementSnapshot | undefined;
+		let enhancementWarning: string | undefined;
 		let diagnosticsPassed = false;
 		let longAudioNotice: Notice | null = null;
 		const updateLongAudioNotice = (message: string): void => {
@@ -2950,22 +3090,38 @@ export default class EchoNotesPlugin extends Plugin {
 				if (!this.settings.memoryInitialized) {
 					throw new Error("当前已开启 Echo Memory 转写增强，但 Echo Memory 尚未初始化。请先初始化或关闭该开关。");
 				}
-				enhancement = await this.memoryService.buildTranscriptionEnhancement(this.settings, sourceNote);
-				checkpointIdentity = createTranscriptionCheckpointIdentity(
-					audioFile,
-					transcriptionConfig,
-					enhancement.fingerprint
-				);
-				this.diagnostics.record(diagnostic.id, "configuration", "transcription-enhancement-snapshot", {
-					hotwordIds: enhancement.hotwords.map((item) => item.id),
-					memoryAssertionIds: enhancement.memoryAssertionIds,
-					hotwordCount: enhancement.hotwords.length,
-					memoryAssertionCount: enhancement.memoryAssertionIds.length,
-					omittedHotwordCount: enhancement.omittedHotwordCount,
-					omittedContextCount: enhancement.omittedContextCount,
-					scopeCount: enhancement.scopeIds.length,
-					fingerprint: enhancement.fingerprint
-				});
+				try {
+					enhancement = await this.memoryService.buildTranscriptionEnhancement(this.settings, sourceNote, {
+						enableHotwords: hotwordEnhancementEnabled,
+						enableContext: contextEnhancementEnabled
+					});
+					checkpointIdentity = createTranscriptionCheckpointIdentity(
+						audioFile,
+						transcriptionConfig,
+						enhancement.fingerprint
+					);
+					this.diagnostics.record(diagnostic.id, "configuration", "transcription-enhancement-snapshot", {
+						hotwordIds: enhancement.hotwords.map((item) => item.id),
+						memoryAssertionIds: enhancement.memoryAssertionIds,
+						hotwordCount: enhancement.hotwords.length,
+						memoryAssertionCount: enhancement.memoryAssertionIds.length,
+						omittedHotwordCount: enhancement.omittedHotwordCount,
+						omittedContextCount: enhancement.omittedContextCount,
+						scopeCount: enhancement.scopeIds.length,
+						fingerprint: enhancement.fingerprint
+					});
+				} catch (error) {
+					if (!(error instanceof TranscriptionEnhancementDocumentError)) throw error;
+					enhancement = undefined;
+					enhancementWarning = `${error.filePath}:${error.line} ${error.message.replace(`${error.filePath}:${error.line} `, "")}`;
+					this.diagnostics.record(diagnostic.id, "configuration", "transcription-enhancement-skipped", {
+						filePath: error.filePath,
+						line: error.line,
+						reason: error.message
+					});
+					this.taskCenter.updateTask(transcriptionTaskId, { stage: `转写增强已跳过：${enhancementWarning}` });
+					new Notice(`转写增强已跳过：${enhancementWarning}。将继续普通转写。`);
+				}
 			}
 			const diagnostics = diagnoseTranscriptionProviderSettings(
 				transcriptionConfig,
@@ -3216,7 +3372,7 @@ export default class EchoNotesPlugin extends Plugin {
 			hideLongAudioNotice();
 			this.taskCenter.updateTask(transcriptionTaskId, {
 				status: "success",
-				stage: "转写完成",
+				stage: enhancementWarning ? `转写完成 · 增强已跳过：${enhancementWarning}` : "转写完成",
 				provider: result.provider,
 				model: result.model,
 				outputPath: transcriptFile.path,
@@ -4620,8 +4776,10 @@ function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination):
 			return "AI 分析 → 模型配置";
 		case "memory-model":
 			return "Echo Memory → 模型配置";
+		case "memory-transcription-enhancement":
+			return "Echo Memory → 转写增强";
 		case "transcription-recording":
-			return "录音转写 → 录音控制";
+			return "录音转写 → 能力增强 → 快捷录音";
 	}
 }
 
@@ -4715,6 +4873,7 @@ class EchoNotesConfirmModal extends Modal {
 	private readonly message: string;
 	private readonly confirmLabel: string;
 	private readonly onResolved: (confirmed: boolean) => void;
+	private readonly warning: boolean;
 	private resolved = false;
 
 	constructor(
@@ -4722,23 +4881,27 @@ class EchoNotesConfirmModal extends Modal {
 		title: string,
 		message: string,
 		confirmLabel: string,
-		onResolved: (confirmed: boolean) => void
+		onResolved: (confirmed: boolean) => void,
+		warning = false
 	) {
 		super(app);
 		this.setTitle(title);
 		this.message = message;
 		this.confirmLabel = confirmLabel;
 		this.onResolved = onResolved;
+		this.warning = warning;
 	}
 
 	onOpen(): void {
 		this.contentEl.createEl("p", { text: this.message });
 		new Setting(this.contentEl)
 			.addButton((button) => button.setButtonText("取消").onClick(() => this.resolve(false)))
-			.addButton((button) => button
-				.setButtonText(this.confirmLabel)
-				.setCta()
-				.onClick(() => this.resolve(true)));
+			.addButton((button) => {
+				button.setButtonText(this.confirmLabel);
+				if (this.warning) button.buttonEl.addClass("mod-warning");
+				else button.setCta();
+				return button.onClick(() => this.resolve(true));
+			});
 	}
 
 	onClose(): void {

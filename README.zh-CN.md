@@ -64,14 +64,14 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 在原始音频引用下方插入转写稿链接。
 - 跳过可复用的已存在转写稿，并补充缺失链接；复用要求源音频路径、大小、mtime、转写 Provider、模型和 `status: done` 全部匹配。
 - 自定义输出目录下会为 transcript 文件名追加稳定的源路径短 hash，避免不同目录的同名音频互相覆盖。
-- 在设置页展示当前转写 Provider 的上传方式、接口形态、文件限制、长音频分段、语言参数、时间戳和说话人分离能力。
+- 在设置页“能力增强”中展示当前转写 Provider 与模型，并按“识别与结构、术语增强、上下文增强、快捷录音”组织能力；整组不支持时显示紧凑说明和可执行入口。
 - 可在设置页本地自检转写 Provider 配置，检查 API Key、Base URL、模型、HTTP 风险、接口形态和能力限制，不上传音频。
 - 标准化转写 Provider 错误，并在展示或写入失败信息前脱敏 API Key、Authorization header、Base64 音频载荷和过长响应。
 - 使用共享 AudioChunkPipeline 核心处理长音频准备、分段进度事件、逐段转写、文本合并、trace id 汇总、raw segment 收集，并释放已完成分段的音频 buffer。旧版阿里百炼 `qwen3-asr-flash`、SiliconFlow 和 MOSI 的成功分段会在 transcript 托管区块内建立检查点；失败或重启后，源音频与 Provider 配置仍匹配时只处理剩余分段。
 - 可从 Ribbon 或命令面板打开任务中心，查看转写、AI 分析和记忆任务的状态、失败原因、耗时、Provider、模型与输出。最多 100 条安全任务摘要会跨重启保留；普通运行中任务在重启后恢复重试入口，已提交的百炼异步任务则自动使用原 `task_id` 继续轮询。任务摘要不保存正文、临时上传凭证、签名结果地址或 API Key。
 - 任务中心每张任务卡可导出同一链路的诊断 ZIP；设置页“自动化与日志”和命令 `Echo Notes: 导出诊断日志包` 可导出近期记录。诊断默认开启，最多保留最近 20 次、最长 7 天，始终只在本地保存。
 - 可选开启手动上传前确认：上传前预览 Provider、Base URL、模型、文件大小和 HTTP 风险；开启后自动化会跳过需要确认的上传。
-- 离线模式可控制 Obsidian 核心插件录音机开关并配置核心命令快捷键；实时模式不劫持或读取核心录音机的私有状态。
+- 离线模式会按需启用 Obsidian 核心插件录音机，并在“快捷录音”卡片中记录、清除开始录音、停止录音和转写当前笔记全部音频的快捷键；不预设默认快捷键，也不提供关闭录音机入口。
 - 使用独立 AI 分析模型，将转写稿生成通用、学习、产品或角色化工作场景纪要。
 - AI 纪要分析在后台异步执行，完成后直接写回对应转写稿。
 - 可在发送转写稿前本地检查分析 API Key、Base URL、HTTPS 和模型配置，不调用 Provider。
@@ -107,7 +107,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 AgentPlan 实时转写的官方 `bigmodel_async` Base URL 和模型保持只读。MOSI 的官方 Base URL 也保持只读，模型由“说话人分离”开关自动派生：开启时使用 `moss-transcribe-diarize`，关闭时使用 `moss-transcribe`。其他离线 Provider 的默认值仍可修改。设置页会根据当前模式展示相应语言、麦克风或离线 Provider 配置，以及接口形态、大小限制、分段、时间戳和说话人分离能力。
 
-设置页还提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
+设置页“转写服务”仍提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
 
 AI 纪要分析按顺序支持硅基流动、**OpenCode Go**、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`；切换到 OpenCode Go 时默认使用 `deepseek-v4-flash`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。OpenCode Go 仅用于 AI 分析，固定使用官方 Base URL `https://opencode.ai/zen/go/v1`，模型选择器采用当前对接文档快照：Grok 4.5、GLM-5.2/5.1、GPT 5.6 Luna、Kimi K3/K2.7 Code/K2.6、MiMo-V2.5/Pro、MiniMax M3/M2.7、Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus、DeepSeek V4 Pro/Flash、Hy3。插件会按模型自动路由到文档规定的 Chat Completions、Responses 或 Messages 接口。可用模型、订阅额度和数据留存政策可能变化，发送内容前请查阅 [OpenCode Go 对接文档](https://opencode.ai/docs/zh-cn/go)。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
 
@@ -195,8 +195,8 @@ AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签�
 
 1. 打开 Obsidian 设置中的 Echo Notes。
 2. 在 Provider 上方选择“实时转写”或“离线转写”。新安装默认离线模式和阿里百炼。
-3. 实时模式：填写 AgentPlan 专属 API Key，选择语言、说话人标签样式和麦克风；官方 Base URL 与模型只读。只有刷新麦克风或开始录音时才会申请权限。
-4. 离线模式：选择阿里百炼、硅基流动、MOSI、Ollama 或 LM Studio，填写 API Key 并确认可用配置；MOSI 的官方 Base URL 只读，通过“说话人分离”开关切换自动派生的只读模型。
+3. 实时模式：填写 AgentPlan 专属 API Key，在“高级能力”中选择语言、说话人标签样式和麦克风；官方 Base URL 与模型只读。只有刷新麦克风或开始录音时才会申请权限。
+4. 离线模式：选择阿里百炼、硅基流动、MOSI、Ollama 或 LM Studio，填写 API Key 并确认可用配置；在“高级能力”中配置说话人分离、热词增强、上下文增强和核心录音机。MOSI 的官方 Base URL 只读，通过“说话人分离”开关切换自动派生的只读模型。
 5. 在“文案语言”中选择中文或英文，控制回写链接和生成文稿中的固定文案。
 
 实时命令：

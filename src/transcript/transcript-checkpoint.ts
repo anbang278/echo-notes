@@ -48,12 +48,13 @@ export function createTranscriptionConfigurationFingerprint(
 		baseUrl: config.baseUrl.trim().replace(/\/+$/, ""),
 		model: config.model.trim(),
 		language: config.language.trim(),
-		aliyunFiletrans: config.aliyunFiletrans
-			? {
-				diarizationEnabled: config.aliyunFiletrans.diarizationEnabled,
-				speakerCount: config.aliyunFiletrans.speakerCount,
-				memoryEnhancementEnabled: config.aliyunFiletrans.memoryEnhancementEnabled,
-				enhancementFingerprint
+			aliyunFiletrans: config.aliyunFiletrans
+				? {
+					diarizationEnabled: config.aliyunFiletrans.diarizationEnabled,
+					speakerCount: config.aliyunFiletrans.speakerCount,
+					hotwordEnhancementEnabled: config.aliyunFiletrans.hotwordEnhancementEnabled,
+					contextEnhancementEnabled: config.aliyunFiletrans.contextEnhancementEnabled,
+					enhancementFingerprint
 			}
 			: undefined
 	}));

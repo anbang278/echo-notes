@@ -1,8 +1,7 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import type { TranscriptionHotwordWeight } from "../providers/transcription-provider";
 import {
-	TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS,
-	type TranscriptionEnhancementPrompt,
+	getEffectiveTranscriptionTermText,
 	type TranscriptionEnhancementScope,
 	type TranscriptionEnhancementScopeType,
 	type TranscriptionEnhancementStatus,
@@ -13,7 +12,9 @@ import {
 interface TranscriptionEnhancementManagerOptions {
 	store: TranscriptionEnhancementStore;
 	onSave: (store: TranscriptionEnhancementStore) => Promise<void>;
-	onOpenFile: () => Promise<void>;
+	onOpenManualFile: () => Promise<void>;
+	onOpenCandidateFile: () => Promise<void>;
+	onOpenSource: (path: string) => Promise<void>;
 }
 
 const STATUS_OPTIONS: Record<TranscriptionEnhancementStatus, string> = {
@@ -32,130 +33,127 @@ const SCOPE_OPTIONS: Record<TranscriptionEnhancementScopeType, string> = {
 
 export class TranscriptionEnhancementManagerModal extends Modal {
 	private readonly options: TranscriptionEnhancementManagerOptions;
-	private terms: TranscriptionEnhancementTerm[];
-	private prompts: TranscriptionEnhancementPrompt[];
+	private readonly terms: TranscriptionEnhancementTerm[];
+	private filter: TranscriptionEnhancementStatus = "pending";
 	private saving = false;
 
 	constructor(app: App, options: TranscriptionEnhancementManagerOptions) {
 		super(app);
 		this.options = options;
-		this.terms = Object.values(options.store.terms).map(cloneTerm);
-		this.prompts = Object.values(options.store.prompts).map(clonePrompt);
+		this.terms = Object.values(options.store.terms)
+			.filter((term) => term.source === "memory")
+			.map(cloneTerm);
 	}
 
 	onOpen(): void {
-		this.setTitle("术语与转写增强");
+		this.modalEl.addClass("echo-notes-transcription-candidate-review-modal");
+		this.setTitle("AI 术语候选审核");
 		this.render();
 	}
 
 	private render(): void {
 		this.contentEl.empty();
 		this.contentEl.createEl("p", {
-			text: "只有已批准且与来源笔记作用域匹配的内容会进入转写请求；关闭“使用 Echo Memory 转写增强”时不会外发任何内容。"
+			text: "这里只审核 AI 候选。人工术语和固定 prompt 请在 Markdown 配置文件中维护。",
+			cls: "echo-notes-candidate-review-intro"
+		});
+		this.renderFilters();
+
+		const visibleTerms = this.terms.filter((term) => term.status === this.filter);
+		const list = this.contentEl.createDiv({ cls: "echo-notes-candidate-review-list" });
+		list.setAttr("aria-live", "polite");
+		if (visibleTerms.length === 0) {
+			const empty = list.createDiv({ cls: "echo-notes-candidate-review-empty" });
+			empty.createEl("strong", { text: `暂无${STATUS_OPTIONS[this.filter]}候选` });
+			empty.createEl("p", { text: "可从 Echo Memory 的已批准记忆中生成新候选。" });
+		}
+		for (const term of visibleTerms) this.renderTerm(list, term);
+		this.renderFooter();
+	}
+
+	private renderFilters(): void {
+		const tabs = this.contentEl.createDiv({ cls: "echo-notes-candidate-review-tabs" });
+		tabs.setAttr("role", "tablist");
+		for (const status of Object.keys(STATUS_OPTIONS) as TranscriptionEnhancementStatus[]) {
+			const count = this.terms.filter((term) => term.status === status).length;
+			const button = tabs.createEl("button", {
+				text: `${STATUS_OPTIONS[status]} ${count}`,
+				cls: status === this.filter ? "is-active" : ""
+			});
+			button.setAttr("type", "button");
+			button.setAttr("role", "tab");
+			button.setAttr("aria-selected", String(status === this.filter));
+			button.addEventListener("click", () => {
+				this.filter = status;
+				this.render();
+			});
+		}
+	}
+
+	private renderTerm(container: HTMLElement, term: TranscriptionEnhancementTerm): void {
+		const card = container.createDiv({ cls: "echo-notes-candidate-review-card" });
+		const header = card.createDiv({ cls: "echo-notes-candidate-review-card-header" });
+		const identity = header.createDiv();
+		identity.createEl("strong", { text: term.text });
+		identity.createSpan({ text: `候选词 · ${formatScope(term.scope)}` });
+		header.createSpan({
+			text: STATUS_OPTIONS[term.status],
+			cls: `echo-notes-candidate-review-status is-${term.status}`
 		});
 
-		const termHeading = this.contentEl.createEl("h3", { text: "原生热词" });
-		termHeading.tabIndex = -1;
-		if (this.terms.length === 0) {
-			this.contentEl.createEl("p", { text: "暂无术语。", cls: "setting-item-description" });
+		if (term.evidence) card.createEl("p", { text: `依据：${term.evidence}`, cls: "echo-notes-candidate-review-evidence" });
+		if (term.backlink) {
+			const source = card.createEl("button", { text: "打开来源与审核记录", cls: "echo-notes-candidate-review-source" });
+			source.setAttr("type", "button");
+			source.setAttr("aria-label", `打开 ${term.text} 的来源与审核记录`);
+			source.addEventListener("click", () => void this.options.onOpenSource(term.backlink!));
 		}
-		for (const term of this.terms) {
-			this.renderTerm(term);
-		}
-		new Setting(this.contentEl)
-			.setName("新增术语")
-			.setDesc("手工词条只有在点击底部“保存更改”后才会生效。")
-			.addButton((button) => button.setButtonText("添加").onClick(() => {
-				this.terms.push(createTermDraft());
-				this.render();
-			}));
 
-		this.contentEl.createEl("h3", { text: "固定提示词" });
-		if (this.prompts.length === 0) {
-			this.contentEl.createEl("p", { text: "暂无固定提示词。", cls: "setting-item-description" });
-		}
-		for (const prompt of this.prompts) {
-			this.renderPrompt(prompt);
-		}
-		new Setting(this.contentEl)
-			.setName("新增固定提示词")
-			.setDesc(`固定 Prompt 优先于已批准记忆组装；最终上下文总计不超过 ${TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS} 字符。`)
-			.addButton((button) => button.setButtonText("添加").onClick(() => {
-				this.prompts.push(createPromptDraft());
-				this.render();
-			}));
-
-		const footer = new Setting(this.contentEl);
-		footer.addButton((button) => button.setButtonText("打开审计文件").onClick(async () => {
-			await this.options.onOpenFile();
-		}));
-		footer.addButton((button) => button
-			.setButtonText(this.saving ? "正在保存…" : "保存更改")
-			.setCta()
-			.setDisabled(this.saving)
-			.onClick(() => void this.save()));
-	}
-
-	private renderTerm(term: TranscriptionEnhancementTerm): void {
-		const group = this.contentEl.createDiv({ cls: "echo-notes-settings-advanced" });
-		new Setting(group)
-			.setName(term.source === "manual" ? "手工术语" : "记忆候选术语")
-			.setDesc(term.evidence ? `依据：${term.evidence}` : "正文不会写入诊断日志。")
+		const fields = card.createDiv({ cls: "echo-notes-candidate-review-fields" });
+		new Setting(fields)
+			.setName("生效词")
+			.setDesc("审核时可修正，保留原候选词用于审计。")
 			.addText((text) => text
-				.setPlaceholder("规范词")
-				.setValue(term.text)
-				.onChange((value) => { term.text = value; }))
+				.setValue(getEffectiveTranscriptionTermText(term))
+				.setPlaceholder("输入最终生效词")
+				.onChange((value) => { term.effectiveText = value; }));
+		new Setting(fields)
+			.setName("权重")
+			.setDesc("普通术语建议保持 3，50 仅用于极高优先级。")
 			.addDropdown((dropdown) => dropdown
-				.addOptions({ "1": "权重 1", "2": "权重 2", "3": "权重 3", "4": "权重 4", "5": "权重 5", "50": "权重 50" })
+				.addOptions({ "1": "1", "2": "2", "3": "3", "4": "4", "5": "5", "50": "50" })
 				.setValue(String(term.weight))
 				.onChange((value) => { term.weight = Number(value) as TranscriptionHotwordWeight; }));
-		this.renderScopeSetting(group, term.scope, () => this.render());
-		new Setting(group)
-			.setName("状态")
-			.setDesc("待审核、拒绝或禁用状态不会进入请求。")
-			.addDropdown((dropdown) => dropdown
-				.addOptions(STATUS_OPTIONS)
-				.setValue(term.status)
-				.onChange((value) => { term.status = value as TranscriptionEnhancementStatus; }));
+		this.renderScopeSetting(fields, term.scope);
+
+		const actions = card.createDiv({ cls: "echo-notes-candidate-review-actions" });
+		const reject = actions.createEl("button", { text: "拒绝" });
+		reject.setAttr("type", "button");
+		reject.setAttr("aria-label", `拒绝候选 ${term.text}`);
+		reject.addEventListener("click", () => {
+			term.status = "rejected";
+			this.render();
+		});
+		const approve = actions.createEl("button", { text: term.status === "approved" ? "保持批准" : "批准", cls: "mod-cta" });
+		approve.setAttr("type", "button");
+		approve.setAttr("aria-label", `批准候选 ${term.text}`);
+		approve.addEventListener("click", () => {
+			term.status = "approved";
+			this.render();
+		});
 	}
 
-	private renderPrompt(prompt: TranscriptionEnhancementPrompt): void {
-		const group = this.contentEl.createDiv({ cls: "echo-notes-settings-advanced" });
-		new Setting(group)
-			.setName("Prompt 内容")
-			.setDesc(`${prompt.text.length}/${TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS} 字符`)
-			.addTextArea((text) => text
-				.setPlaceholder("例如：本次音频是产品评审会议，请保留中英文术语。")
-				.setValue(prompt.text)
-				.onChange((value) => { prompt.text = value; }));
-		this.renderScopeSetting(group, prompt.scope, () => this.render());
-		new Setting(group)
-			.setName("状态")
-			.addDropdown((dropdown) => dropdown
-				.addOptions(STATUS_OPTIONS)
-				.setValue(prompt.status)
-				.onChange((value) => { prompt.status = value as TranscriptionEnhancementStatus; }));
-	}
-
-	private renderScopeSetting(
-		container: HTMLElement,
-		scope: TranscriptionEnhancementScope,
-		onTypeChange: () => void
-	): void {
-		const setting = new Setting(container)
-			.setName("作用域")
-			.addDropdown((dropdown) => dropdown
-				.addOptions(SCOPE_OPTIONS)
-				.setValue(scope.type)
-				.onChange((value) => {
-					scope.type = value as TranscriptionEnhancementScopeType;
-					if (scope.type === "global") {
-						delete scope.value;
-					} else {
-						scope.value ??= "";
-					}
-					onTypeChange();
-				}));
+	private renderScopeSetting(container: HTMLElement, scope: TranscriptionEnhancementScope): void {
+		const setting = new Setting(container).setName("作用域");
+		setting.addDropdown((dropdown) => dropdown
+			.addOptions(SCOPE_OPTIONS)
+			.setValue(scope.type)
+			.onChange((value) => {
+				scope.type = value as TranscriptionEnhancementScopeType;
+				if (scope.type === "global") delete scope.value;
+				else scope.value ??= "";
+				this.render();
+			}));
 		if (scope.type !== "global") {
 			setting.addText((text) => text
 				.setPlaceholder("作用域名称")
@@ -164,18 +162,25 @@ export class TranscriptionEnhancementManagerModal extends Modal {
 		}
 	}
 
+	private renderFooter(): void {
+		const footer = new Setting(this.contentEl);
+		footer.settingEl.addClass("echo-notes-candidate-review-footer");
+		footer.addButton((button) => button.setButtonText("打开人工配置").onClick(() => void this.options.onOpenManualFile()));
+		footer.addButton((button) => button.setButtonText("打开候选文件").onClick(() => void this.options.onOpenCandidateFile()));
+		footer.addButton((button) => button
+			.setButtonText(this.saving ? "正在保存…" : "保存审核")
+			.setCta()
+			.setDisabled(this.saving)
+			.onClick(() => void this.save()));
+	}
+
 	private async save(): Promise<void> {
-		if (this.saving) {
-			return;
-		}
-		const invalidTerm = this.terms.find((term) => !term.text.trim() || (term.scope.type !== "global" && !term.scope.value?.trim()));
-		const invalidPrompt = this.prompts.find((prompt) =>
-			!prompt.text.trim() ||
-			prompt.text.trim().length > TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS ||
-			(prompt.scope.type !== "global" && !prompt.scope.value?.trim())
+		if (this.saving) return;
+		const invalid = this.terms.find((term) =>
+			!getEffectiveTranscriptionTermText(term) || (term.scope.type !== "global" && !term.scope.value?.trim())
 		);
-		if (invalidTerm || invalidPrompt) {
-			new Notice(`请补全术语、Prompt 和非全局作用域名称；单条 Prompt 不得超过 ${TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS} 字符。`);
+		if (invalid) {
+			new Notice("请补全生效词和非全局作用域名称。");
 			return;
 		}
 		this.saving = true;
@@ -184,21 +189,11 @@ export class TranscriptionEnhancementManagerModal extends Modal {
 			const at = new Date().toISOString();
 			const terms = Object.fromEntries(this.terms.map((draft) => {
 				const previous = this.options.store.terms[draft.id];
-				const term = finalizeRecord(draft, previous, at);
+				const term = finalizeTerm(draft, previous, at);
 				return [term.id, term];
 			}));
-			const prompts = Object.fromEntries(this.prompts.map((draft) => {
-				const previous = this.options.store.prompts[draft.id];
-				const prompt = finalizeRecord(draft, previous, at);
-				return [prompt.id, prompt];
-			}));
-			await this.options.onSave({
-				...this.options.store,
-				updatedAt: at,
-				terms,
-				prompts
-			});
-			new Notice("术语与转写增强已保存。");
+			await this.options.onSave({ ...this.options.store, updatedAt: at, terms, prompts: {} });
+			new Notice("AI 术语候选审核已保存。");
 			this.close();
 		} catch (error) {
 			new Notice(`保存失败：${error instanceof Error ? error.message : String(error)}`);
@@ -208,69 +203,31 @@ export class TranscriptionEnhancementManagerModal extends Modal {
 	}
 }
 
-function finalizeRecord<T extends TranscriptionEnhancementTerm | TranscriptionEnhancementPrompt>(
-	draft: T,
-	previous: T | undefined,
+function finalizeTerm(
+	draft: TranscriptionEnhancementTerm,
+	previous: TranscriptionEnhancementTerm | undefined,
 	at: string
-): T {
-	const changed = !previous || JSON.stringify({ ...draft, history: [], updatedAt: "", approvedAt: undefined }) !==
-		JSON.stringify({ ...previous, history: [], updatedAt: "", approvedAt: undefined });
-	if (!changed) {
-		return previous;
-	}
-	const result = {
+): TranscriptionEnhancementTerm {
+	const normalized: TranscriptionEnhancementTerm = {
 		...draft,
 		text: draft.text.trim(),
-		scope: draft.scope.type === "global"
-			? { type: "global" as const }
-			: { type: draft.scope.type, value: draft.scope.value?.trim() },
+		effectiveText: getEffectiveTranscriptionTermText(draft),
+		scope: draft.scope.type === "global" ? { type: "global" } : { type: draft.scope.type, value: draft.scope.value?.trim() },
 		updatedAt: at,
-		history: [
-			...(previous?.history ?? []),
-			{ at, status: draft.status, note: previous ? "用户保存修改" : "用户创建并保存" }
-		]
-	} as T;
-	if ("source" in result) {
-		const previousApprovedAt = previous && "approvedAt" in previous ? previous.approvedAt : undefined;
-		result.approvedAt = draft.status === "approved" ? at : previousApprovedAt;
-	}
-	return result;
-}
-
-function createTermDraft(): TranscriptionEnhancementTerm {
-	const at = new Date().toISOString();
-	return {
-		id: createId("term"),
-		text: "",
-		weight: 3,
-		scope: { type: "global" },
-		source: "manual",
-		status: "approved",
-		updatedAt: at,
-		history: []
+		history: [...(previous?.history ?? [])]
 	};
+	const changed = !previous || JSON.stringify({ ...normalized, history: [], updatedAt: "", approvedAt: undefined }) !==
+		JSON.stringify({ ...previous, history: [], updatedAt: "", approvedAt: undefined });
+	if (!changed) return previous;
+	normalized.history.push({ at, status: normalized.status, note: "用户审核或修正 AI 术语候选" });
+	if (normalized.status === "approved" && previous?.status !== "approved") normalized.approvedAt = at;
+	return normalized;
 }
 
-function createPromptDraft(): TranscriptionEnhancementPrompt {
-	const at = new Date().toISOString();
-	return {
-		id: createId("prompt"),
-		text: "",
-		scope: { type: "global" },
-		status: "approved",
-		updatedAt: at,
-		history: []
-	};
-}
-
-function createId(prefix: string): string {
-	return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+function formatScope(scope: TranscriptionEnhancementScope): string {
+	return scope.type === "global" ? "全局" : `${SCOPE_OPTIONS[scope.type]}：${scope.value ?? ""}`;
 }
 
 function cloneTerm(term: TranscriptionEnhancementTerm): TranscriptionEnhancementTerm {
 	return { ...term, scope: { ...term.scope }, history: term.history.map((event) => ({ ...event })) };
-}
-
-function clonePrompt(prompt: TranscriptionEnhancementPrompt): TranscriptionEnhancementPrompt {
-	return { ...prompt, scope: { ...prompt.scope }, history: prompt.history.map((event) => ({ ...event })) };
 }

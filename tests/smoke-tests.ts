@@ -180,11 +180,18 @@ import {
 } from "../src/security/provider-secrets";
 import { buildMemoryPaths } from "../src/memory/memory-paths";
 import {
+	TranscriptionEnhancementDocumentError,
 	buildTranscriptionEnhancementSnapshot,
 	createTranscriptionEnhancementStore,
+	mergeTranscriptionEnhancementStores,
 	normalizeTranscriptionEnhancementScopes,
+	parseManualTranscriptionEnhancementDocument,
+	parseTranscriptionEnhancementCandidateDocument,
 	parseTranscriptionEnhancementDocument,
+	renderManualTranscriptionEnhancementDocument,
+	renderTranscriptionEnhancementCandidateDocument,
 	renderTranscriptionEnhancementDocument,
+	updateTranscriptionEnhancementCandidateDocument,
 	updateTranscriptionEnhancementDocument
 } from "../src/memory/memory-transcription-enhancement";
 import {
@@ -903,7 +910,7 @@ assert.match(
 );
 assert.match(
 	settingsTabSource,
-	/echo-notes-hotkey-validation[\s\S]{0,900}tone: "failed"/,
+	/const renderMessage = \(tone: "success" \| "failed", text: string\)[\s\S]{0,300}renderStatusIndicator\(validationEl, \{ tone, text, live: "polite" \}/,
 	"设置页快捷键校验必须使用共享失败状态"
 );
 assert.doesNotMatch(settingsTabSource, /validationEl\.toggleClass\("is-error"/, "设置页不应保留纯颜色快捷键错误状态");
@@ -1174,11 +1181,14 @@ assert.equal(zhMemoryPaths.projectAggregation, "Echo Memory/05 聚合/项目.md"
 assert.equal(zhMemoryPaths.peopleAggregation, "Echo Memory/05 聚合/人物.md");
 assert.equal(zhMemoryPaths.timelineAggregation, "Echo Memory/05 聚合/时间线.md");
 assert.equal(zhMemoryPaths.transcriptionEnhancement, "Echo Memory/07 转写增强/术语与上下文.md");
+assert.equal(zhMemoryPaths.transcriptionEnhancementCandidates, "Echo Memory/07 转写增强/术语候选.md");
+assert.equal(zhMemoryPaths.transcriptionEnhancementLegacyBackup, "Echo Memory/99 系统/transcription-enhancement-v1-backup.json");
 const enMemoryPaths = buildMemoryPaths("Memory", "en");
 assert.equal(enMemoryPaths.home, "Memory/00 Home.md");
 assert.equal(enMemoryPaths.manifest, "Memory/99 System/echo-memory.json");
 assert.equal(enMemoryPaths.timelineAggregation, "Memory/05 Aggregations/Timeline.md");
 assert.equal(enMemoryPaths.transcriptionEnhancement, "Memory/07 Transcription Enhancement/Terms and Context.md");
+assert.equal(enMemoryPaths.transcriptionEnhancementCandidates, "Memory/07 Transcription Enhancement/Term Candidates.md");
 assert.equal(
 	getMemoryExtractionCheckpointStorePath(zhMemoryPaths.systemDir),
 	"Echo Memory/99 系统/echo-memory-checkpoints.json"
@@ -1236,6 +1246,125 @@ const updatedTranscriptionEnhancement = updateTranscriptionEnhancementDocument(
 	transcriptionEnhancementStore
 );
 assert.match(updatedTranscriptionEnhancement, /用户说明/);
+
+const emptyManualExampleDocument = renderManualTranscriptionEnhancementDocument(createTranscriptionEnhancementStore(""));
+const parsedEmptyManualExample = parseManualTranscriptionEnhancementDocument(emptyManualExampleDocument, "示例人工配置.md");
+assert.match(emptyManualExampleDocument, /配置示例（不会被读取）/);
+assert.ok(emptyManualExampleDocument.includes("> ## 项目：Echo Notes"));
+assert.equal(Object.keys(parsedEmptyManualExample.terms).length, 0, "人工配置引用示例不得被解析为术语");
+assert.equal(Object.keys(parsedEmptyManualExample.prompts).length, 0, "人工配置引用示例不得被解析为 Prompt");
+const emptyCandidateExampleDocument = renderTranscriptionEnhancementCandidateDocument(createTranscriptionEnhancementStore(""));
+const parsedEmptyCandidateExample = parseTranscriptionEnhancementCandidateDocument(emptyCandidateExampleDocument, "示例候选.md");
+assert.match(emptyCandidateExampleDocument, /候选示例（不会被读取）/);
+assert.equal(Object.keys(parsedEmptyCandidateExample.terms).length, 0, "候选文件教学示例不得进入托管数据");
+
+const manualEnhancementMarkdown = [
+	"# 术语与上下文",
+	"",
+	"普通正文可以自由编辑。",
+	"",
+	"## 全局",
+	"",
+	"### 术语",
+	"",
+	"- Echo Notes",
+	"- OpenAI {weight=5}",
+	"这行只是说明，不会被解析。",
+	"",
+	"### 固定 Prompt",
+	"",
+	"```text",
+	"保留产品名称。",
+	"中英文不要翻译。",
+	"```",
+	"",
+	"## 项目：Echo Notes",
+	"",
+	"### 术语",
+	"",
+	"- DashScope {weight=50}",
+	"",
+	"### 固定 Prompt",
+	"",
+	"```text",
+	"项目 Prompt 第一条。",
+	"```",
+	"",
+	"```text",
+	"项目 Prompt 第二条。",
+	"```",
+	"",
+	"## 人物：安邦",
+	"",
+	"### 术语",
+	"",
+	"- 安邦 {weight=1}"
+].join("\n");
+const parsedManualEnhancement = parseManualTranscriptionEnhancementDocument(
+	manualEnhancementMarkdown,
+	"Echo Memory/07 转写增强/术语与上下文.md"
+);
+assert.equal(Object.keys(parsedManualEnhancement.terms).length, 4);
+assert.deepEqual(Object.values(parsedManualEnhancement.terms).map((term) => term.weight), [3, 5, 50, 1]);
+assert.equal(Object.keys(parsedManualEnhancement.prompts).length, 3);
+assert.match(Object.values(parsedManualEnhancement.prompts)[0].text, /保留产品名称。\n中英文不要翻译。/);
+const rerenderedManualEnhancement = renderManualTranscriptionEnhancementDocument(parsedManualEnhancement, "保留的迁移说明。");
+assert.match(rerenderedManualEnhancement, /保留的迁移说明/);
+assert.match(rerenderedManualEnhancement, /## 项目：Echo Notes/);
+assert.throws(
+	() => parseManualTranscriptionEnhancementDocument("## 全局\n### 术语\n- 错误 {weight=9}", "错误.md"),
+	(error: unknown) => error instanceof TranscriptionEnhancementDocumentError && error.filePath === "错误.md" && error.line === 3
+);
+assert.throws(
+	() => parseManualTranscriptionEnhancementDocument("## 全局\n### 固定 Prompt\n```text\n未闭合", "Prompt.md"),
+	(error: unknown) => error instanceof TranscriptionEnhancementDocumentError && error.line === 3
+);
+
+const candidateEnhancementStore = createTranscriptionEnhancementStore("2026-08-13T04:00:00.000Z");
+candidateEnhancementStore.terms.candidate = {
+	id: "candidate",
+	text: "EchoNote",
+	effectiveText: "Echo Notes",
+	weight: 4,
+	scope: { type: "global" },
+	source: "memory",
+	status: "approved",
+	evidence: "已批准记忆断言 assertion-1",
+	backlink: "Echo Memory/01 候选/test.review.md",
+	approvedAt: "2026-08-13T04:00:00.000Z",
+	updatedAt: "2026-08-13T04:00:00.000Z",
+	history: [{ at: "2026-08-13T04:00:00.000Z", status: "approved", note: "用户审核" }]
+};
+const renderedCandidates = renderTranscriptionEnhancementCandidateDocument(candidateEnhancementStore);
+assert.match(renderedCandidates, /候选词 \| 生效词/);
+assert.deepEqual(parseTranscriptionEnhancementCandidateDocument(renderedCandidates), candidateEnhancementStore);
+assert.throws(
+	() => parseTranscriptionEnhancementCandidateDocument(renderedCandidates.replace('"schemaVersion": 1', '"schemaVersion":'), "候选错误.md"),
+	(error: unknown) => error instanceof TranscriptionEnhancementDocumentError && error.filePath === "候选错误.md" && error.line > 1
+);
+const updatedCandidates = updateTranscriptionEnhancementCandidateDocument(
+	renderedCandidates.replace("# 术语候选", "# 术语候选\n\n保留候选说明。"),
+	candidateEnhancementStore
+);
+assert.match(updatedCandidates, /保留候选说明/);
+
+const mergedMarkdownEnhancement = mergeTranscriptionEnhancementStores(parsedManualEnhancement, candidateEnhancementStore);
+const mergedMarkdownSnapshot = buildTranscriptionEnhancementSnapshot({
+	store: mergedMarkdownEnhancement,
+	scopes: { projects: ["Echo Notes"], people: [], organizations: [] },
+	memoryAssertions: []
+});
+assert.equal(mergedMarkdownSnapshot.hotwords.find((term) => term.text === "Echo Notes")?.weight, 3, "同作用域人工配置应优先于 AI 候选");
+assert.deepEqual(
+	mergedMarkdownSnapshot.hotwords.filter((term) => term.text === "DashScope"),
+	[{ id: Object.values(parsedManualEnhancement.terms).find((term) => term.text === "DashScope")!.id, text: "DashScope", weight: 50 }],
+	"具体项目作用域应纳入"
+);
+assert.equal(
+	mergedMarkdownSnapshot.contextText,
+	"项目 Prompt 第一条。\n项目 Prompt 第二条。\n保留产品名称。\n中英文不要翻译。",
+	"具体作用域优先，同作用域按文件顺序组装 Prompt"
+);
 const normalizedEnhancementScopes = normalizeTranscriptionEnhancementScopes({
 	projects: ["Echo Notes", " Echo Notes "],
 	people: "安邦",
@@ -5168,6 +5297,8 @@ const capturedGettingStartedHotkey = captureHotkeyFromKeyboardEvent({
 } as KeyboardEvent);
 assert.equal(formatHotkey(capturedGettingStartedHotkey ?? null), "Ctrl+Shift+K");
 assert.equal(captureHotkeyFromKeyboardEvent({ key: "Shift" } as KeyboardEvent), undefined);
+assert.equal(captureHotkeyFromKeyboardEvent({ key: "Escape" } as KeyboardEvent), undefined);
+assert.equal(captureHotkeyFromKeyboardEvent({ key: "Tab" } as KeyboardEvent), undefined);
 const validGettingStartedHotkeys = {
 	start: parseHotkeyInput("Ctrl+Shift+R"),
 	stop: parseHotkeyInput("Ctrl+Shift+S"),
@@ -5435,7 +5566,12 @@ for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
 		provider === "aliyun-bailian"
 			? {
 				...customConfig,
-				aliyunFiletrans: { diarizationEnabled: true, memoryEnhancementEnabled: false }
+				aliyunFiletrans: {
+					diarizationEnabled: true,
+					hotwordEnhancementEnabled: false,
+					contextEnhancementEnabled: false,
+					memoryEnhancementEnabled: false
+				}
 			}
 			: customConfig
 	);
