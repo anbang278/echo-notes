@@ -1116,6 +1116,7 @@ export interface LocalizedCopy {
 	analysisProviderLabel: string;
 	analysisModelLabel: string;
 	analysisTraceIdLabel: string;
+	analysisTechnicalInfoHeading: string;
 }
 
 export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
@@ -1140,7 +1141,8 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		analysisGeneratedAtLabel: "生成时间：",
 		analysisProviderLabel: "服务商：",
 		analysisModelLabel: "模型：",
-		analysisTraceIdLabel: "Trace ID："
+		analysisTraceIdLabel: "Trace ID：",
+		analysisTechnicalInfoHeading: "Echo Notes 技术信息"
 	},
 	en: {
 		transcriptLinkAlias: "View the transcribed manuscript",
@@ -1164,7 +1166,8 @@ export const LOCALIZED_COPY: Record<CopyLanguage, LocalizedCopy> = {
 		analysisGeneratedAtLabel: "Generated at: ",
 		analysisProviderLabel: "Provider: ",
 		analysisModelLabel: "Model: ",
-		analysisTraceIdLabel: "Trace ID: "
+		analysisTraceIdLabel: "Trace ID: ",
+		analysisTechnicalInfoHeading: "Echo Notes Technical Info"
 	}
 };
 

@@ -1,12 +1,8 @@
-import {
-	DEFAULT_ANALYSIS_TEMPLATE_VERSION,
-	getLocalizedCopy,
-	type AnalysisTemplateId,
-	type CopyLanguage
-} from "../settings/settings";
+import { type AnalysisTemplateId, type CopyLanguage } from "../settings/settings";
 import type { AnalysisResult } from "./analysis-provider";
 import { removeAllAnalysisCheckpoints } from "./analysis-checkpoint";
 import { TRANSCRIPT_MANAGED_END, TRANSCRIPT_MANAGED_START } from "../transcript/transcript-content";
+import { insertOrReplaceTranscriptTechnicalItem, renderTranscriptTechnicalInfo } from "./analysis-technical";
 
 export const ANALYSIS_LINKS_START = "<!-- echo-notes-analysis-links:start -->";
 export const ANALYSIS_LINKS_END = "<!-- echo-notes-analysis-links:end -->";
@@ -63,42 +59,29 @@ export function extractTranscriptAnalyses(
 }
 
 export function renderTranscriptAnalysisBlock(input: RenderTranscriptAnalysisBlockInput): string {
-	const copy = getLocalizedCopy(input.copyLanguage);
-	const metadataSeparator = input.copyLanguage === "en" ? "; " : "；";
-	const generatedAt = new Date().toISOString();
-	const templateVersion = input.templateVersion?.trim() || DEFAULT_ANALYSIS_TEMPLATE_VERSION;
-	const metadata = [
-		`${copy.analysisGeneratedAtLabel}${generatedAt}`,
-		`${copy.analysisProviderLabel}${input.result.provider}`,
-		`${copy.analysisModelLabel}${input.result.model}`
-	];
-	if (input.result.traceId) {
-		metadata.push(`${copy.analysisTraceIdLabel}${input.result.traceId}`);
-	}
-
-	const inlineFields = [
-		renderDataviewInlineField("echo_notes_analysis_template_id", input.templateId),
-		renderDataviewInlineField("echo_notes_analysis_template_name", input.templateName),
-		renderDataviewInlineField("echo_notes_analysis_template_version", templateVersion),
-		renderDataviewInlineField("echo_notes_analysis_provider", input.result.provider),
-		renderDataviewInlineField("echo_notes_analysis_model", input.result.model),
-		renderDataviewInlineField("echo_notes_analysis_generated_at", generatedAt)
-	];
-	if (input.result.traceId) {
-		inlineFields.push(renderDataviewInlineField("echo_notes_analysis_trace_id", input.result.traceId));
-	}
-
 	return [
 		getTranscriptAnalysisItemStart(input.templateId),
 		`## ${input.templateName}`,
 		"",
-		...inlineFields,
-		"",
-		`_${metadata.join(metadataSeparator)}_`,
-		"",
 		normalizeAnalysisMarkdownHeadings(input.result.text.trim()),
 		getTranscriptAnalysisItemEnd(input.templateId)
 	].join("\n");
+}
+
+export function renderTranscriptAnalysisWithTechnicalInfo(input: RenderTranscriptAnalysisBlockInput): {
+	analysisBlock: string;
+	technicalBlock: string;
+	generatedAt: string;
+} {
+	const generatedAt = new Date().toISOString();
+	return {
+		analysisBlock: renderTranscriptAnalysisBlock(input),
+		generatedAt,
+		technicalBlock: renderTranscriptTechnicalInfo({
+			...input,
+			generatedAt
+		})
+	};
 }
 
 export function insertOrReplaceTranscriptAnalysis(
@@ -106,19 +89,27 @@ export function insertOrReplaceTranscriptAnalysis(
 	analysisBlock: string,
 	templateId: AnalysisTemplateId,
 	heading: string,
-	insertBeforeHeading?: string | string[]
+	insertBeforeHeading?: string | string[],
+	technicalBlock?: string,
+	copyLanguage?: CopyLanguage
 ): string {
+	let nextContent = content;
 	const startIndex = content.indexOf(TRANSCRIPT_ANALYSIS_START);
 	const endIndex = content.indexOf(TRANSCRIPT_ANALYSIS_END);
 	if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
 		const fullBlock = [TRANSCRIPT_ANALYSIS_START, `# ${heading}`, "", analysisBlock, TRANSCRIPT_ANALYSIS_END].join("\n");
-		return insertAnalysisSection(content, fullBlock, insertBeforeHeading);
+		nextContent = insertAnalysisSection(nextContent, fullBlock, insertBeforeHeading);
+	} else {
+		const existingSection = nextContent.slice(startIndex, endIndex + TRANSCRIPT_ANALYSIS_END.length);
+		const updatedSection = insertOrReplaceAnalysisItem(existingSection, analysisBlock, templateId);
+		const contentWithoutSection = `${nextContent.slice(0, startIndex)}${nextContent.slice(endIndex + TRANSCRIPT_ANALYSIS_END.length)}`;
+		nextContent = insertAnalysisSection(contentWithoutSection, updatedSection, insertBeforeHeading);
 	}
 
-	const existingSection = content.slice(startIndex, endIndex + TRANSCRIPT_ANALYSIS_END.length);
-	const updatedSection = insertOrReplaceAnalysisItem(existingSection, analysisBlock, templateId);
-	const contentWithoutSection = `${content.slice(0, startIndex)}${content.slice(endIndex + TRANSCRIPT_ANALYSIS_END.length)}`;
-	return insertAnalysisSection(contentWithoutSection, updatedSection, insertBeforeHeading);
+	if (technicalBlock && copyLanguage) {
+		nextContent = insertOrReplaceTranscriptTechnicalItem(nextContent, technicalBlock, templateId, copyLanguage);
+	}
+	return nextContent;
 }
 
 function insertOrReplaceAnalysisItem(section: string, analysisBlock: string, templateId: AnalysisTemplateId): string {
@@ -226,14 +217,6 @@ function normalizeAnalysisMarkdownHeadings(markdown: string): string {
 			return `${headingMatch[1]}${"#".repeat(nextLevel)}${headingMatch[3]}`;
 		})
 		.join("\n");
-}
-
-function renderDataviewInlineField(key: string, value: string): string {
-	return `- [${key}:: ${formatDataviewInlineValue(value)}]`;
-}
-
-function formatDataviewInlineValue(value: string): string {
-	return value.replace(/\r?\n/g, " ").replace(/]/g, "\\]").trim();
 }
 
 function escapeRegExp(value: string): string {

@@ -81,7 +81,7 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 - Manually choose an enabled AI analysis template for the currently open transcript.
 - Automatically choose one or more AI analysis templates from source-note frontmatter, tags, or keywords found within three lines above or below the source audio link, with a configurable default template as fallback.
 - Configure each analysis template with a role group, name, version, recognition keywords, system prompt, and template task.
-- Record Dataview-friendly AI analysis metadata for each generated template result, including template id, template name, template version, provider, model, generated time, and trace id when available.
+- Record Dataview-friendly AI analysis metadata for each generated template result, including template id, template name, template version, provider, model, generated time, and trace id when available. New transcripts keep this technical information in a visible section at the end of the Markdown file so the transcript and AI analysis content stay readable first.
 - Track AI analysis lifecycle in transcript frontmatter with `analysis_status`, scheduled template ids, pending/done/failed template ids, provider, model, timestamps, and the latest sanitized analysis error.
 - Optionally initialize an Echo Memory workspace and extract evidence-backed candidate memories from a transcript plus the successful analyses included in that run.
 - Keep memory Provider, API key, Base URL, model, and long-text settings isolated from transcription and AI analysis configuration. Memory extraction is disabled by default.
@@ -365,7 +365,7 @@ To run analysis manually, open a `.transcript.md` file and run `Echo Notes: Anal
 
 Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different matched templates are appended inside the same AI analysis block.
 
-Each generated analysis result starts with Dataview inline fields prefixed with `echo_notes_analysis_`. These fields make template id, template name, template version, provider, model, generated time, and trace id queryable without parsing the generated Markdown body.
+For analysis written with the current format, the AI analysis block contains only the template heading and generated content. Dataview inline fields prefixed with `echo_notes_analysis_` and the generated-at, Provider, model, and Trace ID summary are written once at the end of the same `.transcript.md` file under a visible `Echo Notes Technical Info` section. These fields make template id, template name, template version, provider, model, generated time, and trace id queryable without parsing the generated Markdown body. Transcripts generated before this layout change keep their original structure.
 
 Transcript frontmatter also records the current AI analysis lifecycle. While analysis is running, `analysis_status` is `analysis_pending`; once all scheduled templates finish, it becomes `analysis_done`, `analysis_failed`, or `analysis_partial_failed`. The frontmatter keeps `analysis_template_ids`, `analysis_pending_template_ids`, `analysis_done_template_ids`, and `analysis_failed_template_ids` so Dataview can find transcripts that still need review or retry.
 
@@ -404,15 +404,6 @@ Source note: [[2026-06-05]]
 <!-- echo-notes-analysis-item:start work-minutes -->
 ## Work minutes
 
-- [echo_notes_analysis_template_id:: work-minutes]
-- [echo_notes_analysis_template_name:: Work minutes]
-- [echo_notes_analysis_template_version:: 1]
-- [echo_notes_analysis_provider:: aliyun-bailian]
-- [echo_notes_analysis_model:: deepseek-v4-pro]
-- [echo_notes_analysis_generated_at:: 2026-06-01T10:00:00.000Z]
-
-_Generated at: 2026-06-01T10:00:00.000Z; Provider: aliyun-bailian; Model: deepseek-v4-pro_
-
 ### Summary
 
 This is the generated analysis content.
@@ -422,6 +413,23 @@ This is the generated analysis content.
 # Transcribed manuscript Recording 20260531001942
 
 This is the full transcript text.
+
+<!-- echo-notes-transcript-technical:start -->
+# Echo Notes Technical Info
+
+<!-- echo-notes-technical-item:start work-minutes -->
+## Work minutes
+
+- [echo_notes_analysis_template_id:: work-minutes]
+- [echo_notes_analysis_template_name:: Work minutes]
+- [echo_notes_analysis_template_version:: 1]
+- [echo_notes_analysis_provider:: aliyun-bailian]
+- [echo_notes_analysis_model:: deepseek-v4-pro]
+- [echo_notes_analysis_generated_at:: 2026-06-01T10:00:00.000Z]
+
+_Generated at: 2026-06-01T10:00:00.000Z; Provider: aliyun-bailian; Model: deepseek-v4-pro_
+<!-- echo-notes-technical-item:end work-minutes -->
+<!-- echo-notes-transcript-technical:end -->
 ```
 
 Transcript frontmatter after AI analysis may include:

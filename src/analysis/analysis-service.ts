@@ -8,7 +8,7 @@ import {
 import {
 	extractTranscriptText,
 	insertOrReplaceTranscriptAnalysis,
-	renderTranscriptAnalysisBlock
+	renderTranscriptAnalysisWithTechnicalInfo
 } from "./analysis-output";
 import type { AnalysisResult } from "./analysis-provider";
 import type { AnalysisTextChunk } from "./analysis-chunking";
@@ -40,7 +40,7 @@ export class AnalysisService {
 	): Promise<void> {
 		const copy = getLocalizedCopy(copyLanguage);
 		const transcriptTitle = getTranscriptTitle(transcriptFile);
-		const analysisBlock = renderTranscriptAnalysisBlock({
+		const { analysisBlock, technicalBlock } = renderTranscriptAnalysisWithTechnicalInfo({
 			templateId: template.id,
 			templateName: template.name,
 			templateVersion: template.version ?? DEFAULT_ANALYSIS_TEMPLATE_VERSION,
@@ -54,7 +54,9 @@ export class AnalysisService {
 				analysisBlock,
 				template.id,
 				formatSectionHeading(copy.analysisLinksHeading, transcriptTitle),
-				[formatSectionHeading(copy.transcriptHeading, transcriptTitle), copy.transcriptHeading]
+				[formatSectionHeading(copy.transcriptHeading, transcriptTitle), copy.transcriptHeading],
+				technicalBlock,
+				copyLanguage
 			)
 		);
 	}

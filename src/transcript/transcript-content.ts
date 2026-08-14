@@ -1,5 +1,7 @@
 export const TRANSCRIPT_MANAGED_START = "<!-- echo-notes-transcript:start -->";
 export const TRANSCRIPT_MANAGED_END = "<!-- echo-notes-transcript:end -->";
+export const TRANSCRIPT_TECHNICAL_START = "<!-- echo-notes-transcript-technical:start -->";
+export const TRANSCRIPT_TECHNICAL_END = "<!-- echo-notes-transcript-technical:end -->";
 
 const MANAGED_FRONTMATTER_KEYS = new Set([
 	"type",

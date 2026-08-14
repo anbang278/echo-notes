@@ -3998,6 +3998,15 @@ export default class EchoNotesPlugin extends Plugin {
 				keyPresent: Boolean(this.getMemoryApiKey().trim()),
 				analysisTemplateCount: analysisTemplateIds?.length ?? 0
 			});
+			const memoryDiagnostics = diagnoseMemoryProviderSettings({
+				provider: this.settings.memoryProvider,
+				baseUrl: this.settings.memoryBaseUrl,
+				model: this.settings.memoryModel,
+				apiKey: this.getMemoryApiKey()
+			});
+			if (!memoryDiagnostics.canAttempt) {
+				throw new Error(memoryDiagnostics.errors.join("；"));
+			}
 			const result = await this.memoryService.extractFromTranscript(this.settings, transcriptFile, {
 				apiKey: this.getMemoryApiKey(),
 				analysisTemplateIds,

@@ -353,6 +353,8 @@ AI 纪要分析在转写稿创建或复用后自动触发；转写稿链接会�
 
 Echo Notes 会把 AI 纪要写入转写段落前面的受控区块。相同模板再次生成时会覆盖该模板已有结果，不会重复堆叠；不同模板会追加到同一个 AI 纪要分析区块中。
 
+新格式写入的 AI 纪要区块只保留模板标题和模型生成内容；`echo_notes_analysis_` 前缀的 Dataview 内联字段以及生成时间、服务商、模型、Trace ID 摘要会统一写到同一个 `.transcript.md` 文件末尾可见的 `Echo Notes 技术信息` 区块。这些字段不需要解析正文即可用于 Dataview 查询。本次结构调整之前生成的转写稿保持原样。
+
 frontmatter 模板选择对整篇来源笔记生效，优先级高于 tags 和邻近关键字。tags 对整篇来源笔记生效，优先级高于邻近关键字。关键字只匹配来源笔记中录音链接上下三行，不匹配转写稿正文。若同一上下文命中多个模板，会按设置页中的模板顺序使用第一个已启用模板。
 
 ## 输出示例
@@ -388,8 +390,6 @@ Recording 20260531001942/Recording 20260531001942.transcript.md
 <!-- echo-notes-analysis-item:start work-minutes -->
 ## 工作纪要
 
-_生成时间：2026-06-01T10:00:00.000Z；Provider：aliyun-bailian；模型：deepseek-v4-pro_
-
 ### 摘要
 
 这里是模型生成的纪要内容。
@@ -399,6 +399,23 @@ _生成时间：2026-06-01T10:00:00.000Z；Provider：aliyun-bailian；模型：
 # 转写稿 Recording 20260531001942
 
 这里是完整转写文本。
+
+<!-- echo-notes-transcript-technical:start -->
+# Echo Notes 技术信息
+
+<!-- echo-notes-technical-item:start work-minutes -->
+## 工作纪要
+
+- [echo_notes_analysis_template_id:: work-minutes]
+- [echo_notes_analysis_template_name:: 工作纪要]
+- [echo_notes_analysis_template_version:: 1]
+- [echo_notes_analysis_provider:: aliyun-bailian]
+- [echo_notes_analysis_model:: deepseek-v4-pro]
+- [echo_notes_analysis_generated_at:: 2026-06-01T10:00:00.000Z]
+
+_生成时间：2026-06-01T10:00:00.000Z；服务商：aliyun-bailian；模型：deepseek-v4-pro_
+<!-- echo-notes-technical-item:end work-minutes -->
+<!-- echo-notes-transcript-technical:end -->
 ```
 
 ## 自动化
