@@ -91,6 +91,12 @@ export function formatTaskDetailsForClipboard(task: EchoNotesTask): string {
 export function getTaskFailureGuidance(kind: EchoNotesTaskKind, error: string): TaskFailureGuidance {
 	const normalized = error.toLocaleLowerCase();
 	if (normalized.includes("api key") || normalized.includes("apikey") || error.includes("密钥") || error.includes("API Key")) {
+		if (kind === "memory") {
+			return {
+				causedBy: "记忆提取阶段没有可用的独立 API Key，AI 分析的 API Key 不能复用。",
+				nextStep: "打开 Echo Notes 设置的记忆提取配置，保存对应 API Key 后重试。"
+			};
+		}
 		return {
 			causedBy: "当前阶段没有可用的服务商密钥，或密钥未被 Obsidian SecretStorage 读取。",
 			nextStep: `打开 Echo Notes 设置的${getKindLabel(kind)}配置，保存对应 API Key 后重试。`
