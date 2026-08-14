@@ -1697,6 +1697,7 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 		const guideRect = guideEl?.getBoundingClientRect();
 		const workflowRect = workflowEl?.getBoundingClientRect();
 		const initialPanelRect = initialPanelEl?.getBoundingClientRect();
+		const rowStyle = getComputedStyle(settingEl);
 		const initial = {
 			introCount: settingEl.querySelectorAll(".echo-notes-settings-intro").length,
 			workflowCount: settingEl.querySelectorAll(".echo-notes-settings-workflow").length,
@@ -1712,6 +1713,10 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 			hostClass: hostEl?.classList.contains("echo-notes-settings-definition-host") ?? false,
 			hostClassNotOnRow: !settingEl.classList.contains("echo-notes-settings-definition-host"),
 			rowDisplay: getComputedStyle(settingEl).display,
+			rowBackgroundColor: rowStyle.backgroundColor,
+			rowBackgroundImage: rowStyle.backgroundImage,
+			rowBorderRadius: rowStyle.borderRadius,
+			rowBoxShadow: rowStyle.boxShadow,
 			verticalFlow: Boolean(
 				introRect &&
 				guideRect &&
@@ -1801,6 +1806,13 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 	assert(result.initial.hostClass, "声明式入口缺少独立内容宿主样式类");
 	assert(result.initial.hostClassNotOnRow, "声明式内容宿主不得与 Obsidian 框架行共用同一节点");
 	assert(result.initial.rowDisplay === "block", `声明式框架行应为块级布局，实际为 ${result.initial.rowDisplay}`);
+	assert(
+		result.initial.rowBackgroundColor === "rgba(0, 0, 0, 0)" || result.initial.rowBackgroundColor === "transparent",
+		`声明式框架行背景应透明，实际为 ${result.initial.rowBackgroundColor}`
+	);
+	assert(result.initial.rowBackgroundImage === "none", `声明式框架行不应有背景图片，实际为 ${result.initial.rowBackgroundImage}`);
+	assert(result.initial.rowBorderRadius === "0px", `声明式框架行不应有圆角，实际为 ${result.initial.rowBorderRadius}`);
+	assert(result.initial.rowBoxShadow === "none", `声明式框架行不应有阴影，实际为 ${result.initial.rowBoxShadow}`);
 	assert(result.initial.verticalFlow, "声明式入口的引导区、指引、工作流和面板应纵向排列");
 	assert(result.initial.panelFillsHost, "声明式入口的活动面板应填满内容宿主宽度");
 	assert(result.analysisSelectedBeforeRefresh, "声明式入口应支持阶段切换");
