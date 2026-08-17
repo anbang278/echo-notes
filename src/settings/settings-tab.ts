@@ -354,9 +354,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		headingEl.id = headingId;
 		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
 		conceptEl.createSpan({
-			text: newcomer
-				? "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
-				: `${guide.progress.resolvedChapters}/${guide.progress.totalChapters} 个新人阶段已处理；按下方工作流补齐或调整当前配置。 `
+			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
 		});
 		const readmeLinkEl = conceptEl.createEl("a", {
 			cls: "echo-notes-settings-intro-link echo-notes-settings-intro-inline-action",
