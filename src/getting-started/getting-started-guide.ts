@@ -80,12 +80,13 @@ export interface GettingStartedGuideActions {
 	openFirstTranscript(): Promise<void>;
 	openShortcutTranscript(): Promise<void>;
 	openMemoryCandidate(): Promise<void>;
+	openMemoryInbox(): Promise<void>;
 }
 
 const CHAPTER_DEFINITIONS = [
 	{ id: "first", label: "第一次转写" },
 	{ id: "shortcut", label: "快捷转写与分析" },
-	{ id: "memory", label: "记忆沉淀" }
+	{ id: "memory", label: "记忆准入" }
 ] as const;
 
 const HOTKEY_LABELS: Record<GettingStartedHotkeyId, string> = {
@@ -239,7 +240,7 @@ export class GettingStartedGuide {
 
 		bodyEl.createDiv({
 			cls: "echo-notes-getting-started-guide-copy",
-			text: "按由易到难的三个任务完成首次转写、快捷转写与分析，再沉淀第一份候选记忆。API Key 仅保存在 Obsidian SecretStorage。"
+			text: "按由易到难的三个任务完成首次转写、快捷转写与分析，再提取并审核第一份记忆。API Key 仅保存在 Obsidian SecretStorage。"
 		});
 		if (snapshot.state.activeReview) {
 			bodyEl.createDiv({
@@ -257,6 +258,14 @@ export class GettingStartedGuide {
 
 		const detailEl = bodyEl.createDiv({ cls: "echo-notes-getting-started-guide-detail" });
 		this.contentEl = detailEl;
+		if (
+			!snapshot.state.activeReview &&
+			activeChapter &&
+			snapshot.progress.chapterOutcomes[activeChapter] !== "pending"
+		) {
+			this.renderResolvedChapter(snapshot, activeChapter);
+			return;
+		}
 		if (this.selectedChapter !== activeChapter && this.selectedChapter) {
 			this.renderResolvedChapter(snapshot, this.selectedChapter);
 			return;
@@ -316,10 +325,16 @@ export class GettingStartedGuide {
 
 	private renderMobileMessage(): void {
 		this.renderStepIntro(
-			"monitor",
-			"请在桌面端完成首次体验",
-			"移动端不会修改新人进度。请在桌面端打开同一 Vault，再运行 Echo Notes 的新人指引。"
+			"smartphone",
+			"移动端可以先配置离线转写",
+			"移动端不会修改新人进度，但可以配置离线转写、查看任务与既有产物。首次录音、快捷键和完整新人指引仍需在桌面端完成。"
 		);
+		new Setting(this.contentEl)
+			.setClass("echo-notes-getting-started-actions")
+			.addButton((button) => button
+				.setCta()
+				.setButtonText("配置离线转写")
+				.onClick(() => this.runExternal(() => this.actions.openTranscriptionSettings())));
 	}
 
 	private renderChapterNavigation(
@@ -774,7 +789,7 @@ export class GettingStartedGuide {
 					.onClick(() => this.runExternal(() => this.actions.openShortcutTranscript())))
 				.addButton((button) => button
 					.setCta()
-					.setButtonText("进入记忆沉淀")
+					.setButtonText("进入记忆准入")
 					.onClick(async () => {
 						await this.actions.acknowledgeShortcutChapter();
 						this.render();
@@ -799,26 +814,29 @@ export class GettingStartedGuide {
 	private renderMemoryStep(snapshot: GettingStartedGuideSnapshot): void {
 		this.renderStepIntro(
 			"brain",
-			"任务三：沉淀第一份候选记忆",
-			"Echo Memory 会从转写稿和成功分析中提取带原文证据的候选记忆，供你后续审核。"
+			"任务三：提取并审核第一份记忆",
+			"AI 从转写稿和成功分析中提议候选记忆，你来批准、拒绝或设为核心。AI 只提建议，你决定哪条成为长期记忆。"
 		);
+		this.renderMemoryChecklist(snapshot);
 		if (!snapshot.memoryInitialized) {
-			this.renderStatus("Echo Memory 尚未初始化", false);
+			this.renderStatus("第 1 步：初始化记忆库", false);
+			this.renderMemoryWhyNote("初始化会在 Vault 内创建会议、候选、审核、画像和系统目录，是后续审核与准入的基础。");
 			new Setting(this.contentEl)
 				.setClass("echo-notes-getting-started-actions")
 				.addButton((button) => button
 					.setCta()
-					.setButtonText("初始化 Echo Memory")
+					.setButtonText("初始化记忆库")
 					.onClick(() => this.runExternal(() => this.actions.initializeMemory())));
 			return;
 		}
 		if (!snapshot.readiness.memoryReady) {
-			this.renderStatus("还需要配置独立的记忆服务商和 API Key", false);
+			this.renderStatus("第 2 步：配置独立的记忆服务商与 API Key", false);
+			this.renderMemoryWhyNote("记忆提取使用独立服务商和 API Key，不复用转写或 AI 分析阶段的配置。");
 			new Setting(this.contentEl)
 				.setClass("echo-notes-getting-started-actions")
 				.addButton((button) => button
 					.setCta()
-					.setButtonText("配置记忆模型")
+					.setButtonText("配置模型连接")
 					.onClick(() => this.runExternal(() => this.actions.openMemorySettings())));
 			return;
 		}
@@ -832,7 +850,8 @@ export class GettingStartedGuide {
 			return;
 		}
 		if (!snapshot.memorySourceAvailable) {
-			this.renderStatus("请选择一份 Echo Notes 转写稿作为记忆来源", false);
+			this.renderStatus("第 3 步：选择一份 Echo Notes 转写稿", false);
+			this.renderMemoryWhyNote("记忆来源于转写稿和本批成功纪要，需要先有一份可用的转写稿。");
 			new Setting(this.contentEl)
 				.setClass("echo-notes-getting-started-actions")
 				.addButton((button) => button
@@ -847,7 +866,8 @@ export class GettingStartedGuide {
 				text: snapshot.memorySourcePath
 			});
 		}
-		this.renderStatus("记忆工作区和模型配置已就绪", true);
+		this.renderStatus("第 4 步：提取候选记忆", true);
+		this.renderMemoryPrivacyNote();
 		new Setting(this.contentEl)
 			.setClass("echo-notes-getting-started-actions")
 			.addButton((button) => button
@@ -855,11 +875,64 @@ export class GettingStartedGuide {
 				.onClick(() => this.runExternal(() => this.actions.selectMemoryTranscript())))
 			.addButton((button) => button
 				.setCta()
-				.setButtonText("沉淀第一份记忆")
+				.setButtonText("提取候选记忆")
 				.onClick(async () => {
 					await this.actions.startMemory();
 					this.render();
 				}));
+	}
+
+	private renderMemoryChecklist(snapshot: GettingStartedGuideSnapshot): void {
+		const candidatePath = snapshot.state.chapters.memory.latestReviewCandidatePath ??
+			snapshot.state.memoryCandidatePath;
+		const stage = getGettingStartedPracticeStage(snapshot.state);
+		const running = stage === "memory-running" || snapshot.task?.kind === "memory";
+		const items: Array<{ label: string; state: "done" | "current" | "pending" }> = [
+			{ label: "初始化记忆库", state: snapshot.memoryInitialized ? "done" : "current" },
+			{
+				label: "配置模型连接",
+				state: snapshot.readiness.memoryReady ? "done" : snapshot.memoryInitialized ? "current" : "pending"
+			},
+			{
+				label: "选择转写稿",
+				state: snapshot.memorySourceAvailable ? "done" : snapshot.readiness.memoryReady ? "current" : "pending"
+			},
+			{
+				label: "提取候选记忆",
+				state: candidatePath ? "done" : running ? "current" : "pending"
+			},
+			{
+				label: "审核与准入",
+				state: candidatePath ? "current" : "pending"
+			}
+		];
+		const listEl = this.contentEl.createDiv({ cls: "echo-notes-getting-started-memory-checklist" });
+		for (const [index, item] of items.entries()) {
+			const itemEl = listEl.createDiv({
+				cls: `echo-notes-getting-started-memory-checklist-item${item.state === "done" ? " is-done" : item.state === "current" ? " is-current" : ""}`
+			});
+			const iconEl = itemEl.createSpan({ cls: "echo-notes-getting-started-memory-checklist-icon" });
+			iconEl.setAttribute("aria-hidden", "true");
+			setIcon(iconEl, item.state === "done" ? "circle-check" : item.state === "current" ? "circle-dot" : "circle");
+			itemEl.createSpan({
+				cls: "echo-notes-getting-started-memory-checklist-copy",
+				text: `${index + 1}. ${item.label}`
+			});
+		}
+	}
+
+	private renderMemoryWhyNote(text: string): void {
+		this.contentEl.createDiv({
+			cls: "echo-notes-getting-started-memory-why",
+			text
+		});
+	}
+
+	private renderMemoryPrivacyNote(): void {
+		this.contentEl.createDiv({
+			cls: "echo-notes-getting-started-memory-privacy",
+			text: "提取会把转写正文和本批成功纪要发送到独立的记忆服务商；长文本会分块多次调用并可能产生费用。API Key 仅保存在 Obsidian SecretStorage。"
+		});
 	}
 
 	private renderTaskFailure(snapshot: GettingStartedGuideSnapshot, retryLabel: string): void {
@@ -904,6 +977,7 @@ export class GettingStartedGuide {
 		}
 		if (candidatePath) {
 			actions.push(["打开候选记忆", () => this.actions.openMemoryCandidate()]);
+			actions.push(["继续审核", () => this.actions.openMemoryInbox()]);
 		}
 		this.renderArtifactActions(actions);
 		this.renderRelearnAction("memory");
@@ -912,8 +986,8 @@ export class GettingStartedGuide {
 	private renderMemoryChapterResult(snapshot: GettingStartedGuideSnapshot): void {
 		this.renderStepIntro(
 			"brain",
-			"记忆沉淀已完成",
-			"第一份候选记忆已经生成并保留，可在 Echo Memory 中继续审核。"
+			"候选记忆已生成，下一步审核",
+			"打开收件箱，批准值得长期保留的记忆，拒绝不相关的候选，或把最重要的设为核心。"
 		);
 		const candidatePath = snapshot.state.chapters.memory.latestReviewCandidatePath ??
 			snapshot.state.memoryCandidatePath;
@@ -922,7 +996,10 @@ export class GettingStartedGuide {
 				cls: "echo-notes-getting-started-artifact-path",
 				text: candidatePath
 			});
-			this.renderArtifactActions([["打开候选记忆", () => this.actions.openMemoryCandidate()]]);
+			this.renderArtifactActions([
+				["继续审核", () => this.actions.openMemoryInbox()],
+				["打开候选记忆", () => this.actions.openMemoryCandidate()]
+			]);
 		}
 		this.renderRelearnAction("memory");
 	}

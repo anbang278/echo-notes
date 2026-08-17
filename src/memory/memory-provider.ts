@@ -221,22 +221,31 @@ export function diagnoseMemoryProviderSettings(
 function buildMemorySystemPrompt(language: CopyLanguage): string {
 	const outputLanguage = language === "en" ? "English" : "简体中文";
 	return [
-		"你是 Echo Memory 的证据型记忆提取器。",
-		"只提取输入中明确出现、未来可能复用的稳定事实、关系、原则、偏好、目标、经验、挑战与项目状态。",
+		"你是 Echo Memory 的准入型个人记忆提取器。",
+		"你的任务不是总结文本，也不是提取所有事实，而是只提取未来 Personal Agent 如果不知道，就可能误解用户、重复用户已有经验、违背用户稳定偏好、忘记重要决策及其理由、丢失项目长期连续性、或无法理解用户观点、目标或判断变化的信息。",
+		"对每条候选先回答反事实问题：如果半年后的 Personal Agent 不知道这件事，会损失什么？如果几乎没有损失，就不要提取为长期记忆。",
+		"以下内容通常不应进入长期记忆：临时日程、一次性操作、通用知识、公共事实、重复信息、没有个人关联的信息、未经明确表达的推断、快速过期的短期状态、纯会议过程信息。",
+		"人物、项目、组织、用户和系统本身不是记忆；要提取的是关于它们的持久关系、决策、偏好、信念、经验或目标。",
 		"不得补充外部知识，不得推断敏感属性，不得把建议、假设或闲聊改写成既定事实。",
 		"每条断言必须附一段可在输入中逐字定位的短证据；无法定位证据就不要输出。",
 		"evidenceQuote 只能逐字复制 <echo-memory-source> 标签内部的文本；不得引用初始化用户、来源路径、分块编号或标签外的任何运行元数据。",
 		"user 指初始化用户本人；person、organization、project 分别指人物、组织与项目。",
 		"category 只能使用 mission-goal、decision-principle、mental-model、lesson、idea-challenge、writing-collaboration、background、privacy-boundary、relationship、responsibility、status、other。",
+		"memoryType 只能使用 fact、decision、preference、belief、experience、goal；分别表示长期事实、已做决策、稳定偏好、长期信念或原则、可复用经验、持续目标。",
+		"proposedTier 只能使用 working、long_term 或 core_candidate；阶段性有效但短期会失效的信息用 working，跨时间仍值得未来 Agent 知道的信息用 long_term，只有明确可能属于少量、长期稳定的核心原则时才用 core_candidate，且永远不要直接产出 core。",
+		"whyRemember 用一句用户可理解的话说明为什么这条值得成为记忆；要简短，不要写推理过程；无法判断时可以省略，但尽量提供。",
+		"只有原文明确给出时间范围时，才在断言中添加 temporal 对象：{\"validFrom\":\"可选日期\",\"validUntil\":\"可选日期\",\"scope\":\"point|ongoing|interval|unknown\"}；字段都可以省略，没有证据就整个省略 temporal，禁止编造或猜测日期。",
 		"confidence 是 0 到 1 的数字；有明确原话或直接事实才可达到 0.75。",
-		`subjectName、predicate 和 value 使用${outputLanguage}。`,
+		`subjectName、predicate、value 和 whyRemember 使用${outputLanguage}。`,
 		"只返回 JSON 对象，不要 Markdown，不要解释。格式：",
-		'{"assertions":[{"subjectType":"user|person|organization|project","subjectName":"主体规范名称","category":"枚举值","predicate":"关系或属性","value":"原文支持的内容","confidence":0.0,"evidenceQuote":"输入中的逐字短引文"}]}'
+		'{"assertions":[{"subjectType":"user|person|organization|project","subjectName":"主体规范名称","category":"枚举值","memoryType":"fact|decision|preference|belief|experience|goal","proposedTier":"working|long_term|core_candidate","predicate":"关系或属性","value":"原文支持的内容","confidence":0.0,"evidenceQuote":"输入中的逐字短引文","whyRemember":"一句可理解的准入理由"}]}'
 	].join("\n");
 }
 
 function buildMemoryUserPrompt(input: MemoryProviderInput): string {
 	return [
+		"请只提取未来仍值得想起的个人记忆，忽略临时信息与通用知识。",
+		"",
 		"以下运行元数据仅用于主体映射和来源追踪，不属于证据，不得作为 evidenceQuote：",
 		"<echo-memory-metadata>",
 		`初始化用户：${input.userDisplayName}`,

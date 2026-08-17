@@ -47,12 +47,12 @@
 3. `TranscriptService` 只替换受托管 transcript 区块，保留自定义 frontmatter、人工正文和分析结果。
 4. AI 分析读取最终 transcript，按需分块；每块成功后通过 `vault.process` 合并检查点，失败或重启时只复用严格匹配的连续前缀，最终汇总成功写回托管区块后清理该模板检查点。
 5. Echo Memory 读取 transcript 与本次选中的成功分析，按需分块提取；每块成功后通过 `vault.process` 合并共享检查点，只复用身份、连续序号、边界、文本指纹、Provider、模型和证据定位全部匹配的前缀。
-6. 完整分块结果生成证据型候选包、默认待审核的 sidecar、清单记录和会议页；可选画像编译完成后只删除当前 transcript 的检查点条目，清理失败仅记日志，不逆转成功状态。
+6. 完整分块结果生成 Schema v2 的证据型候选包（六种记忆类型、working/long-term 时效、可选准入理由与时间范围）、默认待审核的 sidecar、清单记录和会议页；可选画像编译完成后只删除当前 transcript 的检查点条目，清理失败仅记日志，不逆转成功状态。
 7. 用户在 Obsidian Modal 中批准、修正、拒绝或重置候选断言，审核 sidecar 只替换 `echo-memory-review:managed` 区块。
 8. 用户可在另一 Modal 中为同主体、不同候选的已批准断言确认或撤销冲突、补充、替代与作废关系；关系通过 `vault.process` 写入独立 JSON，不修改候选或审核 sidecar。
 9. 编译只消费已批准断言和仍匹配当前生效值的关系；替代/作废排除目标，冲突/补充保留两端并显示关系 ID 与回链。审核值变化使旧关系安全失效，撤销后重建恢复目标。
-10. 同一编译计划写入主体画像和项目、人物、时间线三份跨记录视图；聚合只遍历候选目录，按观察时间稳定排序，并分别替换 `echo-memory:managed` 与 `echo-memory-aggregation:managed` 区块。首页聚合导航也使用独立托管区块。
-11. `create-personal-agent-context-package` 读取同一份当前生效记忆集合，在本地 Modal 中预览项目/人物/日期过滤和字符预算；确认后只替换 `echo-memory-context:managed` 区块并打开 `06 上下文包` 文件，不发起外部请求。
+10. 同一编译计划只把长期断言（或缺少时效的 legacy 断言）写入主体画像，工作记忆保留在项目、人物、时间线三份跨记录视图；聚合只遍历候选目录，按观察时间稳定排序，并分别替换 `echo-memory:managed` 与 `echo-memory-aggregation:managed` 区块。首页聚合导航也使用独立托管区块。
+11. `create-personal-agent-context-package` 读取同一份当前生效记忆集合，在本地 Modal 中预览项目/人物/日期、记忆类型、时效过滤和字符预算；确认后只替换 `echo-memory-context:managed` 区块并打开 `06 上下文包` 文件，不发起外部请求。
 
 ## 已知架构债
 

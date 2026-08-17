@@ -3,7 +3,12 @@ import {
 	MEMORY_RELATION_TYPE_LABELS,
 	type MemoryRelationAnnotation
 } from "./memory-relation";
-import type { MemoryAssertion, MemoryPaths } from "./memory-types";
+import {
+	formatProposedTier,
+	formatMemoryType,
+	type MemoryAssertion,
+	type MemoryPaths
+} from "./memory-types";
 
 export const MEMORY_AGGREGATION_MANAGED_START = "<!-- echo-memory-aggregation:managed:start -->";
 export const MEMORY_AGGREGATION_MANAGED_END = "<!-- echo-memory-aggregation:managed:end -->";
@@ -197,12 +202,25 @@ function renderEntry(
 	const observed = escapeMarkdownInline(assertion.observedAt);
 	const evidenceLabel = language === "en" ? "Evidence" : "证据";
 	const sourceLabel = language === "en" ? "Sources" : "来源";
-	return [
+	const typeLabel = language === "en" ? "Type" : "类型";
+	const horizonLabel = language === "en" ? "Horizon" : "时效";
+	const admissionLabel = language === "en" ? "Why remember" : "准入理由";
+	const temporalLabel = language === "en" ? "Valid" : "时间范围";
+	const lines = [
 		`- ${observed} · **${subject}${escapeMarkdownInline(assertion.predicate)}**：${escapeMarkdownInline(assertion.value)}`,
+		`  - ${typeLabel}：${formatMemoryType(assertion.memoryType, language)} · ${horizonLabel}：${formatProposedTier(assertion.proposedTier, language)}`,
 		`  - ${evidenceLabel}：“${escapeMarkdownInline(assertion.evidenceQuote)}”`,
-		`  - ${sourceLabel}：[[${assertion.sourcePath}|transcript]] · [[${entry.candidatePath}|${entry.candidateId}]] · [[${entry.reviewPath}|review]]`,
-		...entry.relationAnnotations.map((annotation) => renderRelationAnnotation(annotation, language))
 	];
+	if (assertion.whyRemember) {
+		lines.push(`  - ${admissionLabel}：${escapeMarkdownInline(assertion.whyRemember)}`);
+	}
+	const temporalText = formatTemporalText(assertion.temporal, language);
+	if (temporalText) {
+		lines.push(`  - ${temporalLabel}：${temporalText}`);
+	}
+	lines.push(`  - ${sourceLabel}：[[${assertion.sourcePath}|transcript]] · [[${entry.candidatePath}|${entry.candidateId}]] · [[${entry.reviewPath}|review]]`);
+	lines.push(...entry.relationAnnotations.map((annotation) => renderRelationAnnotation(annotation, language)));
+	return lines;
 }
 
 function renderRelationAnnotation(annotation: MemoryRelationAnnotation, language: "zh" | "en"): string {
@@ -248,6 +266,20 @@ function getObservedDate(value: string, language: "zh" | "en"): string {
 
 function escapeMarkdownInline(value: string): string {
 	return value.replace(/\r?\n/g, " ").replace(/([\\`*_[\]<>])/g, "\\$1").trim();
+}
+
+function formatTemporalText(temporal: MemoryAssertion["temporal"], language: "zh" | "en"): string {
+	if (!temporal) {
+		return "";
+	}
+	const parts: string[] = [];
+	if (temporal.validFrom) {
+		parts.push(`${language === "en" ? "from" : "从"} ${temporal.validFrom}`);
+	}
+	if (temporal.validUntil) {
+		parts.push(`${language === "en" ? "to" : "至"} ${temporal.validUntil}`);
+	}
+	return parts.join(" ");
 }
 
 function normalizeDisplayName(value: string): string {

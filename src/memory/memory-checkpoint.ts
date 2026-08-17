@@ -6,11 +6,17 @@ import {
 	type MemoryUserProfile,
 	type RawMemoryAssertion
 } from "./memory-types";
-import { createStableFingerprint, parseMemoryExtractionResponse } from "./memory-output";
+import {
+	createStableFingerprint,
+	isProposedTier,
+	isMemoryTemporal,
+	isMemoryType,
+	parseMemoryExtractionResponse
+} from "./memory-output";
 
 export const MEMORY_EXTRACTION_CHECKPOINT_SCHEMA_VERSION = 1;
 export const MEMORY_EXTRACTION_CHUNKING_VERSION = 1;
-export const MEMORY_EXTRACTION_PIPELINE_VERSION = 1;
+export const MEMORY_EXTRACTION_PIPELINE_VERSION = 2;
 export const MEMORY_EXTRACTION_CHECKPOINT_MAX_CHUNKS = 20;
 export const MEMORY_EXTRACTION_CHECKPOINT_MAX_ENTRIES = 100;
 export const MEMORY_EXTRACTION_CHECKPOINT_RESULT_MAX_CHARACTERS = 24_000;
@@ -419,7 +425,12 @@ function isRawMemoryAssertion(value: unknown): value is RawMemoryAssertion {
 		typeof value.value === "string" && Boolean(value.value.trim()) &&
 		typeof value.confidence === "number" && Number.isFinite(value.confidence) &&
 		value.confidence >= 0 && value.confidence <= 1 &&
-		typeof value.evidenceQuote === "string" && Boolean(value.evidenceQuote.trim());
+		typeof value.evidenceQuote === "string" && Boolean(value.evidenceQuote.trim()) &&
+		(value.memoryType === undefined || isMemoryType(value.memoryType)) &&
+		(value.proposedTier === undefined || isProposedTier(value.proposedTier)) &&
+		(value.temporal === undefined || isMemoryTemporal(value.temporal)) &&
+		(value.whyRemember === undefined ||
+			(typeof value.whyRemember === "string" && Boolean(value.whyRemember.trim())));
 }
 
 function isPositiveInteger(value: unknown): value is number {

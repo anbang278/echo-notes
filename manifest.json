@@ -1,7 +1,7 @@
 {
 	"id": "echo-notes",
 	"name": "Echo Notes",
-	"version": "0.4.19",
+	"version": "0.4.20",
 	"minAppVersion": "1.11.4",
 	"description": "Transcribe audio into Markdown and generate configurable AI meeting notes and analysis.",
 	"author": "anbang278",

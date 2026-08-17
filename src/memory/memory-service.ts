@@ -27,6 +27,7 @@ import {
 } from "./memory-context";
 import {
 	MEMORY_EXTRACTION_CHECKPOINT_MAX_CHUNKS,
+	MEMORY_EXTRACTION_PIPELINE_VERSION,
 	assertMemoryExtractionCheckpointCapacity,
 	createMemoryExtractionCheckpoint,
 	createMemoryExtractionCheckpointIdentity,
@@ -80,11 +81,18 @@ import {
 	sanitizeMemoryFileName
 } from "./memory-output";
 import {
-	MEMORY_SCHEMA_VERSION,
+	MEMORY_CANDIDATE_SCHEMA_VERSION,
 	MEMORY_EXTRACTION_PROMPT_VERSION,
+	MEMORY_MANIFEST_SCHEMA_VERSION,
+	formatMemoryAuthority,
+	formatMemoryTier,
+	formatMemoryValidity,
+	formatMemoryType,
+	isLongTermMemory,
 	type EchoMemoryManifest,
 	type MemoryAssertion,
 	type MemoryCandidatePackage,
+	type MemoryAdmissionResult,
 	type MemoryExtractionResult,
 	type MemoryPaths,
 	type MemoryReviewPackage,
@@ -127,6 +135,13 @@ import {
 	type MemoryRelationStore,
 	type MemoryRelationType
 } from "./memory-relation";
+import {
+	evaluateMemoryAdmission
+} from "./admission/memory-admission";
+import {
+	suggestMemoryRelations,
+	type MemoryRelationSuggestion
+} from "./relations/memory-relation-suggestion";
 
 export interface ExtractMemoryOptions {
 	apiKey: string;
@@ -148,6 +163,7 @@ interface CandidateAssertionWithOrigin {
 	reviewPath: string;
 	endpoint: MemoryRelationEndpoint;
 	relationAnnotations: MemoryRelationAnnotation[];
+	review: MemoryReviewPackage["reviews"][string];
 }
 
 interface CandidatePackageWithReview {
@@ -200,6 +216,28 @@ export interface MemoryContextPackageContext {
 export interface MemoryContextPackageSaveResult {
 	path: string;
 	preview: MemoryContextPackagePreview;
+}
+
+export interface MemoryInboxItem {
+	candidatePath: string;
+	reviewPath: string;
+	candidate: MemoryCandidatePackage;
+	assertion: MemoryAssertion;
+	review: MemoryReviewPackage["reviews"][string];
+	admission: MemoryAdmissionResult;
+	relatedSuggestions: MemoryRelationSuggestion[];
+}
+
+export interface MemoryInboxContext {
+	language: "zh" | "en";
+	pending: MemoryInboxItem[];
+	counts: {
+		total: number;
+		coreCandidate: number;
+		longTermCandidate: number;
+		workingCandidate: number;
+		lowPriority: number;
+	};
 }
 
 export interface TranscriptionEnhancementDocuments {
@@ -275,7 +313,7 @@ export class MemoryService {
 
 		const now = new Date().toISOString();
 		const manifest: EchoMemoryManifest = {
-			schemaVersion: MEMORY_SCHEMA_VERSION,
+			schemaVersion: MEMORY_MANIFEST_SCHEMA_VERSION,
 			rootFolder: normalizeMemoryRoot(settings.memoryRootFolder),
 			language: settings.copyLanguage,
 			initializedAt: now,
@@ -319,8 +357,9 @@ export class MemoryService {
 			analysisCount: analyses.length
 		});
 		const fingerprint = createStableFingerprint(JSON.stringify({
-			schemaVersion: MEMORY_SCHEMA_VERSION,
+			schemaVersion: MEMORY_CANDIDATE_SCHEMA_VERSION,
 			promptVersion: MEMORY_EXTRACTION_PROMPT_VERSION,
+			pipelineVersion: MEMORY_EXTRACTION_PIPELINE_VERSION,
 			copyLanguage: settings.copyLanguage,
 			provider: settings.memoryProvider,
 			model: settings.memoryModel,
@@ -503,7 +542,7 @@ export class MemoryService {
 		}
 		const candidateId = `memory-${fingerprint.slice(0, 16)}`;
 		const candidate: MemoryCandidatePackage = {
-			schemaVersion: MEMORY_SCHEMA_VERSION,
+			schemaVersion: MEMORY_CANDIDATE_SCHEMA_VERSION,
 			id: candidateId,
 			fingerprint,
 			createdAt,
@@ -615,6 +654,65 @@ export class MemoryService {
 		return { candidatePath, reviewPath, candidate, review };
 	}
 
+	async getMemoryInboxContext(settings: EchoNotesSettings): Promise<MemoryInboxContext> {
+		const manifest = await this.readManifest(settings);
+		const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
+		const approvedEndpoints = this.createApprovedRelationEndpoints(packages);
+		const approvedAssertions = this.createApprovedAssertionList(packages);
+		const pending: MemoryInboxItem[] = [];
+
+		for (const item of packages) {
+			for (const assertion of item.candidate.assertions) {
+				const review = item.review.reviews[assertion.id];
+				if (!review || review.status !== "pending") {
+					continue;
+				}
+				const admission = evaluateMemoryAdmission({
+					assertion,
+					existingAssertions: approvedAssertions.filter((approved) => approved.id !== assertion.id)
+				});
+				const endpoint = createMemoryRelationEndpoint({
+					candidate: item.candidate,
+					candidatePath: item.path,
+					reviewPath: item.reviewPath,
+					assertion
+				});
+				const relatedSuggestions = suggestMemoryRelations(
+					endpoint,
+					approvedEndpoints.filter((approved) =>
+						getMemoryRelationEndpointKey(approved) !== getMemoryRelationEndpointKey(endpoint)
+					)
+				);
+				pending.push({
+					candidatePath: item.path,
+					reviewPath: item.reviewPath,
+					candidate: item.candidate,
+					assertion,
+					review,
+					admission,
+					relatedSuggestions
+				});
+			}
+		}
+
+		pending.sort((left, right) =>
+			right.admission.score - left.admission.score ||
+			left.assertion.observedAt.localeCompare(right.assertion.observedAt) ||
+			left.assertion.id.localeCompare(right.assertion.id)
+		);
+		return {
+			language: manifest.language,
+			pending,
+			counts: {
+				total: pending.length,
+				coreCandidate: pending.filter((item) => item.admission.recommendation === "core_candidate").length,
+				longTermCandidate: pending.filter((item) => item.admission.recommendation === "long_term_candidate").length,
+				workingCandidate: pending.filter((item) => item.admission.recommendation === "working_candidate").length,
+				lowPriority: pending.filter((item) => item.admission.recommendation === "low_priority").length
+			}
+		};
+	}
+
 	async saveMemoryReview(
 		settings: EchoNotesSettings,
 		candidatePath: string,
@@ -683,6 +781,26 @@ export class MemoryService {
 			approvedEndpoints,
 			relations
 		};
+	}
+
+	async getMemoryRelationSuggestions(
+		settings: EchoNotesSettings,
+		currentFile: TFile
+	): Promise<{ language: "zh" | "en"; suggestions: MemoryRelationSuggestion[] }> {
+		const manifest = await this.readManifest(settings);
+		const candidatePath = currentFile.path.toLocaleLowerCase().endsWith(".review.md")
+			? getCandidatePathFromReviewPath(currentFile.path)
+			: currentFile.path;
+		this.assertCandidatePath(manifest, candidatePath);
+		const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
+		if (!packages.some((item) => item.path === candidatePath)) {
+			throw new Error(`记忆候选包不存在：${candidatePath}`);
+		}
+		const approvedEndpoints = this.createApprovedRelationEndpoints(packages);
+		const currentApproved = approvedEndpoints.filter((endpoint) => endpoint.candidatePath === candidatePath);
+		const otherApproved = approvedEndpoints.filter((endpoint) => endpoint.candidatePath !== candidatePath);
+		const suggestions = currentApproved.flatMap((source) => suggestMemoryRelations(source, otherApproved));
+		return { language: manifest.language, suggestions };
 	}
 
 	async confirmMemoryRelation(
@@ -1059,7 +1177,7 @@ export class MemoryService {
 		} catch (error) {
 			throw new Error(`Echo Memory 初始化清单无法读取：${getErrorMessage(error)}`, { cause: error });
 		}
-		if (manifest.schemaVersion !== MEMORY_SCHEMA_VERSION || !manifest.paths || !manifest.user) {
+		if (manifest.schemaVersion !== MEMORY_MANIFEST_SCHEMA_VERSION || !manifest.paths || !manifest.user) {
 			throw new Error("Echo Memory 初始化清单版本不受支持或内容不完整。");
 		}
 		if (normalizeMemoryRoot(manifest.rootFolder) !== normalizeMemoryRoot(settings.memoryRootFolder)) {
@@ -1214,6 +1332,14 @@ export class MemoryService {
 					assertion
 				})
 			)
+		);
+	}
+
+	private createApprovedAssertionList(
+		packages: readonly CandidatePackageWithReview[]
+	): MemoryAssertion[] {
+		return packages.flatMap((item) =>
+			getApprovedMemoryAssertions(item.candidate, item.review, item.path).map(({ assertion }) => assertion)
 		);
 	}
 
@@ -1442,6 +1568,9 @@ export class MemoryService {
 
 		for (const origin of aggregationEntries) {
 			const { assertion } = origin;
+			if (!isLongTermMemory(assertion.proposedTier)) {
+				continue;
+			}
 			if (assertion.subjectType === "user") {
 				ensure(manifest.paths.soul, "SOUL").assertions.push(origin);
 				if (isUserProfileCategory(assertion.category)) {
@@ -1464,7 +1593,7 @@ export class MemoryService {
 		relationStore: MemoryRelationStore
 	): CandidateAssertionWithOrigin[] {
 		const approvedOrigins: CandidateAssertionWithOrigin[] = packages.flatMap((item) =>
-			getApprovedMemoryAssertions(item.candidate, item.review, item.path).map(({ assertion }) => ({
+			getApprovedMemoryAssertions(item.candidate, item.review, item.path).map(({ assertion, review }) => ({
 				assertion,
 				candidateId: item.candidate.id,
 				candidatePath: item.path,
@@ -1475,7 +1604,8 @@ export class MemoryService {
 					reviewPath: item.reviewPath,
 					assertion
 				}),
-				relationAnnotations: []
+				relationAnnotations: [],
+				review
 			}))
 		);
 		const relationResolution = resolveMemoryRelations(
@@ -1813,10 +1943,12 @@ function renderProfileManagedBlock(assertions: CandidateAssertionWithOrigin[]): 
 		left.assertion.id.localeCompare(right.assertion.id)
 	);
 	const lines = sorted.length > 0
-		? sorted.flatMap(({ assertion, candidateId, candidatePath, reviewPath, relationAnnotations }) => [
+		? sorted.flatMap(({ assertion, candidateId, candidatePath, reviewPath, relationAnnotations, review }) => [
 			`- **${escapeMarkdownInline(assertion.predicate)}**：${escapeMarkdownInline(assertion.value)}`,
-			`  - 主体：${escapeMarkdownInline(assertion.subjectName)} · 置信度：${assertion.confidence.toFixed(2)} · 观察时间：${assertion.observedAt}`,
+			`  - 主体：${escapeMarkdownInline(assertion.subjectName)} · 置信度：${assertion.confidence.toFixed(2)} · 观察时间：${assertion.observedAt} · ${formatMemoryType(review.effectiveType ?? assertion.memoryType)} · ${formatMemoryTier(review.effectiveTier ?? (assertion.proposedTier === "working" ? "working" : "long_term"))} · ${formatMemoryAuthority(review.authority)} · ${formatMemoryValidity(review.validity)}`,
 			`  - 证据：“${escapeMarkdownInline(assertion.evidenceQuote)}”`,
+			...(assertion.whyRemember ? [`  - 准入理由：${escapeMarkdownInline(assertion.whyRemember)}`] : []),
+			...(formatTemporalText(assertion.temporal) ? [`  - 时间范围：${formatTemporalText(assertion.temporal)}`] : []),
 			`  - 来源：[[${assertion.sourcePath}]] · [[${candidatePath}|${candidateId}]] · [[${reviewPath}|审核记录]]`,
 			...relationAnnotations.map(renderProfileRelationAnnotation)
 		])
@@ -1836,9 +1968,11 @@ function renderProfileRelationAnnotation(annotation: MemoryRelationAnnotation): 
 		? "与另一条已批准记忆存在冲突"
 		: annotation.type === "supplements"
 			? annotation.role === "source" ? "补充另一条已批准记忆" : "由另一条已批准记忆补充"
-			: annotation.type === "supersedes"
-				? "替代另一条已批准记忆"
-				: "确认另一条已批准记忆作废";
+			: annotation.type === "refines"
+				? annotation.role === "source" ? "细化另一条已批准记忆" : "由另一条已批准记忆细化"
+				: annotation.type === "supersedes"
+					? "替代另一条已批准记忆"
+					: "确认另一条已批准记忆作废";
 	return [
 		`  - 关系：${MEMORY_RELATION_TYPE_LABELS[annotation.type]}（${annotation.relationId}）· ${direction}`,
 		`    - 关联：${escapeMarkdownInline(counterpart.predicate)}：${escapeMarkdownInline(counterpart.effectiveValue)} · [[${counterpart.candidatePath}|候选包]] · [[${counterpart.reviewPath}|审核记录]]`
@@ -1889,6 +2023,20 @@ function serializeManifest(manifest: EchoMemoryManifest): string {
 
 function escapeMarkdownInline(value: string): string {
 	return value.replace(/\r?\n/g, " ").replace(/([\\`*_[\]<>])/g, "\\$1").trim();
+}
+
+function formatTemporalText(temporal: MemoryAssertion["temporal"]): string {
+	if (!temporal) {
+		return "";
+	}
+	const parts: string[] = [];
+	if (temporal.validFrom) {
+		parts.push(`从 ${temporal.validFrom}`);
+	}
+	if (temporal.validUntil) {
+		parts.push(`至 ${temporal.validUntil}`);
+	}
+	return parts.join(" ");
 }
 
 function throwIfMemoryTaskAborted(signal: AbortSignal | undefined): void {

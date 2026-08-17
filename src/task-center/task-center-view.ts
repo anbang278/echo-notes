@@ -197,10 +197,14 @@ export class EchoNotesTaskCenterView extends ItemView {
 		});
 
 		if (allTasks.length === 0) {
-			containerEl.createDiv({
-				cls: "echo-notes-task-center-empty",
-				text: "暂无任务。完成一次转写或分析后，任务会自动出现在这里。"
+			const emptyEl = containerEl.createDiv({ cls: "echo-notes-task-center-empty" });
+			emptyEl.createEl("p", { text: "暂无任务。完成一次转写或分析后，任务会自动出现在这里。" });
+			const guideButton = emptyEl.createEl("button", {
+				cls: "mod-cta",
+				text: "打开新人指引",
+				attr: { type: "button" }
 			});
+			guideButton.addEventListener("click", () => this.activateSection("guide", true));
 			return;
 		}
 

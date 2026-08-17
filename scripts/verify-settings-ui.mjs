@@ -96,6 +96,16 @@ body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:has(.echo-notes-task
 	width: 100% !important;
 	max-width: none !important;
 }
+
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal button.echo-notes-memory-center-tab,
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal button.echo-notes-memory-quick-link,
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal button.echo-notes-memory-tool,
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal .echo-notes-memory-inbox-bulk-button,
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal .echo-notes-memory-inbox-actions button,
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal .echo-notes-memory-inbox-empty button,
+body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal .echo-notes-memory-relation-suggestion-actions button {
+	min-height: 44px !important;
+}
 `;
 
 const VIEWPORTS = [
@@ -108,7 +118,7 @@ const THEMES = ["light", "dark"];
 const SCREENSHOT_STAGES = [
 	{ id: "transcription", section: "转写服务", providerSetting: "服务商" },
 	{ id: "analysis", section: "模型配置", providerSetting: "分析服务商" },
-	{ id: "memory", section: "模型配置", providerSetting: "记忆服务商" }
+	{ id: "memory", section: "提取设置", providerSetting: "记忆服务商" }
 ];
 
 function assert(condition, message) {
@@ -266,6 +276,8 @@ async function startMemoryProviderMock() {
 							subjectType: "user",
 							subjectName: "测试用户",
 							category: "background",
+							memoryType: "fact",
+							proposedTier: "long_term",
 							predicate: "身份为",
 							value: "本次会话的初始化用户",
 							confidence: 0.9,
@@ -275,6 +287,8 @@ async function startMemoryProviderMock() {
 							subjectType: "user",
 							subjectName: "测试用户",
 							category: "other",
+							memoryType: "experience",
+							proposedTier: "working",
 							predicate: `隔离分块 ${chunkIndex}`,
 							value: `已完成第 ${chunkIndex}/${totalChunks} 块验证`,
 							confidence: 0.9,
@@ -1040,7 +1054,7 @@ async function verifyGettingStarted(page) {
 	assert(semantics.labelledBy === semantics.titleId && Boolean(semantics.titleId), "新人边栏 ARIA 标题关系无效");
 	assert(semantics.copy?.includes("Obsidian SecretStorage"), "新人边栏缺少密钥存储说明");
 	assert(
-		JSON.stringify(semantics.steps) === JSON.stringify(["第一次转写", "快捷转写与分析", "记忆沉淀"]),
+		JSON.stringify(semantics.steps) === JSON.stringify(["第一次转写", "快捷转写与分析", "记忆准入"]),
 		"新人边栏三阶段标签不正确"
 	);
 	assert(semantics.expanded === "true", "未完成新人边栏首次打开时应展开");
@@ -1479,8 +1493,8 @@ async function verifyGettingStarted(page) {
 		await plugin.saveSettings();
 		plugin.notifyGettingStartedChanged();
 	}, PLUGIN_ID);
-	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
-	await guide.getByRole("button", { name: "配置记忆模型", exact: true }).click();
+	await guide.getByRole("heading", { name: "任务三：提取并审核第一份记忆", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("button", { name: "配置模型连接", exact: true }).click();
 	await inspectSettingsSpotlight(page, {
 		targetName: "memory-provider",
 		stepLabel: "1/2",
@@ -1491,9 +1505,9 @@ async function verifyGettingStarted(page) {
 	assert(await page.locator(".modal.mod-settings").isVisible(), "Spotlight 关闭按钮不应关闭设置窗口");
 	await page.evaluate(() => window.app.setting.close());
 	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
-	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("heading", { name: "任务三：提取并审核第一份记忆", exact: true }).waitFor({ state: "visible" });
 
-	await guide.getByRole("button", { name: "配置记忆模型", exact: true }).click();
+	await guide.getByRole("button", { name: "配置模型连接", exact: true }).click();
 	await inspectSettingsSpotlight(page, {
 		targetName: "memory-provider",
 		stepLabel: "1/2",
@@ -1501,9 +1515,9 @@ async function verifyGettingStarted(page) {
 	});
 	await page.evaluate(() => window.app.setting.close());
 	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
-	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("heading", { name: "任务三：提取并审核第一份记忆", exact: true }).waitFor({ state: "visible" });
 
-	await guide.getByRole("button", { name: "配置记忆模型", exact: true }).click();
+	await guide.getByRole("button", { name: "配置模型连接", exact: true }).click();
 	await inspectSettingsSpotlight(page, {
 		targetName: "memory-provider",
 		stepLabel: "1/2",
@@ -1518,14 +1532,14 @@ async function verifyGettingStarted(page) {
 	});
 	await page.getByRole("button", { name: "返回新人指引", exact: true }).click();
 	await page.locator(".modal.mod-settings").waitFor({ state: "detached" });
-	await guide.getByRole("heading", { name: "任务三：沉淀第一份候选记忆", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("heading", { name: "任务三：提取并审核第一份记忆", exact: true }).waitFor({ state: "visible" });
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
 		await plugin.saveMemoryApiKey("ui-test-memory-key");
 		await plugin.saveSettings();
 		plugin.notifyGettingStartedChanged();
 	}, PLUGIN_ID);
-	await guide.getByRole("button", { name: "沉淀第一份记忆", exact: true }).waitFor({ state: "visible" });
+	await guide.getByRole("button", { name: "提取候选记忆", exact: true }).waitFor({ state: "visible" });
 	await page.waitForFunction(() => document.querySelectorAll(".notice").length === 0, undefined, { timeout: 10_000 });
 	const memoryLayouts = await captureGettingStartedGuideLayouts(page, "memory");
 	await setViewportMode(page, VIEWPORTS[0], "light");
@@ -1913,9 +1927,20 @@ async function verifyIntroduction(page) {
 
 	assert(result.count === 1, `引导区数量应为 1，实际为 ${result.count}`);
 	assert(result.guideCount === 1, `操作指引数量应为 1，实际为 ${result.guideCount}`);
-	assert(result.title === EXPECTED_TITLE, "引导区标题不匹配");
-	assert(result.copy === EXPECTED_INTRO, "引导区理念文案不匹配");
-	assert(result.guide === EXPECTED_GUIDE, "引导区指引文案不匹配");
+	const compactIntro = result.title === "Echo Notes 设置";
+	assert(compactIntro || result.title === EXPECTED_TITLE, "引导区标题不匹配");
+	assert(
+		compactIntro
+			? Boolean(result.copy?.includes("个新人阶段已处理"))
+			: result.copy === EXPECTED_INTRO,
+		"引导区理念文案不匹配"
+	);
+	assert(
+		compactIntro
+			? result.guide === "提示：可用键盘方向键切换阶段；外部 Agent 仍在规划中。"
+			: result.guide === EXPECTED_GUIDE,
+		"引导区指引文案不匹配"
+	);
 	assert(result.linkText === EXPECTED_README_LINK_TEXT, "README 链接文案不匹配");
 	assert(result.linkInConcept, "README 链接必须位于理念说明末尾");
 	assert(result.href === README_URL, "README 链接地址不匹配");
@@ -2366,21 +2391,12 @@ async function verifyTabs(page) {
 		"阿里 filetrans 的上下文增强应默认关闭"
 	);
 	assert(
-		(await activePanel.getByRole("button", { name: "前往记忆提取配置", exact: true }).count()) === 2,
+		(await activePanel.getByRole("button", { name: "打开记忆中心", exact: true }).count()) === 2,
 		"Memory 未初始化时应分别提供术语和上下文恢复入口"
 	);
 	assert(
 		(await activePanel.getByText("已开启", { exact: true }).count()) === 0,
 		"普通开关状态不应重复显示“已开启”标签"
-	);
-	await activePanel.getByRole("button", { name: "前往记忆提取配置", exact: true }).first().click();
-	await page.waitForFunction(() => (
-		document.activeElement?.closest('[data-echo-notes-memory-initialization="true"]') !== null
-	));
-	assert(await memoryTab.getAttribute("aria-selected") === "true", "Memory 恢复入口未切换到记忆提取阶段");
-	assert(
-		await getActivePanel(page).getByRole("tab", { name: "记忆工作区", exact: true }).getAttribute("aria-selected") === "true",
-		"Memory 恢复入口未定位到记忆工作区"
 	);
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
@@ -2669,13 +2685,22 @@ async function verifyTabs(page) {
 	await memoryTab.click();
 	const memorySectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
 	assert(
-		(await memorySectionTabs.allTextContents()).join("|") === "记忆工作区|模型配置|编译策略|转写增强",
-		"记忆提取二级分类不完整"
+		(await memorySectionTabs.allTextContents()).join("|") === "提取设置|记忆中心|维护工具",
+		"记忆阶段应将提取设置、记忆中心和维护工具并列展示"
 	);
-	const memoryModelTab = memorySectionTabs.filter({ hasText: "模型配置" });
-	const memoryProcessingTab = memorySectionTabs.filter({ hasText: "编译策略" });
-	const memoryEnhancementTab = memorySectionTabs.filter({ hasText: "转写增强" });
+	assert(
+		(await activePanel.getByRole("tab", { name: "记忆中心", exact: true }).count()) === 1,
+		"记忆阶段缺少记忆中心同级 Tab"
+	);
+	const agentStage = page.locator('[data-settings-stage="agent"]');
+	assert(await agentStage.getAttribute("aria-disabled") === "true", "外部 Agent 阶段应保持不可操作");
+	assert((await agentStage.locator(".echo-notes-settings-step-status").textContent())?.trim() === "规划中", "外部 Agent 阶段应显示规划中而不是研发中");
+	const memoryModelTab = memorySectionTabs.filter({ hasText: "提取设置" });
 	await memoryModelTab.click();
+	assert(await activePanel.getByText("确认 3 件事，就可以开始", { exact: true }).count() === 1, "提取设置缺少准备度分组");
+	assert(await activePanel.getByText("隐私与费用", { exact: true }).count() === 1, "提取设置缺少隐私与费用说明");
+	const memoryConnection = activePanel.locator("details.echo-notes-memory-settings-advanced").filter({ hasText: "连接配置" }).first();
+	await memoryConnection.locator(":scope > summary").click();
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "记忆服务商")) ===
 			JSON.stringify([
@@ -2690,32 +2715,65 @@ async function verifyTabs(page) {
 		"记忆服务商的成员或顺序不正确"
 	);
 	await selectSettingOption(page, "记忆服务商", "siliconflow");
+	await activePanel.locator("details.echo-notes-memory-settings-advanced").filter({ hasText: "连接配置" }).first().locator(":scope > summary").click();
 	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
 	assert(await (await getActiveSetting(page, "记忆模型")).isVisible(), "记忆模型应在基础配置中可见");
-	await memoryProcessingTab.click();
+	const memoryRules = activePanel.locator("details.echo-notes-memory-settings-rules");
+	await memoryRules.locator(":scope > summary").click();
 	await setSettingToggle(page, "长文本分块提取", false);
 	assert((await activePanel.getByText("记忆分块字符数", { exact: true }).count()) === 0, "关闭记忆分块后不应显示分块字符数");
+	await activePanel.locator("details.echo-notes-memory-settings-rules").locator(":scope > summary").click();
 	await setSettingToggle(page, "长文本分块提取", true);
+	await activePanel.locator("details.echo-notes-memory-settings-rules").locator(":scope > summary").click();
 	const memoryAdvanced = activePanel.locator(
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
-	).first();
+	).filter({ hasText: "高级：分块参数" });
 	assert(await memoryAdvanced.getAttribute("open") === null, "记忆分块高级配置应默认折叠");
 	await memoryAdvanced.locator("summary").click();
 	await activePanel.getByText("记忆分块字符数", { exact: true }).waitFor({ state: "visible" });
-	await memoryEnhancementTab.click();
-	assert(await (await getActiveSetting(page, "人工术语与上下文")).isVisible(), "转写增强人工配置入口应可见");
-	assert(await (await getActiveSetting(page, "AI 术语候选")).isVisible(), "AI 术语候选审核入口应可见");
-	assert(await (await getActiveSetting(page, "实际生效内容")).isVisible(), "转写增强预览入口应可见");
-	assert(
-		await (await getActiveSetting(page, "从已批准记忆生成候选")).isVisible(),
-		"转写增强候选生成入口应可见"
-	);
-	const resetExampleSetting = await getActiveSetting(page, "重置示例配置");
-	assert(await resetExampleSetting.isVisible(), "转写增强示例重置入口应可见");
-	assert(
-		await resetExampleSetting.getByRole("button", { name: "重置并生成示例", exact: true }).evaluate((button) => button.classList.contains("mod-warning")),
-		"重置示例应使用危险操作视觉语义"
-	);
+	await memorySectionTabs.filter({ hasText: "维护工具" }).click();
+	const resetExampleSetting = await getActiveSetting(page, "教学示例");
+	assert(await resetExampleSetting.isVisible(), "教学示例入口应可见");
+
+	await memorySectionTabs.filter({ hasText: "记忆中心" }).click();
+	const memoryCenter = activePanel.locator(".echo-notes-memory-center-inline");
+	await memoryCenter.waitFor({ state: "visible" });
+	await memoryCenter.locator(".echo-notes-memory-hero").waitFor({ state: "visible" });
+	assert(await memoryCenter.locator(".echo-notes-memory-hero").count() === 1, "记忆中心缺少首要任务块");
+	assert(await memoryCenter.locator(".echo-notes-memory-status-strip").count() === 1, "记忆中心缺少状态条");
+	assert(await memoryCenter.locator(".echo-notes-memory-quick-link").count() === 3, "记忆中心缺少快捷链接");
+	assert(await memoryCenter.getByText("审核中心", { exact: true }).count() >= 1, "记忆中心缺少明确的审核中心入口");
+	assert(await memoryCenter.locator(".echo-notes-memory-tool").count() === 3, "记忆中心缺少工具入口");
+	const memoryTabs = memoryCenter.locator('button[role="tab"]');
+	assert(await memoryTabs.count() === 2, "记忆中心 Tab 数量不正确");
+	for (const tab of await memoryTabs.all()) {
+		const controls = await tab.getAttribute("aria-controls");
+		assert(Boolean(controls), "记忆中心 Tab 缺少 aria-controls");
+		assert(await memoryCenter.locator(`#${controls}`).getAttribute("role") === "tabpanel", "记忆中心 Tab 未指向 tabpanel");
+	}
+	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			const centerMetrics = await memoryCenter.evaluate((element) => ({
+				documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				contentOverflow: element.scrollWidth - element.clientWidth,
+				shellFits: element.closest(".modal")?.getBoundingClientRect().width <= window.innerWidth + 1
+			}));
+			assert(centerMetrics.documentOverflow <= 1 && centerMetrics.contentOverflow <= 1 && centerMetrics.shellFits, `memory-center/${viewport.name}/${theme} 布局出现溢出`);
+			const fileName = `memory-center-current-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await memoryCenter.screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+		}
+	}
+	await setViewportMode(page, VIEWPORTS[0], "light");
+	await memoryTabs.first().focus();
+	await memoryTabs.first().press("ArrowRight");
+	await memoryCenter.locator('button[role="tab"][aria-selected="true"]').filter({ hasText: "审核中心" }).waitFor({ state: "visible" });
+	await memoryCenter.locator('button[role="tab"][aria-selected="true"]').press("Home");
+	assert(await memoryCenter.locator('button[role="tab"][aria-selected="true"]').filter({ hasText: "总览" }).count() === 1, "记忆中心 Tab 不支持 Home 导航");
+	await memoryCenter.locator("button.echo-notes-memory-center-tab").filter({ hasText: "审核中心" }).click();
+	await memoryCenter.locator(".echo-notes-memory-inbox").waitFor({ state: "visible" });
 
 	await analysisTab.click();
 	await setSettingToggle(page, "启用 AI 纪要分析", true);
@@ -3317,9 +3375,10 @@ async function verifyTranscriptionEnhancementMarkdown(page) {
 		window.app.setting.open();
 		await window.app.setting.openTabById(pluginId);
 		const plugin = window.app.plugins.plugins[pluginId];
-		plugin.settingTab.showDestination("memory-transcription-enhancement");
+		plugin.settingTab.showDestination("memory-model");
 	}, PLUGIN_ID);
-	const resetSetting = await getActiveSetting(page, "重置示例配置");
+	await getActivePanel(page).getByRole("tab", { name: "维护工具", exact: true }).click();
+	const resetSetting = await getActiveSetting(page, "教学示例");
 	await resetSetting.getByRole("button", { name: "重置并生成示例", exact: true }).click();
 	const confirmModal = page.locator(".modal").filter({ hasText: "重置转写增强示例" });
 	await confirmModal.waitFor({ state: "visible" });
@@ -3495,9 +3554,11 @@ async function verifyMemoryReview(page) {
 	await modal.locator("button").filter({ hasText: "全部批准" }).click();
 	const userItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "测试用户 · 近期目标" });
 	const projectItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "Echo Notes · 状态" });
+	await userItem.locator(".echo-notes-memory-review-edit summary").click();
+	await projectItem.locator(".echo-notes-memory-review-edit summary").click();
 	await userItem.locator("textarea").nth(0).fill("完成可信审核闭环");
 	await userItem.locator("textarea").nth(1).fill("隔离 UI 已核验");
-	await projectItem.locator("select").selectOption("rejected");
+	await projectItem.locator("select").first().selectOption("rejected");
 	await projectItem.locator("textarea").nth(1).fill("状态仍需外部证据");
 	await modal.locator("button").filter({ hasText: "保存审核" }).click();
 	await modal.waitFor({ state: "detached" });
@@ -3526,7 +3587,8 @@ async function verifyMemoryReview(page) {
 	}, { pluginId: PLUGIN_ID, reviewPath });
 	await modal.waitFor({ state: "visible" });
 	const reopenedUserItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "测试用户 · 近期目标" });
-	await reopenedUserItem.locator("select").selectOption("pending");
+	await reopenedUserItem.locator(".echo-notes-memory-review-edit summary").click();
+	await reopenedUserItem.locator("select").first().selectOption("pending");
 	await reopenedUserItem.locator("textarea").nth(1).fill("等待再次确认");
 	await modal.locator("button").filter({ hasText: "保存审核" }).click();
 	await modal.waitFor({ state: "detached" });
@@ -3543,6 +3605,52 @@ async function verifyMemoryReview(page) {
 	assert(revertedState.reviewContent.includes('"status": "pending"'), "重置待审核状态未写入 sidecar");
 	assert(!revertedState.soulContent.includes("完成可信审核闭环"), "重置待审核后未从画像撤销派生内容");
 	assert(revertedState.soulContent.includes("暂无已批准的候选记忆"), "撤销后画像空状态不正确");
+
+	await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].openMemoryInbox(), PLUGIN_ID);
+	const inboxCenter = page.locator(".echo-notes-memory-center-inline");
+	await inboxCenter.waitFor({ state: "visible" });
+	const inbox = inboxCenter.locator(".echo-notes-memory-inbox");
+	await inbox.waitFor({ state: "visible" });
+	assert(await inbox.locator(".echo-notes-memory-inbox-hero").count() === 1, "审核中心缺少待审核英雄条");
+	assert(await inbox.locator(".echo-notes-memory-inbox-tier").count() >= 1, "审核中心缺少优先级徽标");
+	assert(await inbox.locator(".echo-notes-memory-inbox-filter").count() === 4, "审核中心缺少优先级、类型、来源和排序筛选");
+	const inboxCardCount = await inbox.locator(".echo-notes-memory-inbox-card").count();
+	const inboxSelectCount = await inbox.locator(".echo-notes-memory-inbox-card-select").count();
+	assert(await inbox.locator(".echo-notes-memory-inbox-card-select input").count() >= 1, `审核中心候选缺少选择控件：卡片 ${inboxCardCount}，选择容器 ${inboxSelectCount}`);
+	assert(await inbox.locator(".echo-notes-memory-inbox-evidence-rail").count() === inboxCardCount, "审核中心候选缺少证据轨结构");
+	assert(await inbox.locator(".echo-notes-memory-inbox-insight-details").count() === inboxCardCount, "审核中心次要判断依据未渐进披露");
+	assert(await inbox.getByText("更多审核动作", { exact: true }).count() === inboxCardCount, "审核中心高级动作未收纳");
+	assert(await inbox.getByText("批准已选", { exact: false }).count() === 1, "审核中心缺少选中批量批准入口");
+	assert(await inbox.getByText("拒绝已选", { exact: false }).count() === 1, "审核中心缺少选中批量拒绝入口");
+	await inbox.locator(".echo-notes-memory-inbox-card-select input").first().check();
+	await inbox.getByRole("button", { name: /批准已选/ }).click();
+	const inboxConfirm = page.locator(".echo-notes-memory-inbox-confirm-modal");
+	await inboxConfirm.waitFor({ state: "visible" });
+	assert(await inboxConfirm.getByText(/确认批准已选/).count() === 1, "批量批准缺少二次确认");
+	await inboxConfirm.getByRole("button", { name: "取消", exact: true }).click();
+	const inboxCardCountBeforeSort = await inbox.locator(".echo-notes-memory-inbox-card").count();
+	await inbox.locator(".echo-notes-memory-inbox-filters > summary").click();
+	await inbox.locator('select[aria-label="排序"]').selectOption("confidence");
+	assert(await inbox.locator('.echo-notes-memory-inbox-card').count() === inboxCardCountBeforeSort, "审核中心排序后候选列表不正确");
+	await page.evaluate(() => document.querySelectorAll(".notice").forEach((notice) => notice.remove()));
+	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			const inboxMetrics = await inbox.evaluate((element) => ({
+				documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+				contentOverflow: element.scrollWidth - element.clientWidth,
+				shellFits: element.closest(".modal")?.getBoundingClientRect().width <= window.innerWidth + 1,
+				touchTargetsMeetMinimum: [...element.querySelectorAll(".echo-notes-memory-inbox-actions button, .echo-notes-memory-inbox-bulk-button")].every((button) => button.getBoundingClientRect().height >= 44)
+			}));
+			assert(inboxMetrics.documentOverflow <= 1 && inboxMetrics.contentOverflow <= 1 && inboxMetrics.shellFits, `memory-inbox/${viewport.name}/${theme} 布局出现溢出`);
+			if (viewport.mobileShell) assert(inboxMetrics.touchTargetsMeetMinimum, `memory-inbox/${viewport.name}/${theme} 操作目标不足 44px`);
+			const fileName = `memory-inbox-current-${viewport.name}-${theme}.png`;
+			const screenshotPath = path.join(OUTPUT_DIR, fileName);
+			await inboxCenter.screenshot({ path: screenshotPath });
+			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
+		}
+	}
+	await setViewportMode(page, VIEWPORTS[0], "light");
 	return layouts;
 }
 
@@ -3791,7 +3899,7 @@ async function verifyMemoryReview(page) {
 	}
 
 	await setViewportMode(page, VIEWPORTS[0], "light");
-	const relationTypeSetting = modal.locator(".setting-item").filter({ hasText: "关系类型" });
+	const relationTypeSetting = modal.locator(".setting-item").filter({ hasText: "它们是什么关系" });
 	await relationTypeSetting.locator("select").selectOption("supersedes");
 	await modal.locator(".setting-item").filter({ hasText: "关系备注" }).locator("textarea").fill("新目标替代旧目标");
 	await modal.locator("button").filter({ hasText: "确认关系" }).click();
@@ -3921,8 +4029,15 @@ async function verifyMemoryReview(page) {
 		const modal = page.locator(".echo-notes-memory-context-modal");
 		await modal.waitFor({ state: "visible" });
 		await page.evaluate(() => document.querySelectorAll(".notice").forEach((notice) => notice.remove()));
-		assert((await modal.locator(".echo-notes-memory-context-editor select").count()) === 2, "上下文包项目和人物筛选控件不完整");
-		assert((await modal.locator(".echo-notes-memory-context-editor input").count()) === 3, "上下文包日期和预算控件不完整");
+		assert((await modal.locator(".echo-notes-memory-context-editor select").count()) === 3, "上下文包项目、人物与用途筛选控件不完整");
+		assert(
+			(await modal.locator(".echo-notes-memory-context-editor input[type='date'], .echo-notes-memory-context-editor input[type='number']").count()) === 3,
+			"上下文包日期和预算控件不完整"
+		);
+		assert(
+			(await modal.locator(".echo-notes-memory-context-editor input[type='checkbox']").count()) === 11,
+			"上下文包记忆类型、时效与“全部”筛选控件不完整"
+		);
 		const initialSummary = await modal.locator(".echo-notes-memory-context-summary").textContent();
 		assert(initialSummary?.includes("匹配"), "上下文包缺少生成前预览摘要");
 
@@ -4237,7 +4352,7 @@ async function verifySettingsControlAlignment(page) {
 		},
 		{
 			stage: "memory",
-			section: "模型配置",
+			section: "提取设置",
 			providerName: "记忆服务商",
 			providerValue: "siliconflow",
 			apiKeyName: "记忆 API Key",
@@ -4252,7 +4367,24 @@ async function verifySettingsControlAlignment(page) {
 			await setSettingToggle(page, "启用 AI 纪要分析", true);
 		}
 		await getActivePanel(page).getByRole("tab", { name: spec.section, exact: true }).click();
+		if (spec.stage === "memory") {
+			await getActivePanel(page)
+				.locator("details.echo-notes-memory-settings-advanced")
+				.filter({ hasText: "连接配置" })
+				.first()
+				.locator(":scope > summary")
+				.click();
+		}
 		await selectSettingOption(page, spec.providerName, spec.providerValue);
+		if (spec.stage === "memory") {
+			const connection = getActivePanel(page)
+				.locator("details.echo-notes-memory-settings-advanced")
+				.filter({ hasText: "连接配置" })
+				.first();
+			if ((await connection.getAttribute("open")) === null) {
+				await connection.locator(":scope > summary").click();
+			}
+		}
 		const basicMetrics = await inspectNamedSettingControls(page, spec.basicNames);
 		assertAlignedControlGroup(basicMetrics, `${spec.stage}/基础配置`);
 		const feedbackMetrics = await verifyApiKeyFeedback(page, spec.apiKeyName, spec.stage);

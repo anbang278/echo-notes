@@ -136,7 +136,18 @@ import { MemoryReviewModal } from "./memory/memory-review-modal";
 import { TranscriptionEnhancementManagerModal } from "./memory/memory-transcription-enhancement-modal";
 import { TranscriptionEnhancementPreviewModal } from "./memory/memory-transcription-enhancement-preview-modal";
 import { TranscriptionEnhancementDocumentError } from "./memory/memory-transcription-enhancement";
-import { MemoryService } from "./memory/memory-service";
+import {
+	MemoryCenterView,
+	type MemoryCenterCallbacks,
+	type MemoryCenterTab
+} from "./memory/memory-center-modal";
+import { MemoryRelationSuggestionModal } from "./memory/memory-relation-suggestion-modal";
+import { MemoryService, type MemoryInboxContext } from "./memory/memory-service";
+import type {
+	MemoryControlCenterActionId,
+	MemoryControlCenterSummary,
+	MemoryReviewUpdate
+} from "./memory/memory-types";
 import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
 import { parseMemoryCandidate } from "./memory/memory-output";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
@@ -231,10 +242,13 @@ const ECHO_NOTES_COMMAND_IDS = [
 	"stop-realtime-transcription",
 	"open-active-realtime-transcript",
 	"analyze-current-transcript-with-template",
+	"open-memory-control-center",
 	"initialize-echo-memory",
 	"extract-memory-from-current-transcript",
 	"review-current-memory-candidate",
+	"open-memory-inbox",
 	"manage-current-memory-relations",
+	"suggest-current-memory-relations",
 	"manage-transcription-enhancement",
 	"generate-transcription-term-candidates",
 	"open-echo-memory-home",
@@ -406,6 +420,9 @@ export default class EchoNotesPlugin extends Plugin {
 		this.realtimeRibbonEl.addClass("echo-notes-realtime-ribbon");
 		this.addRibbonIcon("list-checks", "Echo Notes 任务中心", () => {
 			void this.activateTaskCenterView();
+		});
+		this.addRibbonIcon("brain", "打开记忆中心", () => {
+			void this.openMemoryCenter();
 		});
 		this.realtimeStatusEl = this.addStatusBarItem();
 		this.realtimeStatusEl.addClass("echo-notes-realtime-status");
@@ -1200,7 +1217,8 @@ export default class EchoNotesPlugin extends Plugin {
 			openExperienceNote: () => this.openGettingStartedExperienceNote(),
 			openFirstTranscript: () => this.openGettingStartedTranscript("first"),
 			openShortcutTranscript: () => this.openGettingStartedTranscript("shortcut"),
-			openMemoryCandidate: () => this.openGettingStartedMemoryCandidate()
+			openMemoryCandidate: () => this.openGettingStartedMemoryCandidate(),
+			openMemoryInbox: () => this.openMemoryInbox()
 		};
 	}
 
@@ -1665,11 +1683,21 @@ export default class EchoNotesPlugin extends Plugin {
 		if (!transcript) {
 			return;
 		}
-		this.settings.gettingStartedState = selectGettingStartedMemorySource(
-			this.settings.gettingStartedState,
+		let state = this.settings.gettingStartedState;
+		if (!state.activeReview && state.chapters.memory.outcome === "skipped") {
+			state = startGettingStartedReview(state, "memory");
+		}
+		const nextState = selectGettingStartedMemorySource(
+			state,
 			transcript.path
 		);
+		if (getGettingStartedMemorySourcePath(nextState) !== transcript.path) {
+			new Notice("当前不在记忆准入阶段，请先点击“再学一次”后选择转写稿。");
+			return;
+		}
+		this.settings.gettingStartedState = nextState;
 		await this.saveSettings();
+		new Notice(`已选择转写稿：${transcript.name}`);
 		await this.activateTaskCenterView({ revealGettingStarted: true });
 	}
 
@@ -2062,6 +2090,125 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	async getMemoryControlCenterSummary(): Promise<MemoryControlCenterSummary> {
+		const initialized = this.settings.memoryInitialized;
+		const diagnostics = diagnoseMemoryProviderSettings({
+			provider: this.settings.memoryProvider,
+			baseUrl: this.settings.memoryBaseUrl,
+			model: this.settings.memoryModel,
+			apiKey: this.getMemoryApiKey()
+		});
+		const modelReady = initialized && diagnostics.canAttempt;
+		let pending: MemoryControlCenterSummary["pending"] = initialized
+			? { total: 0, coreCandidate: 0, longTermCandidate: 0, workingCandidate: 0, lowPriority: 0 }
+			: null;
+		if (initialized) {
+			try {
+				pending = (await this.memoryService.getMemoryInboxContext(this.settings)).counts;
+			} catch (error) {
+				this.log("读取记忆控制中心状态失败", error);
+				pending = null;
+			}
+		}
+
+		let nextAction: MemoryControlCenterSummary["nextAction"];
+		if (!initialized) {
+				nextAction = {
+					id: "initialize",
+					title: "先初始化记忆工作区",
+				description: "初始化只会在 Vault 内创建记忆目录，并收集称呼、当前角色和近期目标。",
+				label: "初始化记忆库",
+				hint: "完成后才能保存候选记忆和审核记录。"
+			};
+		} else if (!modelReady) {
+			nextAction = {
+				id: "configure-model",
+				title: "连接一个记忆模型",
+				description: "记忆提取使用独立的服务商、模型和 API Key，不会复用 AI 分析配置。",
+				label: "配置模型连接",
+				hint: diagnostics.errors[0] ?? "填写 API Key 后可开始提取。"
+			};
+		} else if (pending !== null && pending.total > 0) {
+				nextAction = {
+					id: "review",
+					title: "有记忆候选等待你的判断",
+					description: "先审核候选，再决定哪些内容进入长期记忆；AI 只提出建议，不会自动批准。",
+					label: "立即开始审核",
+				hint: `当前有 ${pending.total} 条待审核候选。`
+			};
+		} else {
+			const activeFile = this.app.workspace.getActiveFile();
+			if (activeFile instanceof TFile && this.isTranscriptMarkdownFile(activeFile)) {
+			nextAction = {
+				id: "extract-current",
+				title: "从当前转写稿提取候选",
+				description: "插件会读取当前转写正文和成功的 AI 纪要，生成可逐条审核的候选记忆。",
+				label: "提取当前转写稿",
+				hint: "提取前会显示发送内容与隐私提示。"
+			};
+			} else {
+				nextAction = {
+					id: "select-source",
+					title: "选择一份转写稿开始",
+					description: "从 Vault 中选择 Echo Notes 转写稿，作为第一次记忆提取的来源。",
+					label: "选择转写稿并提取",
+					hint: "只会列出 Echo Notes 识别的转写稿。"
+				};
+			}
+		}
+		return {
+			initialized,
+			modelReady,
+			autoEnabled: initialized && this.settings.memoryEnabled,
+			pending,
+			nextAction
+		};
+	}
+
+	async runMemoryControlCenterAction(action: MemoryControlCenterActionId): Promise<void> {
+		switch (action) {
+			case "initialize":
+				this.openMemoryInitialization();
+				break;
+			case "configure-model":
+				await this.openSettingsDestination("memory-model", { guide: "provider-api-key" });
+				break;
+			case "review":
+				await this.openMemoryInbox();
+				break;
+			case "extract-current":
+				await this.handleExtractMemoryFromCurrentTranscript();
+				break;
+			case "select-source":
+				await this.selectMemoryTranscriptAndExtract();
+				break;
+		}
+	}
+
+	private async selectMemoryTranscriptAndExtract(): Promise<void> {
+		const transcripts = this.app.vault.getMarkdownFiles()
+			.filter((file) => this.isTranscriptMarkdownFile(file))
+			.sort((left, right) => right.stat.mtime - left.stat.mtime);
+		if (transcripts.length === 0) {
+			new Notice("Vault 中还没有可用的 Echo Notes 转写稿。");
+			return;
+		}
+		const transcript = await selectGettingStartedTranscript(this.app, transcripts);
+		if (transcript) {
+			if (await this.confirmMemoryExtraction(transcript)) {
+				await this.startMemoryTask(transcript, undefined, true);
+			}
+		}
+	}
+
+	private async confirmMemoryExtraction(transcriptFile: TFile): Promise<boolean> {
+		return this.confirmAction(
+			"提取候选记忆",
+			`来源：${transcriptFile.name}\n\n将把转写正文和本批成功的 AI 纪要发送到独立的记忆服务商（${this.settings.memoryProvider} / ${this.settings.memoryModel}）。长文本可能分块多次调用并产生费用；API Key 仅保存在 Obsidian SecretStorage。\n\n提取结果会先进入审核中心，不会自动成为长期记忆。`,
+			"确认并提取"
+		);
+	}
+
 	async openMemoryTimeline(): Promise<void> {
 		try {
 			const timelineFile = await this.memoryService.getTimelineFile(this.settings);
@@ -2272,6 +2419,66 @@ export default class EchoNotesPlugin extends Plugin {
 		await this.openMemoryCandidateReview(currentFile);
 	}
 
+	async openMemoryCenter(initialTab: "overview" | "inbox" = "overview"): Promise<void> {
+		if (document.querySelector(".modal.mod-settings")) {
+			this.settingTab?.showDestination("memory-center", { memoryCenterTab: initialTab });
+			return;
+		}
+		await this.openSettingsDestination("memory-center", { memoryCenterTab: initialTab });
+	}
+
+	async getMemoryInboxContext(): Promise<MemoryInboxContext> {
+		return this.memoryService.getMemoryInboxContext(this.settings);
+	}
+
+	async saveMemoryReview(candidatePath: string, updates: readonly MemoryReviewUpdate[]): Promise<void> {
+		await this.memoryService.saveMemoryReview(this.settings, candidatePath, updates);
+	}
+
+	private createMemoryCenterCallbacks(): MemoryCenterCallbacks {
+		return {
+			getSummary: () => this.getMemoryControlCenterSummary(),
+			runAction: (action) => this.runMemoryControlCenterAction(action),
+			openSettings: async () => {
+				await this.openSettingsDestination("memory-model");
+			},
+			openHome: () => this.openMemoryHome(),
+			openTimeline: () => this.openMemoryTimeline(),
+			manageRelations: () => this.manageCurrentMemoryRelations(),
+			manageEnhancement: () => this.openTranscriptionEnhancementManager(),
+			openContextPackage: () => this.openPersonalAgentContextPackage(),
+			inbox: {
+				onSave: async (candidatePath, updates) => {
+					await this.memoryService.saveMemoryReview(this.settings, candidatePath, updates);
+				},
+				onReload: () => this.memoryService.getMemoryInboxContext(this.settings),
+				onCreateCandidates: () => {
+					void this.runMemoryControlCenterAction("select-source");
+				},
+				onOpenCandidate: (candidatePath) => {
+					const file = this.app.vault.getAbstractFileByPath(candidatePath);
+					if (file instanceof TFile) {
+						void this.app.workspace.getLeaf(false).openFile(file);
+					}
+				}
+			}
+		};
+	}
+
+	renderMemoryCenter(containerEl: HTMLElement, initialTab: MemoryCenterTab = "overview"): MemoryCenterView {
+		const view = new MemoryCenterView(this.app, containerEl, initialTab, this.createMemoryCenterCallbacks());
+		view.render();
+		return view;
+	}
+
+	async openMemoryInbox(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		await this.openMemoryCenter("inbox");
+	}
+
 	async reviewMemoryCandidatePath(path: string): Promise<void> {
 		if (!this.settings.memoryInitialized) {
 			new Notice("请先初始化 Echo Memory。");
@@ -2376,6 +2583,42 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	async suggestCurrentMemoryRelations(): Promise<void> {
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		const currentFile = this.app.workspace.getActiveFile();
+		if (!currentFile) {
+			new Notice("请先打开一个 Echo Memory 候选包或审核文件。");
+			return;
+		}
+		try {
+			const { suggestions } = await this.memoryService.getMemoryRelationSuggestions(
+				this.settings,
+				currentFile
+			);
+			new MemoryRelationSuggestionModal(this.app, suggestions, {
+				onConfirm: async (input) => {
+					const result = await this.memoryService.confirmMemoryRelation(
+						this.settings,
+						input.source.candidatePath,
+						input.type,
+						input.source,
+						input.target,
+						input.note
+					);
+					const compilation = result.compiledProfiles === undefined
+						? "画像与聚合视图未自动重建"
+						: `已重建 ${result.compiledProfiles} 份画像和 3 份聚合视图`;
+					new Notice(`记忆关系已确认：${compilation}。`);
+				}
+			}).open();
+		} catch (error) {
+			new Notice(`无法发现相关记忆：${getErrorMessage(error)}`);
+		}
+	}
+
 	refreshServices(): void {
 		this.audioFileService = new AudioFileService(this.app);
 		this.transcriptService = new TranscriptService(this.app, this.settings);
@@ -2464,6 +2707,14 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "open-memory-control-center",
+			name: "打开记忆中心",
+			callback: () => {
+				void this.openMemoryCenter();
+			}
+		});
+
+		this.addCommand({
 			id: "initialize-echo-memory",
 			name: "初始化 Echo Memory",
 			callback: () => this.openMemoryInitialization()
@@ -2479,9 +2730,17 @@ export default class EchoNotesPlugin extends Plugin {
 
 		this.addCommand({
 			id: "review-current-memory-candidate",
-			name: "审核当前记忆候选",
+			name: "打开当前记忆候选详情",
 			callback: () => {
 				void this.reviewCurrentMemoryCandidate();
+			}
+		});
+
+		this.addCommand({
+			id: "open-memory-inbox",
+			name: "打开记忆审核中心",
+			callback: () => {
+				void this.openMemoryInbox();
 			}
 		});
 
@@ -2490,6 +2749,14 @@ export default class EchoNotesPlugin extends Plugin {
 			name: "管理当前记忆关系",
 			callback: () => {
 				void this.manageCurrentMemoryRelations();
+			}
+		});
+
+		this.addCommand({
+			id: "suggest-current-memory-relations",
+			name: "发现可能相关的历史记忆",
+			callback: () => {
+				void this.suggestCurrentMemoryRelations();
 			}
 		});
 
@@ -2875,6 +3142,9 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 		if (!this.settings.memoryInitialized) {
 			new Notice("请先初始化 Echo Memory。");
+			return;
+		}
+		if (!await this.confirmMemoryExtraction(transcriptFile)) {
 			return;
 		}
 		void this.startMemoryTask(transcriptFile, undefined, true);
@@ -4054,7 +4324,7 @@ export default class EchoNotesPlugin extends Plugin {
 			this.showMemoryReviewNotice(
 				result.skipped
 					? `记忆候选已存在：${transcriptFile.name}`
-					: `已沉淀 ${result.assertionCount} 条候选记忆${formatRejectedMemoryAssertionSummary(result.rejectedAssertionCount)}：${transcriptFile.name}`,
+					: `已提取 ${result.assertionCount} 条候选记忆${formatRejectedMemoryAssertionSummary(result.rejectedAssertionCount)}：${transcriptFile.name}`,
 				result.candidateFilePath
 			);
 		} catch (error) {
@@ -4785,8 +5055,8 @@ function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination):
 			return "AI 分析 → 模型配置";
 		case "memory-model":
 			return "Echo Memory → 模型配置";
-		case "memory-transcription-enhancement":
-			return "Echo Memory → 转写增强";
+		case "memory-center":
+			return "Echo Memory → 记忆中心";
 		case "transcription-recording":
 			return "录音转写 → 能力增强 → 快捷录音";
 	}

@@ -11,9 +11,14 @@
 
 删除、拒绝或修正候选后，应通过重新编译更新画像，不能直接在画像托管区块中维护另一份事实。
 
-## 候选 Schema v1
+## 候选 Schema
 
-当前 `MemoryCandidatePackage` 包含：
+`MemoryCandidatePackage` 现在支持两代 Schema：
+
+- **v1（legacy）**：`schemaVersion: 1`，仅包含主体、分类、关系/属性、值、置信度、证据和观察时间；历史候选无需迁移即可继续读取、审核和编译。
+- **v2（新生成）**：`schemaVersion: 2`，在 v1 基础上新增 `memoryType`、`memoryHorizon`、可选 `admissionReason` 与可选 `temporal`。
+
+两种 Schema 都包含：
 
 - `schemaVersion`、候选包稳定 `id`、输入 `fingerprint`、`createdAt`。
 - `provider`、`model`、`traceIds`。
@@ -26,12 +31,13 @@
 - `predicate`、`value`、`confidence`。
 - 必须能在本次输入中定位的 `evidenceQuote`。
 - `observedAt`、`sourcePath`、`chunkIndex`。
+- v2 新增：`memoryType`（`fact`、`decision`、`preference`、`belief`、`experience`、`goal`）、`memoryHorizon`（`working`、`long_term`）、可选 `admissionReason`、可选 `temporal.validFrom/validTo`。
 
-支持的主体是 User、人物、组织和项目。画像编译按主体与分类路由，并始终保留候选包和 transcript 回链。
+支持的主体是 User、人物、组织和项目。画像编译按主体与分类路由，并始终保留候选包和 transcript 回链。v1 断言不猜测类型；编译时把缺少 `memoryHorizon` 的断言按长期处理，只有 `long_term` 断言进入稳定画像，`working` 断言保留在时间线、跨记录视图和上下文包。
 
 ## 审核 sidecar Schema v1
 
-候选同目录使用 `<候选文件名>.review.md`，候选包自身保持 Schema v1 不变。审核包包含：
+候选同目录使用 `<候选文件名>.review.md`，无论候选是 v1 还是 v2，审核包自身保持 Schema v1 不变。审核包包含：
 
 - `candidateId`、`candidateFingerprint` 和 `candidatePath`，用于阻止审核文件错配。
 - 每条断言的 `pending`、`approved` 或 `rejected` 状态。
@@ -68,6 +74,7 @@
 
 - 项目、人物：两个筛选条件使用 OR 语义；为空表示不限。
 - 起止日期：按断言的 `observedAt` 日期闭区间过滤，无法解析日期的断言不会进入有日期范围的包。
+- 记忆类型与时效：可多选 `memoryType` 和 `memoryHorizon`；不选表示不限，缺少 `memoryHorizon` 的 v1 断言按长期处理。
 - 字符预算：4,000 至 100,000 字符，默认 12,000；按最新观察时间优先稳定排序，超出预算的条目省略并显示数量。
 
 生成过程不联网、不调用外部 Agent。每条纳入的事实保留证据、transcript、候选、审核和关系回链；文件名由日期与事实快照指纹组成，相同日期、过滤条件和事实快照会复用同一路径。上下文正文位于 `echo-memory-context:managed` 区块内，区块外人工内容在重复生成时保留。
@@ -85,4 +92,4 @@
 
 ## 当前缺口
 
-关系目前完全由用户手动选择，没有自动候选发现、多用户审核人身份或批量关系审核。候选包仍是通用 Schema，尚未覆盖角色化记忆类型与来源时间范围；项目和人物聚合及上下文包依赖明确主体名，不做语义实体消歧，也尚无主题聚合、语义检索或外部 Agent 执行动作。
+关系目前完全由用户手动选择，没有自动候选发现、多用户审核人身份或批量关系审核。候选包已通过 v2 覆盖六种记忆类型与 working/long-term 时效，但工作记忆的完整生命周期（Active→Expired→Historical）仍留待后续阶段；项目和人物聚合及上下文包依赖明确主体名，不做语义实体消歧，也尚无主题聚合、语义检索或外部 Agent 执行动作。

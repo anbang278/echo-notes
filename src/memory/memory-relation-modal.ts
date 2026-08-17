@@ -36,7 +36,7 @@ export class MemoryRelationModal extends Modal {
 	}
 
 	onOpen(): void {
-		this.setTitle("管理已批准记忆关系");
+		this.setTitle("整理记忆之间的关系");
 		this.contentEl.addClass("echo-notes-memory-relation-modal");
 		this.render();
 	}
@@ -59,7 +59,11 @@ export class MemoryRelationModal extends Modal {
 
 	private renderRelationEditor(): void {
 		const editor = this.contentEl.createDiv({ cls: "echo-notes-memory-relation-editor" });
-		editor.createEl("h3", { text: "确认关系" });
+		editor.createEl("h3", { text: "确认一条关系" });
+		editor.createEl("p", {
+			cls: "echo-notes-memory-relation-editor-hint",
+			text: "只在两条已批准记忆确实有关时建立关系；这一步不会修改原始候选或转写稿。"
+		});
 		const sources = [...this.context.currentApprovedEndpoints]
 			.sort((left, right) => right.observedAt.localeCompare(left.observedAt));
 		const source = sources.find((endpoint) => getMemoryRelationEndpointKey(endpoint) === this.selectedSourceKey);
@@ -72,7 +76,7 @@ export class MemoryRelationModal extends Modal {
 		}
 
 		new Setting(editor)
-			.setName("当前断言")
+			.setName("新记忆")
 			.addDropdown((dropdown) => {
 				for (const endpoint of sources) {
 					dropdown.addOption(getMemoryRelationEndpointKey(endpoint), formatEndpointOption(endpoint));
@@ -85,7 +89,7 @@ export class MemoryRelationModal extends Modal {
 				});
 			});
 		new Setting(editor)
-			.setName("关联断言")
+			.setName("另一条记忆")
 			.addDropdown((dropdown) => {
 				if (targets.length === 0) {
 					dropdown.addOption("", "没有其他候选的同主体已批准断言").setDisabled(true);
@@ -99,7 +103,7 @@ export class MemoryRelationModal extends Modal {
 				});
 			});
 		new Setting(editor)
-			.setName("关系类型")
+			.setName("它们是什么关系")
 			.addDropdown((dropdown) => {
 				for (const type of MEMORY_RELATION_TYPES) {
 					dropdown.addOption(type, MEMORY_RELATION_TYPE_LABELS[type]);

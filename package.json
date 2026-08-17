@@ -1,6 +1,6 @@
 {
 	"name": "echo-notes",
-	"version": "0.4.19",
+	"version": "0.4.20",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
@@ -13,7 +13,8 @@
 		"verify:audio-dataset": "node scripts/verify-local-audio-dataset.mjs",
 		"verify:editor-menu": "npm run build && node scripts/verify-editor-menu.mjs",
 		"verify:settings-ui": "npm run build && node scripts/verify-settings-ui.mjs",
-		"verify:real-chain": "npm run build && node scripts/real-chain-validation.mjs",
+    "verify:real-chain": "npm run build && node scripts/real-chain-validation.mjs",
+    "verify:prototype": "node scripts/verify-design-prototype.mjs",
 		"verify": "node scripts/run-verification.mjs",
 		"package": "npm run verify && node scripts/package-release.mjs",
 		"test": "node scripts/run-tests.mjs"

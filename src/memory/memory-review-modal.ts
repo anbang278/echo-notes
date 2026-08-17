@@ -1,15 +1,21 @@
 import { App, Modal, Notice, Setting } from "obsidian";
-import type {
-	MemoryCandidatePackage,
-	MemoryReviewPackage,
-	MemoryReviewStatus,
-	MemoryReviewUpdate
+import {
+	formatProposedTier,
+	formatMemoryType,
+	type MemoryCandidatePackage,
+	type MemoryReviewPackage,
+	type MemoryReviewStatus,
+	type MemoryReviewUpdate,
+	type MemoryTier,
+	type MemoryValidity
 } from "./memory-types";
 
 interface MemoryReviewDraft {
 	status: MemoryReviewStatus;
 	effectiveValue: string;
 	note: string;
+	effectiveTier: MemoryTier;
+	validity: MemoryValidity;
 }
 
 export class MemoryReviewModal extends Modal {
@@ -32,13 +38,15 @@ export class MemoryReviewModal extends Modal {
 			this.drafts.set(assertion.id, {
 				status: item?.status ?? "pending",
 				effectiveValue: item?.effectiveValue ?? assertion.value,
-				note: item?.note ?? ""
+				note: item?.note ?? "",
+				effectiveTier: item?.effectiveTier ?? (assertion.proposedTier === "working" ? "working" : "long_term"),
+				validity: item?.validity ?? "active"
 			});
 		}
 	}
 
 	onOpen(): void {
-		this.setTitle("审核记忆候选");
+		this.setTitle("记忆候选详情");
 		this.contentEl.addClass("echo-notes-memory-review-modal");
 		this.render();
 	}
@@ -52,7 +60,7 @@ export class MemoryReviewModal extends Modal {
 		const counts = this.getDraftCounts();
 		this.contentEl.createDiv({
 			cls: "echo-notes-memory-review-summary",
-			text: `${this.candidate.source.transcriptTitle} · 待审核 ${counts.pending} · 已批准 ${counts.approved} · 已拒绝 ${counts.rejected}`
+			text: `来源：${this.candidate.source.transcriptTitle} · 待审核 ${counts.pending} · 已批准 ${counts.approved} · 已拒绝 ${counts.rejected}`
 		});
 
 		const bulkActions = new Setting(this.contentEl).setClass("echo-notes-memory-review-bulk-actions");
@@ -83,14 +91,29 @@ export class MemoryReviewModal extends Modal {
 			});
 			item.createDiv({
 				cls: "echo-notes-memory-review-item-meta",
-				text: `${assertion.subjectType} · ${assertion.category} · 置信度 ${assertion.confidence.toFixed(2)}`
+				text: `${formatMemoryType(assertion.memoryType)} · ${formatProposedTier(assertion.proposedTier)} · ${assertion.subjectType} · ${assertion.category} · 置信度 ${assertion.confidence.toFixed(2)}`
 			});
 			item.createEl("blockquote", {
 				cls: "echo-notes-memory-review-evidence",
 				text: assertion.evidenceQuote
 			});
+			if (assertion.whyRemember) {
+				item.createEl("blockquote", {
+					cls: "echo-notes-memory-review-admission-reason",
+					text: `为什么值得记住：${assertion.whyRemember}`
+				});
+			}
+			const temporalText = formatReviewTemporal(assertion.temporal);
+			if (temporalText) {
+				item.createDiv({
+					cls: "echo-notes-memory-review-temporal",
+					text: `时间范围：${temporalText}`
+				});
+			}
 
-			new Setting(item)
+			const editDetails = item.createEl("details", { cls: "echo-notes-memory-review-edit" });
+			editDetails.createEl("summary", { text: "调整审核状态、生效内容和备注" });
+			new Setting(editDetails)
 				.setName("审核状态")
 				.addDropdown((dropdown) => dropdown
 					.addOptions({ pending: "待审核", approved: "已批准", rejected: "已拒绝" })
@@ -98,7 +121,7 @@ export class MemoryReviewModal extends Modal {
 					.onChange((value) => {
 						draft.status = value as MemoryReviewStatus;
 					}));
-			new Setting(item)
+			new Setting(editDetails)
 				.setName("生效内容")
 				.addTextArea((text) => {
 					text.inputEl.rows = 3;
@@ -106,7 +129,23 @@ export class MemoryReviewModal extends Modal {
 						draft.effectiveValue = value;
 					});
 				});
-			new Setting(item)
+			new Setting(editDetails)
+				.setName("层级")
+				.addDropdown((dropdown) => dropdown
+					.addOptions({ working: "工作记忆", long_term: "长期", core: "核心" })
+					.setValue(draft.effectiveTier)
+					.onChange((value) => {
+						draft.effectiveTier = value as MemoryTier;
+					}));
+			new Setting(editDetails)
+				.setName("有效性")
+				.addDropdown((dropdown) => dropdown
+					.addOptions({ active: "当前有效", historical: "历史状态", uncertain: "待确认" })
+					.setValue(draft.validity)
+					.onChange((value) => {
+						draft.validity = value as MemoryValidity;
+					}));
+			new Setting(editDetails)
 				.setName("审核备注")
 				.addTextArea((text) => {
 					text.inputEl.rows = 2;
@@ -161,7 +200,14 @@ export class MemoryReviewModal extends Modal {
 			if (!draft) {
 				throw new Error(`缺少断言审核状态：${assertion.id}`);
 			}
-			return { assertionId: assertion.id, ...draft };
+			return {
+				assertionId: assertion.id,
+				status: draft.status,
+				effectiveValue: draft.effectiveValue,
+				note: draft.note,
+				effectiveTier: draft.effectiveTier,
+				validity: draft.validity
+			};
 		});
 	}
 
@@ -172,4 +218,18 @@ export class MemoryReviewModal extends Modal {
 		}
 		return counts;
 	}
+}
+
+function formatReviewTemporal(temporal: { validFrom?: string; validUntil?: string } | undefined): string {
+	if (!temporal) {
+		return "";
+	}
+	const parts: string[] = [];
+	if (temporal.validFrom) {
+		parts.push(`从 ${temporal.validFrom}`);
+	}
+	if (temporal.validUntil) {
+		parts.push(`至 ${temporal.validUntil}`);
+	}
+	return parts.join(" ");
 }

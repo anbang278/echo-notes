@@ -245,10 +245,25 @@ import {
 	sanitizeMemoryFileName
 } from "../src/memory/memory-output";
 import {
+	MEMORY_CANDIDATE_SCHEMA_VERSION,
 	MEMORY_EXTRACTION_PROMPT_VERSION,
-	MEMORY_SCHEMA_VERSION,
+	MEMORY_PROPOSED_TIERS,
+	MEMORY_TYPES,
+	isLongTermMemory,
+	type MemoryAssertion,
 	type MemoryCandidatePackage
 } from "../src/memory/memory-types";
+import {
+	evaluateMemoryAdmission,
+	recommendAdmission
+} from "../src/memory/admission/memory-admission";
+import { suggestMemoryRelations } from "../src/memory/relations/memory-relation-suggestion";
+import { rankMemories } from "../src/memory/context/context-ranking";
+import {
+	computeReviewAfter,
+	getWorkingMemoryReviewState,
+	WORKING_MEMORY_REVIEW_AFTER_DAYS
+} from "../src/memory/evolution/memory-decay";
 import {
 	MEMORY_REVIEW_MANAGED_END,
 	MEMORY_REVIEW_MANAGED_START,
@@ -273,7 +288,8 @@ import {
 	renderMemoryRelationStore,
 	resolveMemoryRelations,
 	revokeMemoryRelation,
-	stripMemoryRelationEvidence
+	stripMemoryRelationEvidence,
+	type MemoryRelationEndpoint
 } from "../src/memory/memory-relation";
 import {
 	MEMORY_TASK_TIMEOUT_MS,
@@ -560,6 +576,8 @@ const parsedMemoryExtraction = parseMemoryExtractionResponse(
 				subjectType: "person",
 				subjectName: "张三",
 				category: "responsibility",
+				memoryType: "fact",
+				proposedTier: "long_term",
 				predicate: "任职",
 				value: "星海科技产品负责人，负责协作工具",
 				confidence: 0.92,
@@ -573,7 +591,7 @@ assert.equal(parsedMemoryExtraction.assertions.length, 1);
 assert.equal(parsedMemoryExtraction.assertions[0].subjectType, "person");
 assert.throws(
 	() => parseMemoryExtractionResponse(
-		'{"assertions":[{"subjectType":"person","subjectName":"张三","category":"responsibility","predicate":"任职","value":"不存在","confidence":0.9,"evidenceQuote":"输入中不存在的证据"}]}',
+		'{"assertions":[{"subjectType":"person","subjectName":"张三","category":"responsibility","memoryType":"fact","proposedTier":"long_term","predicate":"任职","value":"不存在","confidence":0.9,"evidenceQuote":"输入中不存在的证据"}]}',
 		memoryExtractionSource
 	),
 	/无法在本次输入中定位/
@@ -584,6 +602,8 @@ const partiallyGroundedMemoryExtraction = JSON.stringify({
 			subjectType: "user",
 			subjectName: "Echo Notes 验收用户",
 			category: "background",
+			memoryType: "fact",
+			proposedTier: "long_term",
 			predicate: "身份为",
 			value: "本次会话的初始化用户",
 			confidence: 0.9,
@@ -593,6 +613,8 @@ const partiallyGroundedMemoryExtraction = JSON.stringify({
 			subjectType: "project",
 			subjectName: "Hrelease项目",
 			category: "status",
+			memoryType: "decision",
+			proposedTier: "working",
 			predicate: "已确认上线日期为",
 			value: "2026年8月15日",
 			confidence: 0.9,
@@ -626,7 +648,7 @@ assert.throws(
 );
 
 const memoryCandidate: MemoryCandidatePackage = {
-	schemaVersion: MEMORY_SCHEMA_VERSION,
+	schemaVersion: MEMORY_CANDIDATE_SCHEMA_VERSION,
 	id: "memory-test",
 	fingerprint: createStableFingerprint(memoryExtractionSource),
 	createdAt: "2026-07-29T08:00:00.000Z",
@@ -651,13 +673,106 @@ const renderedMemoryCandidate = renderMemoryCandidate(memoryCandidate);
 assert.deepEqual(parseMemoryCandidate(renderedMemoryCandidate), memoryCandidate);
 assert.match(renderedMemoryCandidate, /echo-memory-data:start/);
 assert.match(renderedMemoryCandidate, /证据校验拒绝：1 条/);
+assert.match(renderedMemoryCandidate, /记忆类型/);
+assert.match(renderedMemoryCandidate, /时效/);
+assert.match(renderedMemoryCandidate, /事实/);
+assert.match(renderedMemoryCandidate, /长期/);
+assert.throws(
+	() => parseMemoryExtractionResponse(
+		'{"assertions":[{"subjectType":"person","subjectName":"张三","category":"responsibility","predicate":"任职","value":"星海科技产品负责人","confidence":0.9,"evidenceQuote":"张三在星海科技担任产品负责人"}]}',
+		memoryExtractionSource
+	),
+	/assertions\[0\]\.memoryType/
+);
+const fullV2MemoryResponse = JSON.stringify({
+	assertions: [{
+		subjectType: "person",
+		subjectName: "张三",
+		category: "responsibility",
+		memoryType: "decision",
+		proposedTier: "working",
+		predicate: "任职",
+		value: "星海科技产品负责人",
+		confidence: 0.9,
+		evidenceQuote: "张三在星海科技担任产品负责人",
+		whyRemember: "反映长期职责分工",
+		temporal: { validFrom: "2026-07-01", validUntil: "2026-08-01" }
+	}]
+});
+const parsedFullV2Memory = parseMemoryExtractionResponse(fullV2MemoryResponse, memoryExtractionSource);
+assert.equal(parsedFullV2Memory.assertions[0].memoryType, "decision");
+assert.equal(parsedFullV2Memory.assertions[0].whyRemember, "反映长期职责分工");
+assert.deepEqual(parsedFullV2Memory.assertions[0].temporal, { validFrom: "2026-07-01", validUntil: "2026-08-01" });
+const whyRememberOptionalResponse = parseMemoryExtractionResponse(
+	JSON.stringify({
+		assertions: [{
+			...JSON.parse(fullV2MemoryResponse).assertions[0],
+			whyRemember: undefined,
+			temporal: undefined
+		}]
+	}),
+	memoryExtractionSource
+);
+assert.equal(whyRememberOptionalResponse.assertions[0].whyRemember, undefined);
+assert.equal(whyRememberOptionalResponse.assertions[0].temporal, undefined);
+assert.throws(
+	() => parseMemoryExtractionResponse(
+		JSON.stringify({
+			assertions: [{
+				...JSON.parse(fullV2MemoryResponse).assertions[0],
+				temporal: { validFrom: "2026-08-01", validUntil: "2026-07-01" }
+			}]
+		}),
+		memoryExtractionSource
+	),
+	/validFrom 不能晚于/
+);
+const legacyV1Candidate: MemoryCandidatePackage = {
+	schemaVersion: 1,
+	id: "memory-legacy",
+	fingerprint: "legacy-fingerprint",
+	createdAt: "2026-07-01T00:00:00.000Z",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	traceIds: [],
+	source: {
+		transcriptPath: "Meetings/Legacy.transcript.md",
+		transcriptTitle: "Legacy.transcript",
+		analysisTemplateIds: []
+	},
+	assertions: [{
+		subjectType: "person",
+		subjectName: "张三",
+		category: "responsibility",
+		predicate: "任职",
+		value: "星海科技产品负责人",
+		confidence: 0.9,
+		evidenceQuote: "张三在星海科技担任产品负责人",
+		id: "assertion-legacy",
+		observedAt: "2026-07-01T00:00:00.000Z",
+		sourcePath: "Meetings/Legacy.transcript.md",
+		chunkIndex: 1
+	}]
+};
+const parsedLegacyV1Candidate = parseMemoryCandidate(renderMemoryCandidate(legacyV1Candidate));
+assert.equal(parsedLegacyV1Candidate.schemaVersion, 1);
+assert.equal(parsedLegacyV1Candidate.assertions[0].memoryType, undefined);
+assert.equal(parsedLegacyV1Candidate.assertions[0].proposedTier, undefined);
+assert.equal(parsedLegacyV1Candidate.assertions[0].whyRemember, undefined);
+assert.equal(parsedLegacyV1Candidate.assertions[0].temporal, undefined);
+assert.equal(isLongTermMemory(undefined), true, "legacy 断言应按长期处理以保持画像兼容");
+assert.equal(isLongTermMemory("long_term"), true);
+assert.equal(isLongTermMemory("core_candidate"), true);
+assert.equal(isLongTermMemory("working"), false);
+assert.deepEqual(MEMORY_TYPES, ["fact", "decision", "preference", "belief", "experience", "goal"]);
+assert.deepEqual(MEMORY_PROPOSED_TIERS, ["working", "long_term", "core_candidate"]);
 const candidatePath = "Echo Memory/02 记忆候选/2026-07-29 Test abc123.md";
 const reviewPath = getMemoryReviewPath(candidatePath);
 assert.equal(reviewPath, "Echo Memory/02 记忆候选/2026-07-29 Test abc123.review.md");
 assert.equal(getCandidatePathFromReviewPath(reviewPath), candidatePath);
 assert.throws(() => getMemoryReviewPath(reviewPath), /非审核 Markdown/);
 assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /审核：\[\[Echo Memory\/02 记忆候选\/2026-07-29 Test abc123\.review\.md\]\]/);
-assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /审核当前记忆候选/);
+assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /打开当前记忆候选详情/);
 assert.match(renderMemoryCandidate(memoryCandidate, reviewPath), /立即审核/);
 
 const initialMemoryReview = createMemoryReview(memoryCandidate, candidatePath, "2026-07-29T08:10:00.000Z");
@@ -954,7 +1069,7 @@ for (const commandName of [
 	"转写当前笔记全部音频",
 	"开始实时转写",
 	"停止实时转写",
-	"审核当前记忆候选",
+	"打开当前记忆候选详情",
 	"管理当前记忆关系"
 ]) {
 	assert.match(mainSource, new RegExp(`name: \\"${commandName}\\"`));
@@ -1699,6 +1814,116 @@ assert.equal(
 	getMemoryContextPackagePath(zhMemoryPaths, projectContextPreview, "zh"),
 	"相同事实快照应复用同一路径"
 );
+const workingContextEntry: MemoryAggregationEntry = {
+	...aggregateProjectNew,
+	assertion: {
+		...aggregateProjectNew.assertion,
+		id: "assertion-working",
+		memoryType: "decision",
+		proposedTier: "working",
+		value: "当前阶段优先关系候选"
+	}
+};
+const legacyContextEntry: MemoryAggregationEntry = {
+	...aggregateProjectNew,
+	assertion: {
+		...aggregateProjectNew.assertion,
+		id: "assertion-legacy-context",
+		memoryType: undefined,
+		proposedTier: undefined,
+		value: "历史未分类记忆"
+	}
+};
+const typedContextEntries = [workingContextEntry, legacyContextEntry, aggregateProjectNew];
+const decisionOnlyContextPreview = buildMemoryContextPackagePreview(
+	typedContextEntries,
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS,
+		memoryTypes: ["decision"]
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.equal(decisionOnlyContextPreview.matchingCount, 1);
+assert.match(decisionOnlyContextPreview.managedBlock, /当前阶段优先关系候选/);
+const workingOnlyContextPreview = buildMemoryContextPackagePreview(
+	typedContextEntries,
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS,
+		proposedTiers: ["working"]
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.equal(workingOnlyContextPreview.matchingCount, 1);
+const longTermContextPreview = buildMemoryContextPackagePreview(
+	typedContextEntries,
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS,
+		proposedTiers: ["long_term"]
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.equal(longTermContextPreview.matchingCount, 2, "long_term 应包含 legacy 未定义时效的断言");
+const unfilteredContextPreview = buildMemoryContextPackagePreview(
+	typedContextEntries,
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS
+	},
+	"zh",
+	contextGeneratedAt
+);
+const emptyFilterContextPreview = buildMemoryContextPackagePreview(
+	typedContextEntries,
+	{
+		project: "",
+		person: "",
+		startDate: "",
+		endDate: "",
+		maxCharacters: MEMORY_CONTEXT_MIN_CHARACTERS,
+		memoryTypes: [],
+		proposedTiers: []
+	},
+	"zh",
+	contextGeneratedAt
+);
+assert.equal(unfilteredContextPreview.id, emptyFilterContextPreview.id, "空类型/时效筛选不应改变上下文包指纹");
+const workingTimelineEntry: MemoryAggregationEntry = {
+	...aggregateProjectNew,
+	assertion: {
+		...aggregateProjectNew.assertion,
+		id: "assertion-timeline-working",
+		proposedTier: "working",
+		value: "本阶段优先关系候选"
+	}
+};
+const workingAggregationCompilations = createMemoryAggregationCompilations(
+	[workingTimelineEntry],
+	zhMemoryPaths,
+	{},
+	"zh"
+);
+const workingTimeline = workingAggregationCompilations.find((item) => item.kind === "timeline");
+assert.ok(workingTimeline);
+assert.equal(workingTimeline.entryCount, 1);
+assert.match(workingTimeline.managedBlock, /工作记忆/);
 const initialContextDocument = renderInitialMemoryContextPackage(projectContextPreview, "zh")
 	.replace("## 人工内容\n\n", "## 人工内容\n\n保留这段 Agent 使用说明。\n\n");
 const updatedContextDocument = updateMemoryContextPackageDocument(initialContextDocument, dateContextPreview);
@@ -1758,6 +1983,8 @@ const memoryCheckpointResults: MemoryExtractionChunkResult[] = [
 				subjectType: "person",
 				subjectName: "张三",
 				category: "responsibility",
+				memoryType: "fact",
+				proposedTier: "long_term",
 				predicate: "负责",
 				value: "星海协作工具的产品规划",
 				confidence: 0.92,
@@ -1775,6 +2002,8 @@ const memoryCheckpointResults: MemoryExtractionChunkResult[] = [
 				subjectType: "user",
 				subjectName: "测试用户",
 				category: "mission-goal",
+				memoryType: "goal",
+				proposedTier: "long_term",
 				predicate: "近期目标",
 				value: "完成 Echo Memory 可靠性闭环",
 				confidence: 0.96,
@@ -6540,5 +6769,164 @@ assert.throws(
 	}),
 	/无法获取诊断包所在的本地文件夹/
 );
+
+// Echo Memory v2 准入、关系候选、上下文排序与工作记忆衰减。
+const admissionAssertion = (overrides: Partial<MemoryAssertion> = {}): MemoryAssertion => ({
+	id: "assertion-admission",
+	subjectType: "project",
+	subjectName: "Echo Notes",
+	category: "status",
+	predicate: "当前阶段",
+	value: "优先建设 Memory",
+	confidence: 0.8,
+	evidenceQuote: "当前阶段优先建设 Echo Memory 的准入与审核能力",
+	observedAt: "2026-08-15T00:00:00.000Z",
+	sourcePath: "Meetings/Test.transcript.md",
+	chunkIndex: 1,
+	memoryType: "decision",
+	proposedTier: "long_term",
+	...overrides
+});
+assert.equal(recommendAdmission(0), "low_priority");
+assert.equal(recommendAdmission(3), "low_priority");
+assert.equal(recommendAdmission(4), "working_candidate");
+assert.equal(recommendAdmission(7), "working_candidate");
+assert.equal(recommendAdmission(8), "long_term_candidate");
+assert.equal(recommendAdmission(10), "long_term_candidate");
+assert.equal(recommendAdmission(11), "core_candidate");
+assert.equal(recommendAdmission(12), "core_candidate");
+const lowPriorityAdmission = evaluateMemoryAdmission({
+	assertion: admissionAssertion({
+		subjectType: "organization",
+		subjectName: "通用知识",
+		category: "other",
+		memoryType: undefined,
+		proposedTier: "working",
+		temporal: { scope: "point" },
+		confidence: 0.4,
+		evidenceQuote: "RAG"
+	})
+});
+assert.equal(lowPriorityAdmission.recommendation, "low_priority");
+const coreCandidateAdmission = evaluateMemoryAdmission({
+	assertion: admissionAssertion({
+		subjectType: "user",
+		subjectName: "Anbang",
+		category: "mission-goal",
+		memoryType: "goal",
+		proposedTier: "core_candidate",
+		temporal: { scope: "ongoing" },
+		confidence: 0.95,
+		evidenceQuote: "AI 可以提出记忆，但用户拥有长期记忆的最终解释权"
+	})
+});
+assert.equal(coreCandidateAdmission.recommendation, "core_candidate");
+assert.notEqual(coreCandidateAdmission.recommendation, "core");
+assert.equal(coreCandidateAdmission.score, 12);
+assert.ok(MEMORY_PROPOSED_TIERS.includes("core_candidate"));
+assert.ok(!MEMORY_PROPOSED_TIERS.includes("core"));
+const duplicateAdmission = evaluateMemoryAdmission({
+	assertion: admissionAssertion(),
+	existingAssertions: [admissionAssertion()]
+});
+assert.equal(duplicateAdmission.dimensions.novelty, 0);
+
+const relationEndpoint = (overrides: Partial<MemoryRelationEndpoint> = {}): MemoryRelationEndpoint => ({
+	candidateId: "memory-a",
+	candidatePath: "Echo Memory/02 记忆候选/a.md",
+	reviewPath: "Echo Memory/02 记忆候选/a.review.md",
+	assertionId: "assertion-a",
+	transcriptPath: "Meetings/a.transcript.md",
+	subjectType: "project",
+	subjectName: "Echo Notes",
+	predicate: "当前阶段",
+	effectiveValue: "优先建设 Memory",
+	observedAt: "2026-08-15T00:00:00.000Z",
+	...overrides
+});
+const repeatedTarget = relationEndpoint({
+	candidateId: "memory-b",
+	candidatePath: "Echo Memory/02 记忆候选/b.md",
+	reviewPath: "Echo Memory/02 记忆候选/b.review.md",
+	assertionId: "assertion-b",
+	transcriptPath: "Meetings/b.transcript.md",
+	observedAt: "2026-08-10T00:00:00.000Z"
+});
+assert.equal(
+	suggestMemoryRelations(relationEndpoint(), [repeatedTarget]).some((item) => item.kind === "repeated_evidence"),
+	true
+);
+const conflictTarget = relationEndpoint({
+	candidateId: "memory-b",
+	candidatePath: "Echo Memory/02 记忆候选/b.md",
+	reviewPath: "Echo Memory/02 记忆候选/b.review.md",
+	assertionId: "assertion-b",
+	transcriptPath: "Meetings/b.transcript.md",
+	effectiveValue: "优先提升转写可靠性",
+	observedAt: "2026-07-10T00:00:00.000Z"
+});
+const conflictSuggestions = suggestMemoryRelations(relationEndpoint(), [conflictTarget]);
+assert.equal(conflictSuggestions.some((item) => item.kind === "potential_conflict"), true);
+assert.ok(conflictSuggestions.every((item) => !item.suggestedTypes.includes("supplements") || item.suggestedTypes.length > 1));
+
+const ranked = rankMemories([
+	{ assertion: admissionAssertion({ id: "a", subjectName: "Echo Notes" }), tier: "working", authority: "evidence_backed", validity: "active", id: "a" },
+	{ assertion: admissionAssertion({ id: "b", subjectName: "Echo Notes" }), tier: "core", authority: "core_declared", validity: "active", id: "b" },
+	{ assertion: admissionAssertion({ id: "c", subjectName: "Echo Notes" }), tier: "long_term", authority: "user_confirmed", validity: "active", id: "c" }
+], "planning");
+assert.equal(ranked[0].entry.id, "b");
+assert.ok(ranked[0].reasons.some((reason) => reason.includes("core")));
+
+assert.equal(WORKING_MEMORY_REVIEW_AFTER_DAYS, 30);
+const workingReviewAfter = computeReviewAfter("2026-08-15T00:00:00.000Z");
+assert.match(workingReviewAfter, /^2026-09-14/);
+assert.equal(
+	getWorkingMemoryReviewState({ effectiveTier: "working", reviewedAt: "2026-08-15T00:00:00.000Z" }, new Date("2026-10-01T00:00:00.000Z")).needsReview,
+	true
+);
+assert.equal(
+	getWorkingMemoryReviewState({ effectiveTier: "working", reviewedAt: "2026-08-15T00:00:00.000Z" }, new Date("2026-09-01T00:00:00.000Z")).needsReview,
+	false
+);
+assert.equal(
+	getWorkingMemoryReviewState({ effectiveTier: "long_term", reviewedAt: "2026-08-15T00:00:00.000Z" }).needsReview,
+	false
+);
+
+const reviewV2Candidate: MemoryCandidatePackage = {
+	schemaVersion: MEMORY_CANDIDATE_SCHEMA_VERSION,
+	id: "memory-review-v2",
+	fingerprint: "fp-review-v2",
+	createdAt: "2026-08-15T00:00:00.000Z",
+	provider: "aliyun-bailian",
+	model: "deepseek-v4-pro",
+	traceIds: [],
+	source: {
+		transcriptPath: "Meetings/ReviewV2.transcript.md",
+		transcriptTitle: "ReviewV2.transcript",
+		analysisTemplateIds: []
+	},
+	assertions: [admissionAssertion({ id: "assertion-review-v2", proposedTier: "core_candidate" })]
+};
+const reviewV2Created = createMemoryReview(reviewV2Candidate, "Echo Memory/02 记忆候选/ReviewV2.md");
+assert.equal(reviewV2Created.reviews["assertion-review-v2"].authority, "evidence_backed");
+const reviewV2Promoted = applyMemoryReviewUpdates(reviewV2Created, reviewV2Candidate, [{
+	assertionId: "assertion-review-v2",
+	status: "approved",
+	effectiveValue: reviewV2Candidate.assertions[0].value,
+	note: "",
+	effectiveTier: "core"
+}]);
+assert.equal(reviewV2Promoted.reviews["assertion-review-v2"].authority, "core_declared");
+assert.equal(reviewV2Promoted.reviews["assertion-review-v2"].effectiveTier, "core");
+assert.equal(reviewV2Promoted.reviews["assertion-review-v2"].history.at(-1)?.type, "promoted_to_core");
+const reviewV2Approved = applyMemoryReviewUpdates(reviewV2Created, reviewV2Candidate, [{
+	assertionId: "assertion-review-v2",
+	status: "approved",
+	effectiveValue: reviewV2Candidate.assertions[0].value,
+	note: ""
+}]);
+assert.equal(reviewV2Approved.reviews["assertion-review-v2"].authority, "user_confirmed");
+assert.equal(reviewV2Approved.reviews["assertion-review-v2"].effectiveTier, undefined);
 
 console.log("Smoke tests passed.");

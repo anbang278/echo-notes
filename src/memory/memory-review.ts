@@ -4,11 +4,14 @@ import {
 	MEMORY_REVIEW_STATUSES,
 	type MemoryAssertion,
 	type MemoryAssertionReview,
+	type MemoryAuthority,
 	type MemoryCandidatePackage,
 	type MemoryReviewEvent,
+	type MemoryReviewEventType,
 	type MemoryReviewPackage,
 	type MemoryReviewStatus,
-	type MemoryReviewUpdate
+	type MemoryReviewUpdate,
+	type MemoryValidity
 } from "./memory-types";
 
 export const MEMORY_REVIEW_MANAGED_START = "<!-- echo-memory-review:managed:start -->";
@@ -44,6 +47,7 @@ export function createMemoryReview(
 	for (const assertion of candidate.assertions) {
 		const event: MemoryReviewEvent = {
 			at,
+			type: "created",
 			status: "pending",
 			effectiveValue: assertion.value,
 			note: ""
@@ -54,6 +58,8 @@ export function createMemoryReview(
 			effectiveValue: event.effectiveValue,
 			note: event.note,
 			reviewedAt: at,
+			authority: "evidence_backed",
+			validity: "active",
 			history: [event]
 		};
 	}
@@ -115,20 +121,48 @@ export function applyMemoryReviewUpdates(
 			throw new Error(`断言 ${update.assertionId} 的修正值不能为空。`);
 		}
 		const note = update.note.trim();
+		const nextAuthority = resolveReviewAuthority(update, current);
+		const nextValidity = resolveReviewValidity(update, current);
+		const nextEffectiveType = update.effectiveType ?? current.effectiveType;
+		const nextEffectiveTier = update.effectiveTier ?? current.effectiveTier;
+		const nextValidFrom = update.validFrom ?? current.validFrom;
+		const nextValidUntil = update.validUntil ?? current.validUntil;
 		if (
 			current.status === update.status &&
 			current.effectiveValue === effectiveValue &&
-			current.note === note
+			current.note === note &&
+			current.authority === nextAuthority &&
+			current.validity === nextValidity &&
+			current.effectiveType === nextEffectiveType &&
+			current.effectiveTier === nextEffectiveTier &&
+			current.validFrom === nextValidFrom &&
+			current.validUntil === nextValidUntil
 		) {
 			continue;
 		}
-		const event: MemoryReviewEvent = { at, status: update.status, effectiveValue, note };
+		const event: MemoryReviewEvent = {
+			at,
+			type: getNextReviewEventType(current, update),
+			status: update.status,
+			effectiveValue,
+			note,
+			...(nextEffectiveType !== undefined ? { effectiveType: nextEffectiveType } : {}),
+			...(nextEffectiveTier !== undefined ? { effectiveTier: nextEffectiveTier } : {}),
+			authority: nextAuthority,
+			validity: nextValidity
+		};
 		nextReviews[update.assertionId] = {
 			assertionId: update.assertionId,
 			status: update.status,
 			effectiveValue,
 			note,
 			reviewedAt: at,
+			...(nextEffectiveType !== undefined ? { effectiveType: nextEffectiveType } : {}),
+			...(nextEffectiveTier !== undefined ? { effectiveTier: nextEffectiveTier } : {}),
+			authority: nextAuthority,
+			validity: nextValidity,
+			...(nextValidFrom !== undefined ? { validFrom: nextValidFrom } : {}),
+			...(nextValidUntil !== undefined ? { validUntil: nextValidUntil } : {}),
 			history: [...current.history, event]
 		};
 		changed = true;
@@ -137,6 +171,62 @@ export function applyMemoryReviewUpdates(
 	return changed
 		? { ...reconciled, updatedAt: at, reviews: nextReviews }
 		: reconciled;
+}
+
+function resolveReviewAuthority(
+	update: MemoryReviewUpdate,
+	current: MemoryAssertionReview
+): MemoryAuthority {
+	if (update.effectiveTier === "core") {
+		return "core_declared";
+	}
+	if (update.authority) {
+		return update.authority;
+	}
+	if (update.status === "approved") {
+		return "user_confirmed";
+	}
+	return current.authority ?? "evidence_backed";
+}
+
+function resolveReviewValidity(
+	update: MemoryReviewUpdate,
+	current: MemoryAssertionReview
+): MemoryValidity {
+	return update.validity ?? current.validity ?? "active";
+}
+
+function getNextReviewEventType(
+	current: MemoryAssertionReview,
+	update: MemoryReviewUpdate
+): MemoryReviewEventType {
+	if (update.status === "rejected") {
+		return "rejected";
+	}
+	if (update.status === "pending") {
+		return "reset";
+	}
+	const previousTier = current.effectiveTier;
+	const nextTier = update.effectiveTier;
+	if (nextTier === "core" && previousTier !== "core") {
+		return "promoted_to_core";
+	}
+	if (previousTier === "core" && nextTier && nextTier !== "core") {
+		return "demoted_from_core";
+	}
+	if (nextTier && nextTier !== previousTier) {
+		return "tier_changed";
+	}
+	if (update.effectiveType && update.effectiveType !== current.effectiveType) {
+		return "type_changed";
+	}
+	if (update.validity && update.validity !== current.validity) {
+		return "validity_changed";
+	}
+	if (update.effectiveValue !== current.effectiveValue) {
+		return "corrected";
+	}
+	return "approved";
 }
 
 export function getApprovedMemoryAssertions(

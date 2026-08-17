@@ -4,7 +4,18 @@ import {
 } from "./memory-relation";
 import { createStableFingerprint, insertOrReplaceManagedBlock, normalizeEntityName } from "./memory-output";
 import type { MemoryAggregationEntry } from "./memory-aggregation";
-import type { MemoryPaths } from "./memory-types";
+import { rankMemories, type RankableMemory } from "./context/context-ranking";
+import {
+	MEMORY_PROPOSED_TIERS,
+	MEMORY_TYPES,
+	formatProposedTier,
+	formatMemoryType,
+	isLongTermMemory,
+	type ContextPurpose,
+	type MemoryPaths,
+	type ProposedMemoryTier,
+	type MemoryType
+} from "./memory-types";
 
 export const MEMORY_CONTEXT_MANAGED_START = "<!-- echo-memory-context:managed:start -->";
 export const MEMORY_CONTEXT_MANAGED_END = "<!-- echo-memory-context:managed:end -->";
@@ -18,6 +29,9 @@ export interface MemoryContextFilterOptions {
 	startDate: string;
 	endDate: string;
 	maxCharacters: number;
+	memoryTypes?: MemoryType[];
+	proposedTiers?: ProposedMemoryTier[];
+	purpose?: ContextPurpose;
 }
 
 export interface MemoryContextFilterChoices {
@@ -63,6 +77,7 @@ export function buildMemoryContextPackagePreview(
 	const normalizedOptions = validateAndNormalizeOptions(options);
 	const matchingEntries = sortContextEntries(
 		entries.filter((entry) => matchesContextFilters(entry, normalizedOptions))
+		, normalizedOptions.purpose ?? "general"
 	);
 	const id = `context-${createStableFingerprint(JSON.stringify({
 		options: normalizedOptions,
@@ -191,18 +206,26 @@ function renderMemoryContextManagedBlock(
 	omittedCount: number,
 	language: "zh" | "en"
 ): string {
+	const typeFilter = options.memoryTypes?.map((type) => formatMemoryType(type, language));
+	const horizonFilter = options.proposedTiers?.map((horizon) => formatProposedTier(horizon, language));
 	const scope = language === "en"
 		? [
 			`- Project: ${options.project || "Any"}`,
 			`- Person: ${options.person || "Any"}`,
 			`- Date range: ${options.startDate || "Any"} to ${options.endDate || "Any"}`,
-			`- Character budget: ${options.maxCharacters}`
+			`- Character budget: ${options.maxCharacters}`,
+			`- Purpose: ${options.purpose ?? "general"}`,
+			...(typeFilter && typeFilter.length > 0 ? [`- Memory types: ${typeFilter.join(", ")}`] : []),
+			...(horizonFilter && horizonFilter.length > 0 ? [`- Horizon: ${horizonFilter.join(", ")}`] : [])
 		]
 		: [
 			`- 项目：${options.project || "不限"}`,
 			`- 人物：${options.person || "不限"}`,
 			`- 时间范围：${options.startDate || "不限"} 至 ${options.endDate || "不限"}`,
-			`- 字符预算：${options.maxCharacters}`
+			`- 字符预算：${options.maxCharacters}`,
+			`- 用途：${options.purpose ?? "general"}`,
+			...(typeFilter && typeFilter.length > 0 ? [`- 记忆类型：${typeFilter.join("、")}`] : []),
+			...(horizonFilter && horizonFilter.length > 0 ? [`- 时效：${horizonFilter.join("、")}`] : [])
 		];
 	const entryLines = entries.length > 0
 		? entries.flatMap((entry) => renderContextEntry(entry, language))
@@ -229,9 +252,17 @@ function renderContextEntry(entry: MemoryAggregationEntry, language: "zh" | "en"
 	const assertion = entry.assertion;
 	const lines = [
 		`- ${escapeMarkdownInline(assertion.observedAt)} · **${escapeMarkdownInline(assertion.subjectName)} · ${escapeMarkdownInline(assertion.predicate)}**：${escapeMarkdownInline(assertion.value)}`,
-		`  - ${language === "en" ? "Evidence" : "证据"}：“${escapeMarkdownInline(assertion.evidenceQuote)}”`,
-		`  - ${language === "en" ? "Sources" : "来源"}：[[${assertion.sourcePath}|transcript]] · [[${entry.candidatePath}|${entry.candidateId}]] · [[${entry.reviewPath}|review]]`
+		`  - ${language === "en" ? "Type" : "类型"}：${formatMemoryType(assertion.memoryType, language)} · ${language === "en" ? "Horizon" : "时效"}：${formatProposedTier(assertion.proposedTier, language)}`,
+		`  - ${language === "en" ? "Evidence" : "证据"}：“${escapeMarkdownInline(assertion.evidenceQuote)}”`
 	];
+	if (assertion.whyRemember) {
+		lines.push(`  - ${language === "en" ? "Why remember" : "准入理由"}：${escapeMarkdownInline(assertion.whyRemember)}`);
+	}
+	const temporalText = formatTemporalText(assertion.temporal, language);
+	if (temporalText) {
+		lines.push(`  - ${language === "en" ? "Valid" : "时间范围"}：${temporalText}`);
+	}
+	lines.push(`  - ${language === "en" ? "Sources" : "来源"}：[[${assertion.sourcePath}|transcript]] · [[${entry.candidatePath}|${entry.candidateId}]] · [[${entry.reviewPath}|review]]`);
 	for (const annotation of entry.relationAnnotations) {
 		const label = language === "en" ? annotation.type : MEMORY_RELATION_TYPE_LABELS[annotation.type];
 		lines.push(
@@ -265,7 +296,14 @@ function validateAndNormalizeOptions(options: MemoryContextFilterOptions): Memor
 	if (normalized.startDate && normalized.endDate && normalized.startDate > normalized.endDate) {
 		throw new Error("上下文开始日期不能晚于结束日期。");
 	}
-	return normalized;
+	const memoryTypes = normalizeEnumFilter(options.memoryTypes, MEMORY_TYPES);
+	const proposedTiers = normalizeEnumFilter(options.proposedTiers, MEMORY_PROPOSED_TIERS);
+	return {
+		...normalized,
+		purpose: options.purpose ?? "general",
+		...(memoryTypes.length > 0 ? { memoryTypes } : {}),
+		...(proposedTiers.length > 0 ? { proposedTiers } : {})
+	};
 }
 
 function matchesContextFilters(
@@ -280,6 +318,21 @@ function matchesContextFilters(
 	if (subjectFilters.length > 0 && !subjectFilters.includes(entrySubject)) {
 		return false;
 	}
+	if (options.memoryTypes && options.memoryTypes.length > 0) {
+		if (!entry.assertion.memoryType || !options.memoryTypes.includes(entry.assertion.memoryType)) {
+			return false;
+		}
+	}
+	if (options.proposedTiers && options.proposedTiers.length > 0) {
+		const matchesHorizon = options.proposedTiers.some((horizon) =>
+			horizon === "working"
+				? entry.assertion.proposedTier === "working"
+				: isLongTermMemory(entry.assertion.proposedTier)
+		);
+		if (!matchesHorizon) {
+			return false;
+		}
+	}
 	if (!options.startDate && !options.endDate) {
 		return true;
 	}
@@ -291,29 +344,26 @@ function matchesContextFilters(
 	);
 }
 
-function sortContextEntries(entries: readonly MemoryAggregationEntry[]): MemoryAggregationEntry[] {
-	return [...entries].sort((left, right) =>
-		compareObservedAtDescending(left.assertion.observedAt, right.assertion.observedAt) ||
-		normalizeEntityName(left.assertion.subjectName).localeCompare(normalizeEntityName(right.assertion.subjectName)) ||
-		left.assertion.predicate.localeCompare(right.assertion.predicate) ||
-		left.candidateId.localeCompare(right.candidateId) ||
-		left.assertion.id.localeCompare(right.assertion.id)
-	);
-}
-
-function compareObservedAtDescending(left: string, right: string): number {
-	const leftTime = Date.parse(left);
-	const rightTime = Date.parse(right);
-	if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
-		return rightTime - leftTime;
-	}
-	if (Number.isFinite(leftTime)) {
-		return -1;
-	}
-	if (Number.isFinite(rightTime)) {
-		return 1;
-	}
-	return right.localeCompare(left);
+function sortContextEntries(
+	entries: readonly MemoryAggregationEntry[],
+	purpose: ContextPurpose
+): MemoryAggregationEntry[] {
+	const wrapped = entries.map((entry) => ({
+		entry,
+		rankable: {
+			assertion: entry.assertion,
+			id: `${entry.candidateId}\n${entry.assertion.id}`,
+			tier: entry.assertion.proposedTier === "working" ? "working" : "long_term",
+			authority: "user_confirmed",
+			validity: "active"
+		} satisfies RankableMemory
+	}));
+	const ranked = rankMemories(wrapped.map((item) => item.rankable), purpose);
+	const byId = new Map(wrapped.map((item) => [item.rankable.id, item.entry]));
+	return ranked.flatMap((item) => {
+		const entry = byId.get(item.entry.id);
+		return entry ? [entry] : [];
+	});
 }
 
 function getUniqueSubjectNames(
@@ -321,7 +371,7 @@ function getUniqueSubjectNames(
 	type: "project" | "person"
 ): string[] {
 	const names = new Map<string, string>();
-	for (const entry of sortContextEntries(entries)) {
+	for (const entry of sortContextEntries(entries, "general")) {
 		if (entry.assertion.subjectType !== type) {
 			continue;
 		}
@@ -333,6 +383,32 @@ function getUniqueSubjectNames(
 
 function normalizeDisplayName(value: string): string {
 	return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+
+function normalizeEnumFilter<T extends string>(value: T[] | undefined, allowed: readonly T[]): T[] {
+	if (!value) {
+		return [];
+	}
+	const order = new Map(allowed.map((item, index) => [item, index]));
+	return [...new Set(value.filter((item) => order.has(item)))]
+		.sort((left, right) => (order.get(left) ?? 0) - (order.get(right) ?? 0));
+}
+
+function formatTemporalText(
+	temporal: { validFrom?: string; validUntil?: string } | undefined,
+	language: "zh" | "en"
+): string {
+	if (!temporal) {
+		return "";
+	}
+	const parts: string[] = [];
+	if (temporal.validFrom) {
+		parts.push(`${language === "en" ? "from" : "从"} ${temporal.validFrom}`);
+	}
+	if (temporal.validUntil) {
+		parts.push(`${language === "en" ? "to" : "至"} ${temporal.validUntil}`);
+	}
+	return parts.join(" ");
 }
 
 function escapeMarkdownInline(value: string): string {

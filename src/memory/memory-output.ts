@@ -1,11 +1,20 @@
 import {
+	MEMORY_CANDIDATE_LEGACY_SCHEMA_VERSIONS,
+	MEMORY_CANDIDATE_SCHEMA_VERSION,
 	MEMORY_CATEGORIES,
-	MEMORY_SCHEMA_VERSION,
+	MEMORY_PROPOSED_TIERS,
 	MEMORY_SUBJECT_TYPES,
+	MEMORY_TEMPORAL_SCOPES,
+	MEMORY_TYPES,
+	formatProposedTier,
+	formatMemoryType,
 	type MemoryAssertion,
 	type MemoryCandidatePackage,
 	type MemoryExtractionResponse,
+	type ProposedMemoryTier,
 	type MemorySubjectType,
+	type MemoryTemporal,
+	type MemoryType,
 	type RawMemoryAssertion
 } from "./memory-types";
 
@@ -15,6 +24,9 @@ export const MEMORY_MANAGED_START = "<!-- echo-memory:managed:start -->";
 export const MEMORY_MANAGED_END = "<!-- echo-memory:managed:end -->";
 export const MEMORY_MEETING_START = "<!-- echo-memory-meeting:start -->";
 export const MEMORY_MEETING_END = "<!-- echo-memory-meeting:end -->";
+
+const MAX_WHY_REMEMBER_CHARACTERS = 2_000;
+const MAX_TEMPORAL_VALUE_CHARACTERS = 64;
 
 export interface RejectedMemoryAssertion {
 	index: number;
@@ -89,9 +101,13 @@ export function renderMemoryCandidate(candidate: MemoryCandidatePackage, reviewP
 			assertion.predicate,
 			assertion.value,
 			assertion.confidence.toFixed(2),
+			formatMemoryType(assertion.memoryType),
+			formatProposedTier(assertion.proposedTier),
+			assertion.whyRemember ?? "",
+			formatTemporal(assertion.temporal),
 			assertion.evidenceQuote
 		].map(escapeTableCell).join(" | "))
-		: ["- | - | - | 未提取到可存档断言 | - | -"];
+		: ["- | - | - | 未提取到可存档断言 | - | - | - | - | - | -"];
 
 	return [
 		"---",
@@ -110,10 +126,10 @@ export function renderMemoryCandidate(candidate: MemoryCandidatePackage, reviewP
 			? [`证据校验拒绝：${candidate.rejectedAssertionCount} 条`]
 			: []),
 		...(reviewPath ? [`审核：[[${reviewPath}]]`] : []),
-		...(reviewPath ? ["审核命令：Echo Notes：审核当前记忆候选（也可在任务中心点击“立即审核”）"] : []),
+		...(reviewPath ? ["审核命令：Echo Notes：打开当前记忆候选详情（也可在任务中心点击“立即审核”）"] : []),
 		"",
-		"| 类型 | 主体 | 关系/属性 | 内容 | 置信度 | 原文证据 |",
-		"| --- | --- | --- | --- | ---: | --- |",
+		"| 主体类型 | 主体 | 关系/属性 | 内容 | 置信度 | 记忆类型 | 时效 | 准入理由 | 时间范围 | 原文证据 |",
+		"| --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- |",
 		...rows.map((row) => `| ${row} |`),
 		"",
 		MEMORY_CANDIDATE_DATA_START,
@@ -134,7 +150,11 @@ export function parseMemoryCandidate(content: string): MemoryCandidatePackage {
 
 	const block = content.slice(startIndex + MEMORY_CANDIDATE_DATA_START.length, endIndex);
 	const parsed = JSON.parse(extractJsonObject(block)) as unknown;
-	if (!isRecord(parsed) || parsed.schemaVersion !== MEMORY_SCHEMA_VERSION || !Array.isArray(parsed.assertions)) {
+	if (
+		!isRecord(parsed) ||
+		!isSupportedCandidateSchemaVersion(parsed.schemaVersion) ||
+		!Array.isArray(parsed.assertions)
+	) {
 		throw new Error("候选包 Schema 不受支持。");
 	}
 	if (typeof parsed.id !== "string" || typeof parsed.fingerprint !== "string" || !isRecord(parsed.source)) {
@@ -159,8 +179,9 @@ export function parseMemoryCandidate(content: string): MemoryCandidatePackage {
 		throw new Error("候选包来源或服务商元数据无效。");
 	}
 
+	const requireV2Fields = parsed.schemaVersion === MEMORY_CANDIDATE_SCHEMA_VERSION;
 	for (const assertion of parsed.assertions) {
-		if (!isStoredAssertion(assertion)) {
+		if (!isStoredAssertion(assertion, requireV2Fields)) {
 			throw new Error("候选包包含无效断言。");
 		}
 	}
@@ -219,6 +240,14 @@ function parseRawAssertion(value: unknown, index: number): RawMemoryAssertion {
 
 	const subjectType = readEnum(value.subjectType, MEMORY_SUBJECT_TYPES, `assertions[${index}].subjectType`);
 	const category = readEnum(value.category, MEMORY_CATEGORIES, `assertions[${index}].category`);
+	const memoryType = readEnum(value.memoryType, MEMORY_TYPES, `assertions[${index}].memoryType`);
+	const proposedTier = readEnum(value.proposedTier, MEMORY_PROPOSED_TIERS, `assertions[${index}].proposedTier`);
+	const whyRemember = readOptionalNonEmptyString(
+		value.whyRemember,
+		`assertions[${index}].whyRemember`,
+		MAX_WHY_REMEMBER_CHARACTERS
+	);
+	const temporal = readOptionalTemporal(value.temporal, `assertions[${index}].temporal`);
 	const assertion: RawMemoryAssertion = {
 		subjectType,
 		subjectName: readNonEmptyString(value.subjectName, `assertions[${index}].subjectName`),
@@ -226,13 +255,17 @@ function parseRawAssertion(value: unknown, index: number): RawMemoryAssertion {
 		predicate: readNonEmptyString(value.predicate, `assertions[${index}].predicate`),
 		value: readNonEmptyString(value.value, `assertions[${index}].value`),
 		confidence: readConfidence(value.confidence, `assertions[${index}].confidence`),
-		evidenceQuote: readNonEmptyString(value.evidenceQuote, `assertions[${index}].evidenceQuote`)
+		evidenceQuote: readNonEmptyString(value.evidenceQuote, `assertions[${index}].evidenceQuote`),
+		memoryType,
+		proposedTier,
+		...(whyRemember !== undefined ? { whyRemember } : {}),
+		...(temporal !== undefined ? { temporal } : {})
 	};
 
 	return assertion;
 }
 
-function isStoredAssertion(value: unknown): value is MemoryAssertion {
+function isStoredAssertion(value: unknown, requireV2Fields: boolean): value is MemoryAssertion {
 	return isRecord(value) &&
 		typeof value.id === "string" &&
 		typeof value.observedAt === "string" &&
@@ -245,7 +278,36 @@ function isStoredAssertion(value: unknown): value is MemoryAssertion {
 		typeof value.value === "string" && value.value.trim().length > 0 &&
 		typeof value.confidence === "number" && Number.isFinite(value.confidence) &&
 		value.confidence >= 0 && value.confidence <= 1 &&
-		typeof value.evidenceQuote === "string" && value.evidenceQuote.trim().length > 0;
+		typeof value.evidenceQuote === "string" && value.evidenceQuote.trim().length > 0 &&
+		(value.memoryType === undefined || isMemoryType(value.memoryType)) &&
+		(value.proposedTier === undefined || isProposedTier(value.proposedTier)) &&
+		(value.temporal === undefined || isMemoryTemporal(value.temporal)) &&
+		(value.whyRemember === undefined ||
+			(typeof value.whyRemember === "string" && value.whyRemember.trim().length > 0)) &&
+		(!requireV2Fields || (isMemoryType(value.memoryType) && isProposedTier(value.proposedTier)));
+}
+
+export function isMemoryType(value: unknown): value is MemoryType {
+	return typeof value === "string" && MEMORY_TYPES.includes(value as MemoryType);
+}
+
+export function isProposedTier(value: unknown): value is ProposedMemoryTier {
+	return typeof value === "string" && MEMORY_PROPOSED_TIERS.includes(value as ProposedMemoryTier);
+}
+
+export function isMemoryTemporal(value: unknown): value is MemoryTemporal {
+	return isRecord(value) &&
+		(value.validFrom === undefined ||
+			(typeof value.validFrom === "string" && value.validFrom.trim().length > 0)) &&
+		(value.validUntil === undefined ||
+			(typeof value.validUntil === "string" && value.validUntil.trim().length > 0)) &&
+		(value.scope === undefined ||
+			(typeof value.scope === "string" && MEMORY_TEMPORAL_SCOPES.includes(value.scope as never)));
+}
+
+function isSupportedCandidateSchemaVersion(value: unknown): value is number {
+	return typeof value === "number" &&
+		(value === MEMORY_CANDIDATE_SCHEMA_VERSION || MEMORY_CANDIDATE_LEGACY_SCHEMA_VERSIONS.has(value));
 }
 
 function extractJsonObject(text: string): string {
@@ -277,6 +339,83 @@ function readEnum<T extends string>(value: unknown, values: readonly T[], path: 
 		throw new Error(`${path} 不在允许的枚举范围内。`);
 	}
 	return value as T;
+}
+
+function readOptionalNonEmptyString(value: unknown, path: string, maxLength: number): string | undefined {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	const text = readNonEmptyString(value, path);
+	if (text.length > maxLength) {
+		throw new Error(`${path} 不能超过 ${maxLength} 字符。`);
+	}
+	return text;
+}
+
+function readOptionalTemporal(value: unknown, path: string): MemoryTemporal | undefined {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	if (!isRecord(value)) {
+		throw new Error(`${path} 必须是对象。`);
+	}
+	const validFrom = readOptionalDateString(value.validFrom, `${path}.validFrom`);
+	const validUntil = readOptionalDateString(value.validUntil, `${path}.validUntil`);
+	const scope = readOptionalScope(value.scope, `${path}.scope`);
+	if (validFrom === undefined && validUntil === undefined && scope === undefined) {
+		return undefined;
+	}
+	const fromTime = validFrom ? Date.parse(validFrom) : Number.NaN;
+	const toTime = validUntil ? Date.parse(validUntil) : Number.NaN;
+	if (validFrom && validUntil && Number.isFinite(fromTime) && Number.isFinite(toTime) && fromTime > toTime) {
+		throw new Error(`${path}.validFrom 不能晚于 ${path}.validUntil。`);
+	}
+	const temporal: MemoryTemporal = {};
+	if (validFrom !== undefined) {
+		temporal.validFrom = validFrom;
+	}
+	if (validUntil !== undefined) {
+		temporal.validUntil = validUntil;
+	}
+	if (scope !== undefined) {
+		temporal.scope = scope;
+	}
+	return temporal;
+}
+
+function readOptionalScope(
+	value: unknown,
+	path: string
+): MemoryTemporal["scope"] | undefined {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	return readEnum(value, MEMORY_TEMPORAL_SCOPES, path);
+}
+
+function readOptionalDateString(value: unknown, path: string): string | undefined {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+	const text = readNonEmptyString(value, path);
+	if (text.length > MAX_TEMPORAL_VALUE_CHARACTERS) {
+		throw new Error(`${path} 不能超过 ${MAX_TEMPORAL_VALUE_CHARACTERS} 字符。`);
+	}
+	return text;
+}
+
+function formatTemporal(temporal: MemoryTemporal | undefined): string {
+	if (!temporal) {
+		return "";
+	}
+	const parts: string[] = [];
+	if (temporal.validFrom) {
+		parts.push(`从 ${temporal.validFrom}`);
+	}
+	if (temporal.validUntil) {
+		parts.push(`至 ${temporal.validUntil}`);
+	}
+	return parts.join(" ");
 }
 
 function includesNormalized(source: string, quote: string): boolean {

@@ -7,12 +7,13 @@ export const MEMORY_RELATION_MAX_RECORDS = 5_000;
 export const MEMORY_RELATION_MAX_HISTORY = 100;
 export const MEMORY_RELATION_STORE_MAX_CHARACTERS = 10_000_000;
 
-export const MEMORY_RELATION_TYPES = ["conflicts", "supplements", "supersedes", "invalidates"] as const;
+export const MEMORY_RELATION_TYPES = ["conflicts", "supplements", "refines", "supersedes", "invalidates"] as const;
 export type MemoryRelationType = (typeof MEMORY_RELATION_TYPES)[number];
 
 export const MEMORY_RELATION_TYPE_LABELS: Record<MemoryRelationType, string> = {
 	conflicts: "存在冲突",
 	supplements: "补充说明",
+	refines: "细化",
 	supersedes: "替代旧记忆",
 	invalidates: "作废旧记忆"
 };
@@ -335,7 +336,7 @@ export function resolveMemoryRelations(
 			role: "source",
 			counterpart: relation.target
 		});
-		if (relation.type === "conflicts" || relation.type === "supplements") {
+		if (relation.type === "conflicts" || relation.type === "supplements" || relation.type === "refines") {
 			addAnnotation(resolution.annotations, targetKey, {
 				relationId: relation.id,
 				type: relation.type,
