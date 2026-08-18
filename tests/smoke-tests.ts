@@ -430,6 +430,7 @@ import {
 	summarizeTaskCounts,
 	TaskCenterStore
 } from "../src/task-center/task-center-store";
+import { countOnboardingReadinessStages } from "../src/getting-started/getting-started-state";
 
 if (typeof window === "undefined") {
 	Object.defineProperty(globalThis, "window", {
@@ -6928,5 +6929,35 @@ const reviewV2Approved = applyMemoryReviewUpdates(reviewV2Created, reviewV2Candi
 }]);
 assert.equal(reviewV2Approved.reviews["assertion-review-v2"].authority, "user_confirmed");
 assert.equal(reviewV2Approved.reviews["assertion-review-v2"].effectiveTier, undefined);
+
+{
+	const allFalse = {
+		transcriptionReady: false,
+		analysisReady: false,
+		recorderReady: false,
+		hotkeysReady: false,
+		memoryReady: false
+	};
+	assert.equal(countOnboardingReadinessStages(allFalse), 0);
+	assert.equal(
+		countOnboardingReadinessStages({
+			...allFalse,
+			transcriptionReady: true,
+			analysisReady: true,
+			memoryReady: true
+		}),
+		3
+	);
+	assert.equal(
+		countOnboardingReadinessStages({
+			...allFalse,
+			recorderReady: true,
+			hotkeysReady: true,
+			memoryReady: true
+		}),
+		1,
+		"recorder 和 hotkeys 不应计入新人阶段总数"
+	);
+}
 
 console.log("Smoke tests passed.");

@@ -23,6 +23,7 @@ import {
 } from "../providers/provider-diagnostics";
 import { captureHotkeyFromKeyboardEvent } from "../getting-started/getting-started-hotkeys";
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
+import { countOnboardingReadinessStages } from "../getting-started/getting-started-state";
 import { diagnoseMemoryProviderSettings } from "../memory/memory-provider";
 import { getSanitizedErrorMessage } from "../security/redaction";
 import {
@@ -31,8 +32,7 @@ import {
 	type StatusIndicatorTone
 } from "../ui/status-indicator";
 import { SettingsSpotlight, type SettingsSpotlightStep } from "./settings-spotlight";
-import type { MemoryCenterTab } from "../memory/memory-center-modal";
-import { MemorySettingsReviewPreview } from "../memory/memory-settings-review-preview";
+import type { MemoryInboxContext } from "../memory/memory-service";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
@@ -80,7 +80,7 @@ type SettingsStage = "transcription" | "analysis" | "memory";
 
 type TranscriptionSettingsSection = "service" | "advanced" | "output" | "automation";
 type AnalysisSettingsSection = "model" | "processing" | "templates";
-type MemorySettingsSection = "extraction" | "center" | "maintenance";
+type MemorySettingsSection = "config" | "maintenance";
 
 export type EchoNotesSettingsDestination =
 	| "transcription-service"
@@ -94,7 +94,7 @@ export type EchoNotesSettingsGuide = "provider-api-key";
 export interface EchoNotesSettingsNavigationOptions {
 	guide?: EchoNotesSettingsGuide;
 	onGuideFinished?: () => void;
-	memoryCenterTab?: MemoryCenterTab;
+	memoryCenterTab?: "overview" | "inbox";
 }
 
 type SettingsGuideStep = "analysis-enable" | "provider" | "api-key";
@@ -149,9 +149,8 @@ const ANALYSIS_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<AnalysisSet
 ];
 
 const MEMORY_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<MemorySettingsSection>[] = [
-	{ id: "extraction", label: "提取设置" },
-	{ id: "center", label: "记忆中心" },
-	{ id: "maintenance", label: "维护工具" }
+	{ id: "config", label: "配置与规则" },
+	{ id: "maintenance", label: "维护" }
 ];
 
 export class EchoNotesSettingTab extends PluginSettingTab {
@@ -160,10 +159,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private activeSettingsStage: SettingsStage = "transcription";
 	private activeTranscriptionSettingsSection: TranscriptionSettingsSection = "service";
 	private activeAnalysisSettingsSection: AnalysisSettingsSection = "model";
-	private activeMemorySettingsSection: MemorySettingsSection = "extraction";
-	private memoryCenterInitialTab: MemoryCenterTab = "overview";
-	private memoryCenterView: { destroy(): void } | null = null;
-	private memorySettingsReviewPreview: MemorySettingsReviewPreview | null = null;
+	private activeMemorySettingsSection: MemorySettingsSection = "config";
 	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
 	private settingsRenderSequence = 0;
 	private readonly settingsSpotlight: SettingsSpotlight;
@@ -185,13 +181,20 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			{
 				name: "Echo Notes settings",
 				searchable: false,
-					render: (setting) => {
+				render: (setting) => {
 					const settingEl = setting.settingEl;
 					settingEl.empty();
 					settingEl.addClass("echo-notes-settings-definition-row");
 					const hostEl = settingEl.createDiv({
 						cls: "echo-notes-settings-definition-host"
 					});
+					// Obsidian 1.13+ renders plugin settings inside a new declarative wrapper
+					// (.setting-items / .setting-group) that introduces a light gray card-like
+					// surface. Scope the reset to Echo Notes so we do not pollute other plugins.
+					const settingItemsEl = settingEl.closest(".setting-items");
+					settingItemsEl?.addClass("echo-notes-settings-root-wrapper");
+					const settingGroupEl = settingEl.closest(".setting-group");
+					settingGroupEl?.addClass("echo-notes-settings-root-wrapper");
 					this.renderSettings(hostEl);
 					return () => {
 						if (this.settingsContainerEl === hostEl) {
@@ -199,8 +202,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 							this.settingsContainerEl = null;
 						}
 						hostEl.remove();
+						settingItemsEl?.removeClass("echo-notes-settings-root-wrapper");
+						settingGroupEl?.removeClass("echo-notes-settings-root-wrapper");
 						if (!settingEl.querySelector(":scope > .echo-notes-settings-definition-host")) {
 							settingEl.removeClass("echo-notes-settings-definition-row");
+							if (!settingItemsEl?.querySelector(":scope > .echo-notes-settings-definition-host")) {
+								settingItemsEl?.removeClass("echo-notes-settings-root-wrapper");
+								settingGroupEl?.removeClass("echo-notes-settings-root-wrapper");
+							}
 						}
 					};
 				}
@@ -235,12 +244,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				break;
 			case "memory-model":
 				this.activeSettingsStage = "memory";
-				this.activeMemorySettingsSection = "extraction";
+				this.activeMemorySettingsSection = "config";
 				break;
 			case "memory-center":
 				this.activeSettingsStage = "memory";
-				this.activeMemorySettingsSection = "center";
-				this.memoryCenterInitialTab = options.memoryCenterTab ?? "overview";
+				this.activeMemorySettingsSection = "config";
+				void this.plugin.openMemoryCenter(options.memoryCenterTab ?? "overview");
 				break;
 			case "transcription-recording":
 				this.activeSettingsStage = "transcription";
@@ -281,10 +290,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderSettings(containerEl: HTMLElement): void {
 		this.stopActiveHotkeyCapture?.();
-		this.memoryCenterView?.destroy();
-		this.memoryCenterView = null;
-		this.memorySettingsReviewPreview?.destroy();
-		this.memorySettingsReviewPreview = null;
+		// Memory settings views are recreated on each render; no persistent subviews to destroy.
 		this.settingsContainerEl = containerEl;
 		containerEl.closest<HTMLElement>(".modal-content")?.addClass("echo-notes-settings-modal-content");
 		containerEl.empty();
@@ -354,7 +360,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		headingEl.id = headingId;
 		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
 		conceptEl.createSpan({
-			text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
+			text: newcomer
+				? "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。"
+				: `${countOnboardingReadinessStages(guide.readiness)}/3 个阶段已就绪 · 按下方工作流补齐或调整当前配置。`
 		});
 		const readmeLinkEl = conceptEl.createEl("a", {
 			cls: "echo-notes-settings-intro-link echo-notes-settings-intro-inline-action",
@@ -391,7 +399,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			cls: "echo-notes-settings-intro-guide",
 			text: newcomer
 				? "操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。"
-				: "提示：可用键盘方向键切换阶段；外部 Agent 仍在规划中。"
+				: "提示：可使用方向键切换配置阶段。"
 		});
 	}
 
@@ -1363,6 +1371,19 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 		contextCard.cardEl.dataset.expanded = String(!contextCard.bodyEl.hidden);
 
+		if (this.plugin.settings.memoryInitialized) {
+			new Setting(containerEl)
+				.setName("教学示例")
+				.setDesc("清空当前人工术语、固定 prompt 和 AI 候选，重新生成不会生效的教学示例。操作前会在 99 系统目录保存完整备份。")
+				.addButton((button) => {
+					button
+						.setButtonText("重置并生成示例")
+						.onClick(() => void this.plugin.resetTranscriptionEnhancementExamples());
+					button.buttonEl.addClass("mod-warning");
+					return button;
+				});
+		}
+
 		if (!isRealtime) {
 			this.renderQuickRecordingCard(containerEl);
 		}
@@ -2053,11 +2074,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.activeMemorySettingsSection,
 			(section, panelEl) => {
 				switch (section) {
-					case "extraction":
+					case "config":
 						this.renderMemoryExtractionPanel(panelEl);
-						break;
-					case "center":
-						this.memoryCenterView = this.plugin.renderMemoryCenter(panelEl, this.memoryCenterInitialTab);
 						break;
 					case "maintenance":
 						this.renderMemoryMaintenanceSettings(panelEl);
@@ -2070,104 +2088,190 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		);
 	}
 
-	private renderMemoryExtractionPanel(containerEl: HTMLElement): void {
-		const banner = containerEl.createDiv({ cls: "echo-notes-memory-settings-banner" });
-		const bannerCopy = banner.createDiv({ cls: "echo-notes-memory-settings-banner-copy" });
-		bannerCopy.createEl("p", { cls: "echo-notes-memory-settings-eyebrow", text: "Echo Memory" });
-		new Setting(bannerCopy)
-			.setName("记住真正重要的事")
-			.setClass("echo-notes-memory-settings-banner-heading")
-			.setHeading();
-		bannerCopy.createEl("p", {
+		private renderMemoryExtractionPanel(containerEl: HTMLElement): void {
+	const diagnostics = diagnoseMemoryProviderSettings({
+		provider: this.plugin.settings.memoryProvider,
+		baseUrl: this.plugin.settings.memoryBaseUrl,
+		model: this.plugin.settings.memoryModel,
+		apiKey: this.plugin.getMemoryApiKey()
+	});
+	const initialized = this.plugin.settings.memoryInitialized;
+	const canAttempt = diagnostics.canAttempt && initialized;
+	const modelName = this.plugin.settings.memoryModel.trim() || this.getMemoryProviderDefaults().analysisModel;
+
+	// 1. 状态条：已就绪时把 banner 和 onboarding 清单折叠成一行
+	const statusLine = containerEl.createDiv({
+		cls: `echo-notes-memory-status-line${canAttempt ? " is-ready" : " is-warning"}`,
+		attr: { role: "status", "aria-live": "polite" }
+	});
+	statusLine.createSpan({ cls: "echo-notes-memory-status-dot" });
+	const statusText = statusLine.createSpan({ cls: "echo-notes-memory-status-text" });
+	statusText.textContent = canAttempt
+		? `已就绪 · ${modelName}`
+		: "需要处理 · 请完成记忆配置";
+
+	// 2. 未就绪时展示完整 onboarding 引导卡
+	if (!canAttempt) {
+		this.renderMemorySetupCard(containerEl, diagnostics, initialized);
+	}
+
+	// 3. 已初始化后展示待审核概览条（审核中心唯一入口）
+	if (initialized) {
+		const reviewStrip = containerEl.createDiv({ cls: "echo-notes-memory-review-strip" });
+		reviewStrip.textContent = "正在读取待审核候选…";
+		void this.plugin.getMemoryInboxContext()
+			.then((context) => this.renderMemoryReviewSummaryStrip(reviewStrip, context))
+			.catch((error) => {
+				reviewStrip.empty();
+				const detail = error instanceof Error ? error.message : String(error);
+				const needsInitialization = detail.includes("尚未初始化") || detail.includes("初始化清单");
+				reviewStrip.createEl("p", {
+					text: needsInitialization
+					? "请先初始化 Echo Memory，再查看待审核候选。"
+					: "暂时无法读取待审核候选，请检查记忆配置后重试。"
+				});
+			});
+	}
+
+	// 4. 提取规则面板
+	const rulesPanel = containerEl.createDiv({ cls: "echo-notes-memory-rules-panel" });
+	this.renderMemoryExtractionSettings(rulesPanel);
+
+	// 5. 单一权威隐私与人工闸口块
+	const privacyBlock = containerEl.createDiv({
+		cls: "echo-notes-memory-privacy-block",
+		attr: { role: "note" }
+	});
+	privacyBlock.createEl("strong", { text: "隐私与人工闸口" });
+	const privacyList = privacyBlock.createEl("ul");
+	for (const item of [
+		"会发送：转写正文与成功的 AI 纪要",
+		"不会自动发生：直接写入长期记忆",
+		"必须经过：人工批准、拒绝或修正",
+		"API Key：仅保存在 Obsidian SecretStorage"
+	]) {
+		privacyList.createEl("li", { text: item });
+	}
+
+	// 6. 已就绪态仍可展开原 banner 文案，回应"引导变少"的顾虑
+	if (canAttempt) {
+		const guideDetails = containerEl.createEl("details", { cls: "echo-notes-memory-guidance" });
+		guideDetails.createEl("summary", { text: "显示引导" });
+		const guideBody = guideDetails.createDiv({ cls: "echo-notes-memory-guidance-body" });
+		guideBody.createEl("p", {
 			text: "AI 只提出候选；你查看原文证据，再决定哪些内容值得进入长期记忆。"
 		});
-		const diagnostics = diagnoseMemoryProviderSettings({
-			provider: this.plugin.settings.memoryProvider,
-			baseUrl: this.plugin.settings.memoryBaseUrl,
-			model: this.plugin.settings.memoryModel,
-			apiKey: this.plugin.getMemoryApiKey()
-		});
-		const bannerStatus = banner.createDiv({
-			cls: `echo-notes-memory-settings-banner-status${diagnostics.canAttempt ? " is-ready" : " is-warning"}`,
-			attr: { role: "status", "aria-live": "polite" }
-		});
-		bannerStatus.createSpan({ cls: "echo-notes-memory-settings-status-dot" });
-		bannerStatus.createEl("strong", { text: diagnostics.canAttempt ? "已就绪" : "需要处理" });
-		bannerStatus.createSpan({ text: diagnostics.canAttempt ? " 可以提取并审核候选" : " 请完成记忆配置" });
-
-		const grid = containerEl.createDiv({ cls: "echo-notes-memory-settings-grid" });
-		const setupCard = grid.createDiv({ cls: "echo-notes-memory-settings-card echo-notes-memory-settings-setup" });
-		const setupHeader = setupCard.createDiv({ cls: "echo-notes-memory-settings-card-header" });
-		const setupHeading = setupHeader.createDiv();
-		setupHeading.createEl("p", { cls: "echo-notes-memory-settings-eyebrow", text: "开始前" });
-		new Setting(setupHeading)
-			.setName("确认 3 件事，就可以开始")
-			.setClass("echo-notes-memory-settings-card-heading")
-			.setHeading();
-		setupHeading.createEl("p", { text: "只把影响下一步的配置放在这里。" });
-		setupHeader.createSpan({
-			cls: `echo-notes-memory-settings-progress${diagnostics.canAttempt && this.plugin.settings.memoryInitialized ? " is-ready" : ""}`,
-			text: diagnostics.canAttempt && this.plugin.settings.memoryInitialized ? "3/3 已就绪" : "待配置"
-		});
-
-		const readiness = setupCard.createDiv({ cls: "echo-notes-memory-settings-readiness" });
-		this.renderMemoryReadinessRow(
-			readiness,
-			"记忆服务商",
-			"独立于转写和 AI 分析阶段",
-			this.plugin.settings.memoryInitialized ? "已配置" : "待初始化",
-			this.plugin.settings.memoryInitialized ? "is-ready" : "is-pending"
-		);
-		this.renderMemoryReadinessRow(
-			readiness,
-			"记忆模型",
-			"需要能够输出结构化 JSON",
-			this.plugin.settings.memoryModel.trim() ? this.plugin.settings.memoryModel : "待配置",
-			this.plugin.settings.memoryModel.trim() ? "is-ready" : "is-pending"
-		);
-		this.renderMemoryReadinessRow(
-			readiness,
-			"API Key",
-			"按服务商隔离保存在 Obsidian SecretStorage",
-			this.plugin.getMemoryApiKey() ? "已安全保存" : "待配置",
-			this.plugin.getMemoryApiKey() ? "is-ready" : "is-pending"
-		);
-
-		const privacy = setupCard.createDiv({ cls: "echo-notes-memory-settings-privacy", attr: { role: "note" } });
-		privacy.createEl("strong", { text: "隐私与费用" });
-		privacy.createSpan({
+		guideBody.createEl("p", {
 			text: "提取会把转写正文和本批成功纪要发送到独立记忆服务商；长文本可能产生多次调用和费用，API Key 不写入插件配置或记忆文件。"
 		});
+		const guideList = guideBody.createEl("ul");
+		for (const item of [
+			"会发送：转写正文与成功的 AI 纪要",
+			"不会自动发生：直接写入长期记忆",
+			"必须经过：人工批准、拒绝或修正",
+			"API Key：仅保存在 Obsidian SecretStorage"
+		]) {
+			guideList.createEl("li", { text: item });
+		}
+	}
+	}
 
-		const setupActions = setupCard.createDiv({ cls: "echo-notes-memory-settings-actions" });
-		setupActions.createEl("button", {
-			cls: "mod-cta",
-			text: "检查记忆配置",
+	private renderMemorySetupCard(
+	containerEl: HTMLElement,
+	diagnostics: ReturnType<typeof diagnoseMemoryProviderSettings>,
+	initialized: boolean
+	): void {
+	const card = containerEl.createDiv({ cls: "echo-notes-memory-setup-card" });
+	const header = card.createDiv({ cls: "echo-notes-memory-setup-card-header" });
+	const title = header.createDiv();
+	title.createEl("p", { cls: "echo-notes-memory-settings-eyebrow", text: "开始前" });
+	new Setting(title)
+		.setName("确认 3 件事，就可以开始")
+		.setClass("echo-notes-memory-settings-card-heading")
+		.setHeading();
+	title.createEl("p", { text: "只把影响下一步的配置放在这里。" });
+	header.createSpan({
+		cls: `echo-notes-memory-settings-progress${initialized && diagnostics.canAttempt ? " is-ready" : ""}`,
+		text: initialized && diagnostics.canAttempt ? "3/3 已就绪" : "待配置"
+	});
+
+	const readiness = card.createDiv({ cls: "echo-notes-memory-settings-readiness" });
+	this.renderMemoryReadinessRow(
+		readiness,
+		"记忆服务商",
+		"独立于转写和 AI 分析阶段",
+		initialized ? "已配置" : "待初始化",
+		initialized ? "is-ready" : "is-pending"
+	);
+	this.renderMemoryReadinessRow(
+		readiness,
+		"记忆模型",
+		"需要能够输出结构化 JSON",
+		this.plugin.settings.memoryModel.trim() ? this.plugin.settings.memoryModel : "待配置",
+		this.plugin.settings.memoryModel.trim() ? "is-ready" : "is-pending"
+	);
+	this.renderMemoryReadinessRow(
+		readiness,
+		"API Key",
+		"按服务商隔离保存在 Obsidian SecretStorage",
+		this.plugin.getMemoryApiKey() ? "已安全保存" : "待配置",
+		this.plugin.getMemoryApiKey() ? "is-ready" : "is-pending"
+	);
+
+	const privacy = card.createDiv({
+		cls: "echo-notes-memory-settings-privacy",
+		attr: { role: "note" }
+	});
+	privacy.createEl("strong", { text: "隐私与费用" });
+	privacy.createSpan({
+		text: "提取会把转写正文和本批成功纪要发送到独立记忆服务商；长文本可能产生多次调用和费用，API Key 不写入插件配置或记忆文件。"
+	});
+
+	const actions = card.createDiv({ cls: "echo-notes-memory-settings-actions" });
+	const checkBtn = actions.createEl("button", {
+		cls: "mod-cta",
+		text: "检查记忆配置",
+		attr: { type: "button" }
+	});
+	checkBtn.addEventListener("click", () => this.runMemoryConfigurationCheck());
+	const centerBtn = actions.createEl("button", {
+		text: initialized ? "打开记忆中心" : "先看看记忆中心",
+		attr: { type: "button" }
+	});
+	centerBtn.addEventListener("click", () => void this.plugin.openMemoryCenter("overview"));
+
+	const modelDetails = card.createEl("details", { cls: "echo-notes-memory-settings-advanced" });
+	modelDetails.createEl("summary", { text: "连接配置（服务商、API Key 与模型）" });
+	const modelBody = modelDetails.createDiv({ cls: "echo-notes-memory-settings-advanced-body" });
+	this.renderMemoryModelSettings(modelBody);
+	}
+
+	private renderMemoryReviewSummaryStrip(containerEl: HTMLElement, context: MemoryInboxContext): void {
+	containerEl.empty();
+	const count = context.counts.total;
+	containerEl.createSpan({ cls: "echo-notes-memory-review-strip-count", text: String(count) });
+	const copy = containerEl.createDiv({ cls: "echo-notes-memory-review-strip-copy" });
+	const primary = containerEl.createEl("button", {
+		cls: "mod-cta",
+		attr: { type: "button" }
+	});
+	if (count === 0) {
+		copy.createEl("strong", { text: "暂无待审核候选" });
+		copy.createSpan({ text: "完成一次转写与 AI 分析后，记忆提取会自动生成候选。" });
+		primary.textContent = "打开记忆中心";
+		primary.addEventListener("click", () => void this.plugin.openMemoryCenter("overview"));
+	} else {
+		const latest = context.pending[0]?.candidate.source.transcriptTitle ?? "最近转写";
+		copy.createEl("strong", { text: `${count} 条候选待审核` });
+		copy.createSpan({ text: ` · 最近来自《${latest}》` });
+		primary.textContent = "去审核";
+		primary.addEventListener("click", () => void this.plugin.openMemoryCenter("inbox"));
+		const secondary = containerEl.createEl("button", {
+			text: "打开记忆中心",
 			attr: { type: "button" }
-		}).addEventListener("click", () => this.runMemoryConfigurationCheck());
-		setupActions.createEl("button", {
-			text: "查看待审核候选",
-			attr: { type: "button" }
-		}).addEventListener("click", () => void this.plugin.openMemoryCenter("inbox"));
-
-		const modelDetails = setupCard.createEl("details", { cls: "echo-notes-memory-settings-advanced" });
-		modelDetails.createEl("summary", { text: "连接配置（服务商、API Key 与模型）" });
-		const modelBody = modelDetails.createDiv({ cls: "echo-notes-memory-settings-advanced-body" });
-		this.renderMemoryModelSettings(modelBody);
-
-		const reviewCard = grid.createDiv({ cls: "echo-notes-memory-settings-card echo-notes-memory-settings-review" });
-		this.memorySettingsReviewPreview = new MemorySettingsReviewPreview(reviewCard, {
-			getContext: () => this.plugin.getMemoryInboxContext(),
-			save: (candidatePath, updates) => this.plugin.saveMemoryReview(candidatePath, updates),
-			openCenter: () => void this.plugin.openMemoryCenter("inbox"),
-			openCandidate: (candidatePath) => void this.plugin.reviewMemoryCandidatePath(candidatePath)
 		});
-		this.memorySettingsReviewPreview.render();
-
-		const rulesDetails = containerEl.createEl("details", { cls: "echo-notes-memory-settings-rules" });
-		rulesDetails.createEl("summary", { text: "提取规则与长文本处理" });
-		const rulesBody = rulesDetails.createDiv({ cls: "echo-notes-memory-settings-rules-body" });
-		this.renderMemoryExtractionSettings(rulesBody);
+		secondary.addEventListener("click", () => void this.plugin.openMemoryCenter("overview"));
+	}
 	}
 
 	private renderMemoryReadinessRow(
@@ -2218,11 +2322,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderMemoryExtractionSettings(containerEl: HTMLElement): void {
-		const ruleIntro = containerEl.createDiv({ cls: "echo-notes-memory-rule-intro" });
-		ruleIntro.createEl("strong", { text: "先说清楚规则，再开始提取" });
-		ruleIntro.createEl("p", {
-			text: "自动提取只会生成待审核候选，不会绕过人工审核直接写入长期记忆。长文本可能分块调用并产生多次费用。"
-		});
 		this.renderBasicHeading(containerEl, "自动提取规则");
 		new Setting(containerEl)
 			.setName("启用自动记忆提取")
@@ -2248,17 +2347,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		const privacyEl = containerEl.createDiv({ cls: "echo-notes-memory-privacy-boundary", attr: { role: "note" } });
-		privacyEl.createEl("strong", { text: "隐私与人工闸口" });
-		const privacyList = privacyEl.createEl("ul");
-		for (const text of [
-			"会发送：转写正文与成功的 AI 纪要",
-			"不会自动发生：直接写入长期记忆",
-			"必须经过：人工批准、拒绝或修正",
-			"API Key：仅保存在 Obsidian SecretStorage"
-		]) {
-			privacyList.createEl("li", { text });
-		}
 
 		this.renderBasicHeading(containerEl, "长文本处理");
 		new Setting(containerEl)
@@ -2387,92 +2475,28 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.addButton((button) => button.setButtonText("检查记忆配置").onClick(() => this.runMemoryConfigurationCheck()));
 	}
 
-	private renderMemoryMaintenanceSettings(containerEl: HTMLElement): void {
-		this.renderBasicHeading(containerEl, "工作区维护");
-		this.renderMemoryWorkspaceSettings(containerEl);
+		private renderMemoryMaintenanceSettings(containerEl: HTMLElement): void {
+	this.renderBasicHeading(containerEl, "工作区");
+	this.renderMemoryWorkspaceSettings(containerEl);
 
-		this.renderBasicHeading(containerEl, "重建与示例");
-		new Setting(containerEl)
-			.setName("从候选包重建画像与聚合")
-			.setDesc("只读取已批准断言和关系，重写画像与跨记录视图托管区块，不修改人工正文。")
-			.addButton((button) => button
-				.setButtonText("立即重建")
-				.setDisabled(!this.plugin.settings.memoryInitialized)
-				.onClick(() => void this.plugin.rebuildMemoryProfiles()));
-		new Setting(containerEl)
-			.setName("教学示例")
-			.setDesc("清空当前转写增强配置并生成不会生效的示例；操作前会自动备份。")
-			.addButton((button) => {
-				button
-					.setButtonText("重置并生成示例")
-					.setDisabled(!this.plugin.settings.memoryInitialized)
-					.onClick(() => void this.plugin.resetTranscriptionEnhancementExamples());
-				button.buttonEl.addClass("mod-warning");
-				return button;
-			});
-	}
+	this.renderBasicHeading(containerEl, "重建");
+	new Setting(containerEl)
+		.setName("从候选包重建画像与聚合")
+		.setDesc("只读取已批准断言和关系，重写画像与跨记录视图托管区块，不修改人工正文。")
+		.addButton((button) => button
+			.setButtonText("立即重建")
+			.setDisabled(!this.plugin.settings.memoryInitialized)
+			.onClick(() => void this.plugin.rebuildMemoryProfiles()));
 
-	private renderMemoryTranscriptionEnhancementSettings(containerEl: HTMLElement): void {
-		new Setting(containerEl)
-			.setName("人工术语与上下文")
-			.setDesc(
-				this.plugin.settings.memoryInitialized
-					? "直接在 Obsidian Markdown 中维护人工术语、作用域和固定 Prompt；插件不会日常重写该文件。"
-					: "初始化 Echo Memory 后可创建可审计的术语与上下文文件。"
-			)
-			.addButton((button) => button
-				.setButtonText("打开人工配置")
-				.setCta()
-				.setDisabled(!this.plugin.settings.memoryInitialized)
-				.onClick(() => {
-					void this.plugin.openTranscriptionEnhancementManualFile();
-				}));
-
-		new Setting(containerEl)
-			.setName("AI 术语候选")
-			.setDesc("候选、依据、状态与审核历史独立保存；批准后直接生效，不复制到人工文件。")
-			.addButton((button) => button
-				.setButtonText("审核候选")
-				.setDisabled(!this.plugin.settings.memoryInitialized)
-				.onClick(() => void this.plugin.openTranscriptionEnhancementManager()));
-
-		new Setting(containerEl)
-			.setName("实际生效内容")
-			.setDesc("展示当前笔记作用域下的最终热词、prompt、记忆上下文和预算省略项。")
-			.addButton((button) => button
-				.setButtonText("预览生效内容")
-				.setDisabled(!this.plugin.settings.memoryInitialized)
-				.onClick(() => void this.plugin.openTranscriptionEnhancementPreview()));
-
-		new Setting(containerEl)
-			.setName("来源笔记作用域")
-			.setDesc("转写时自动读取 echo_notes_memory_projects、echo_notes_memory_people、echo_notes_memory_organizations；字段可为字符串或字符串数组。无来源笔记时只使用全局作用域。");
-
-		new Setting(containerEl)
-			.setName("从已批准记忆生成候选")
-			.setDesc("显式调用当前记忆模型，只读取已批准、关系解析后仍生效的记忆；生成结果保持待审核，确认前不进入转写请求。")
-			.addButton((button) => button
-				.setButtonText("生成待审核候选")
-				.setDisabled(!this.plugin.settings.memoryInitialized)
-				.onClick(() => {
-					void this.plugin.generateTranscriptionTermCandidates();
-				}));
-
-		new Setting(containerEl)
-			.setName("重置示例配置")
-			.setDesc("清空当前人工术语、固定 prompt 和 AI 候选，重新生成不会生效的教学示例。操作前会在 99 系统目录保存完整备份。")
-			.addButton((button) => button
-				.setButtonText("重置并生成示例")
-				.then((button) => {
-					button.buttonEl.addClass("mod-warning");
-					return button;
-				})
-				.setDisabled(!this.plugin.settings.memoryInitialized)
-				.onClick(() => void this.plugin.resetTranscriptionEnhancementExamples()));
-
-		new Setting(containerEl)
-			.setName("隐私边界")
-			.setDesc("只有在阿里百炼新模型中显式开启“使用 Echo Memory 转写增强”后，才会外发匹配且已批准的内容。诊断日志只记录 ID、纳入/省略数量和内容指纹。");
+	const note = containerEl.createDiv({
+		cls: "echo-notes-memory-maintenance-note",
+		attr: { role: "note" }
+	});
+	const noteIcon = note.createSpan({ attr: { "aria-hidden": "true" } });
+	setIcon(noteIcon, "info");
+	note.createSpan({
+		text: "教学示例与转写增强示例已移至「录音转写 · 能力增强」，维护工具不再重复该入口。"
+	});
 	}
 
 	private renderAnalysisTemplateSettings(containerEl: HTMLElement, renderId: number): void {

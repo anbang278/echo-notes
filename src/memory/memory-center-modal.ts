@@ -42,10 +42,6 @@ export class MemoryCenterView {
 
 	render(): void {
 		this.contentEl.addClass("echo-notes-memory-center-modal");
-		this.contentEl.toggleClass(
-			"echo-notes-memory-center-inline",
-			Boolean(this.contentEl.closest(".modal.mod-settings")) || !this.contentEl.closest(".modal")
-		);
 		this.build();
 		void this.refreshBadge();
 		void this.activateTab(this.activeTab, false);

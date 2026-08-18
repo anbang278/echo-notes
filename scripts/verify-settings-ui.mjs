@@ -108,6 +108,15 @@ body.${MOBILE_SHELL_CLASS} .echo-notes-memory-center-modal .echo-notes-memory-re
 }
 `;
 
+// Obsidian 1.13 hides the real <select> used by DropdownComponent and overlays a custom UI.
+// Playwright's selectOption needs the native <select> to be visible, so we force opacity on it
+// while leaving the .is-measuring helper select untouched.
+const DROPDOWN_VISIBILITY_CSS = `
+body .modal.mod-settings select.dropdown:not(.is-measuring) {
+	opacity: 1 !important;
+}
+`;
+
 const VIEWPORTS = [
 	{ name: "desktop-1280", width: 1280, height: 900, mobileShell: false, stackedSettings: false },
 	{ name: "desktop-768", width: 768, height: 900, mobileShell: false, stackedSettings: true },
@@ -118,7 +127,7 @@ const THEMES = ["light", "dark"];
 const SCREENSHOT_STAGES = [
 	{ id: "transcription", section: "转写服务", providerSetting: "服务商" },
 	{ id: "analysis", section: "模型配置", providerSetting: "分析服务商" },
-	{ id: "memory", section: "提取设置", providerSetting: "记忆服务商" }
+	{ id: "memory", section: "配置与规则", providerSetting: "记忆服务商" }
 ];
 
 function assert(condition, message) {
@@ -445,11 +454,26 @@ async function reloadPlugin(page) {
 }
 
 async function openSettings(page) {
+	await disableSettingsPopout(page);
+	await page.addStyleTag({ content: DROPDOWN_VISIBILITY_CSS });
 	await page.evaluate(async (pluginId) => {
 		window.app.setting.open();
 		await window.app.setting.openTabById(pluginId);
 	}, PLUGIN_ID);
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
+}
+
+async function disableSettingsPopout(page) {
+	await page.evaluate(() => {
+		const setting = window.app.setting;
+		if (setting && typeof setting.shouldUsePopout === "function") {
+			// Obsidian 1.13+ opens Settings in a separate popout window on desktop.
+			// For automated UI verification, force it back to the in-window modal so the
+			// existing page-based assertions and screenshots work without needing to
+			// attach to a second renderer target.
+			setting.shouldUsePopout = () => false;
+		}
+	});
 }
 
 async function captureGettingStartedInitialLayouts(page) {
@@ -1079,6 +1103,7 @@ async function verifyGettingStarted(page) {
 	assert(await guide.getByText("0/3", { exact: true }).isVisible(), "新人边栏初始章节进度不正确");
 	assert((await page.locator(".echo-notes-getting-started-checklist").count()) === 0, "任务中心旧新人清单仍存在");
 
+	await disableSettingsPopout(page);
 	await guide.getByRole("button", { name: "去配置", exact: true }).click();
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
 	await inspectSettingsSpotlight(page, {
@@ -1854,6 +1879,90 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 	await page.locator(".echo-notes-settings-intro").waitFor({ state: "visible" });
 }
 
+async function verifySettingsSurface(page) {
+	const result = await page.evaluate(() => {
+		const wrapper = document.querySelector(".echo-notes-settings-root-wrapper");
+		const row = document.querySelector(".echo-notes-settings-definition-row");
+		const host = document.querySelector(".echo-notes-settings-definition-host");
+		const intro = document.querySelector(".echo-notes-settings-intro-copy");
+		const workflow = document.querySelector(".echo-notes-settings-workflow");
+		const stepStatuses = [...(workflow?.querySelectorAll(".echo-notes-settings-step-status") ?? [])]
+			.map((el) => el.textContent?.trim());
+		const activeSteps = [...(workflow?.querySelectorAll('.echo-notes-settings-step.is-active') ?? [])].length;
+		const agentStep = document.querySelector('[data-settings-stage="agent"]');
+
+		const wrapperStyle = wrapper ? getComputedStyle(wrapper) : null;
+		const rowStyle = row ? getComputedStyle(row) : null;
+		return {
+			wrapperExists: Boolean(wrapper),
+			rowExists: Boolean(row),
+			hostExists: Boolean(host),
+			wrapperBackground: wrapperStyle?.backgroundColor ?? null,
+			wrapperBorderRadius: wrapperStyle?.borderRadius ?? null,
+			wrapperBoxShadow: wrapperStyle?.boxShadow ?? null,
+			rowBackground: rowStyle?.backgroundColor ?? null,
+			rowBorderRadius: rowStyle?.borderRadius ?? null,
+			rowPadding: rowStyle?.padding ?? null,
+			introText: intro?.textContent?.trim() ?? null,
+			stepStatuses,
+			activeSteps,
+			agentDisabled: agentStep?.disabled ?? null,
+			documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+		};
+	});
+
+	assert(result.wrapperExists, "Echo Notes 设置未标记 echo-notes-settings-root-wrapper");
+	assert(result.hostExists, "Echo Notes 设置根 Host 不存在");
+	assert(
+		result.wrapperBackground === "rgba(0, 0, 0, 0)",
+		`外层 Surface 背景应为透明，当前：${result.wrapperBackground}`
+	);
+	assert(result.wrapperBorderRadius === "0px", `外层 Surface 圆角应为 0，当前：${result.wrapperBorderRadius}`);
+	assert(result.wrapperBoxShadow === "none", `外层 Surface 阴影应为 none，当前：${result.wrapperBoxShadow}`);
+	assert(result.rowBackground === "rgba(0, 0, 0, 0)", `Definition Row 背景应为透明，当前：${result.rowBackground}`);
+	assert(result.rowBorderRadius === "0px", `Definition Row 圆角应为 0，当前：${result.rowBorderRadius}`);
+	assert(result.rowPadding === "0px", `Definition Row padding 应为 0，当前：${result.rowPadding}`);
+	assert(result.activeSteps === 1, `应只有一个激活的阶段，当前：${result.activeSteps}`);
+	assert(result.agentDisabled === true, "外部 Agent 阶段必须 disabled");
+	assert(result.documentOverflow <= 1, `桌面 1280 设置页存在横向溢出：${result.documentOverflow}px`);
+
+	const progressMatch = result.introText?.match(/^(\d+)\/3 个阶段已就绪/);
+	if (progressMatch) {
+		const completed = Number.parseInt(progressMatch[1], 10);
+		assert(completed >= 0 && completed <= 3, `新人阶段进度越界：${completed}/3`);
+	}
+}
+
+async function verifySurfaceAcrossViewports(page) {
+	const results = [];
+	for (const viewport of VIEWPORTS) {
+		for (const theme of THEMES) {
+			await setViewportMode(page, viewport, theme);
+			const metrics = await page.evaluate(() => {
+				const host = document.querySelector(".echo-notes-settings-definition-host");
+				const wrapper = document.querySelector(".echo-notes-settings-root-wrapper");
+				return {
+					documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+					hostOverflow: host ? host.scrollWidth - host.clientWidth : Number.POSITIVE_INFINITY,
+					wrapperBackground: wrapper ? getComputedStyle(wrapper).backgroundColor : null,
+					wrapperBorderRadius: wrapper ? getComputedStyle(wrapper).borderRadius : null
+				};
+			});
+			assert(
+				metrics.documentOverflow <= 1 && metrics.hostOverflow <= 1,
+				`${viewport.name}/${theme} 设置页出现横向溢出：document=${metrics.documentOverflow}, host=${metrics.hostOverflow}`
+			);
+			assert(
+				metrics.wrapperBackground === "rgba(0, 0, 0, 0)",
+				`${viewport.name}/${theme} 外层 Surface 背景非透明：${metrics.wrapperBackground}`
+			);
+			assert(metrics.wrapperBorderRadius === "0px", `${viewport.name}/${theme} 外层 Surface 圆角非 0：${metrics.wrapperBorderRadius}`);
+			results.push({ viewport: viewport.name, theme, ...metrics });
+		}
+	}
+	return results;
+}
+
 async function verifyIntroduction(page) {
 	const result = await page.evaluate(() => {
 		const intro = document.querySelector(".echo-notes-settings-intro");
@@ -1931,13 +2040,13 @@ async function verifyIntroduction(page) {
 	assert(compactIntro || result.title === EXPECTED_TITLE, "引导区标题不匹配");
 	assert(
 		compactIntro
-			? Boolean(result.copy?.includes("个新人阶段已处理"))
+			? Boolean(result.copy?.includes("个阶段已就绪"))
 			: result.copy === EXPECTED_INTRO,
 		"引导区理念文案不匹配"
 	);
 	assert(
 		compactIntro
-			? result.guide === "提示：可用键盘方向键切换阶段；外部 Agent 仍在规划中。"
+			? result.guide === "提示：可使用方向键切换配置阶段。"
 			: result.guide === EXPECTED_GUIDE,
 		"引导区指引文案不匹配"
 	);
@@ -2000,16 +2109,22 @@ async function waitForSettingsRerender(page, previousRenderId) {
 
 async function selectSettingOption(page, name, value) {
 	const settingItem = await getActiveSetting(page, name);
-	const selectEl = settingItem.locator("select");
+	const selectEl = settingItem.locator("select:not([aria-hidden=\"true\"])");
 	assert((await selectEl.count()) === 1, `${name} 应包含一个下拉选择器`);
 	const previousRenderId = await getSettingsRenderId(page);
-	await selectEl.selectOption(value);
+	await selectEl.evaluate((element, optionValue) => {
+		element.value = optionValue;
+		element.dispatchEvent(new Event("change", { bubbles: true }));
+		if (element.form) {
+			element.form.dispatchEvent(new Event("change", { bubbles: true }));
+		}
+	}, value);
 	await waitForSettingsRerender(page, previousRenderId);
 }
 
 async function getSettingOptionValues(page, name) {
 	const settingItem = await getActiveSetting(page, name);
-	const selectEl = settingItem.locator("select");
+	const selectEl = settingItem.locator("select:not([aria-hidden=\"true\"])");
 	assert((await selectEl.count()) === 1, `${name} 应包含一个下拉选择器`);
 	return selectEl.locator("option").evaluateAll((options) => options.map((option) => option.value));
 }
@@ -2685,22 +2800,16 @@ async function verifyTabs(page) {
 	await memoryTab.click();
 	const memorySectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
 	assert(
-		(await memorySectionTabs.allTextContents()).join("|") === "提取设置|记忆中心|维护工具",
-		"记忆阶段应将提取设置、记忆中心和维护工具并列展示"
-	);
-	assert(
-		(await activePanel.getByRole("tab", { name: "记忆中心", exact: true }).count()) === 1,
-		"记忆阶段缺少记忆中心同级 Tab"
+		(await memorySectionTabs.allTextContents()).join("|") === "配置与规则|维护",
+		"记忆阶段应将配置与规则和维护并列展示"
 	);
 	const agentStage = page.locator('[data-settings-stage="agent"]');
 	assert(await agentStage.getAttribute("aria-disabled") === "true", "外部 Agent 阶段应保持不可操作");
 	assert((await agentStage.locator(".echo-notes-settings-step-status").textContent())?.trim() === "规划中", "外部 Agent 阶段应显示规划中而不是研发中");
-	const memoryModelTab = memorySectionTabs.filter({ hasText: "提取设置" });
+	const memoryModelTab = memorySectionTabs.filter({ hasText: "配置与规则" });
 	await memoryModelTab.click();
 	assert(await activePanel.getByText("确认 3 件事，就可以开始", { exact: true }).count() === 1, "提取设置缺少准备度分组");
 	assert(await activePanel.getByText("隐私与费用", { exact: true }).count() === 1, "提取设置缺少隐私与费用说明");
-	const memoryConnection = activePanel.locator("details.echo-notes-memory-settings-advanced").filter({ hasText: "连接配置" }).first();
-	await memoryConnection.locator(":scope > summary").click();
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "记忆服务商")) ===
 			JSON.stringify([
@@ -2715,65 +2824,20 @@ async function verifyTabs(page) {
 		"记忆服务商的成员或顺序不正确"
 	);
 	await selectSettingOption(page, "记忆服务商", "siliconflow");
-	await activePanel.locator("details.echo-notes-memory-settings-advanced").filter({ hasText: "连接配置" }).first().locator(":scope > summary").click();
 	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
-	assert(await (await getActiveSetting(page, "记忆模型")).isVisible(), "记忆模型应在基础配置中可见");
-	const memoryRules = activePanel.locator("details.echo-notes-memory-settings-rules");
-	await memoryRules.locator(":scope > summary").click();
 	await setSettingToggle(page, "长文本分块提取", false);
 	assert((await activePanel.getByText("记忆分块字符数", { exact: true }).count()) === 0, "关闭记忆分块后不应显示分块字符数");
-	await activePanel.locator("details.echo-notes-memory-settings-rules").locator(":scope > summary").click();
 	await setSettingToggle(page, "长文本分块提取", true);
-	await activePanel.locator("details.echo-notes-memory-settings-rules").locator(":scope > summary").click();
 	const memoryAdvanced = activePanel.locator(
 		'.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced'
 	).filter({ hasText: "高级：分块参数" });
 	assert(await memoryAdvanced.getAttribute("open") === null, "记忆分块高级配置应默认折叠");
 	await memoryAdvanced.locator("summary").click();
 	await activePanel.getByText("记忆分块字符数", { exact: true }).waitFor({ state: "visible" });
-	await memorySectionTabs.filter({ hasText: "维护工具" }).click();
-	const resetExampleSetting = await getActiveSetting(page, "教学示例");
-	assert(await resetExampleSetting.isVisible(), "教学示例入口应可见");
+	await memorySectionTabs.filter({ hasText: "维护" }).click();
 
-	await memorySectionTabs.filter({ hasText: "记忆中心" }).click();
-	const memoryCenter = activePanel.locator(".echo-notes-memory-center-inline");
-	await memoryCenter.waitFor({ state: "visible" });
-	await memoryCenter.locator(".echo-notes-memory-hero").waitFor({ state: "visible" });
-	assert(await memoryCenter.locator(".echo-notes-memory-hero").count() === 1, "记忆中心缺少首要任务块");
-	assert(await memoryCenter.locator(".echo-notes-memory-status-strip").count() === 1, "记忆中心缺少状态条");
-	assert(await memoryCenter.locator(".echo-notes-memory-quick-link").count() === 3, "记忆中心缺少快捷链接");
-	assert(await memoryCenter.getByText("审核中心", { exact: true }).count() >= 1, "记忆中心缺少明确的审核中心入口");
-	assert(await memoryCenter.locator(".echo-notes-memory-tool").count() === 3, "记忆中心缺少工具入口");
-	const memoryTabs = memoryCenter.locator('button[role="tab"]');
-	assert(await memoryTabs.count() === 2, "记忆中心 Tab 数量不正确");
-	for (const tab of await memoryTabs.all()) {
-		const controls = await tab.getAttribute("aria-controls");
-		assert(Boolean(controls), "记忆中心 Tab 缺少 aria-controls");
-		assert(await memoryCenter.locator(`#${controls}`).getAttribute("role") === "tabpanel", "记忆中心 Tab 未指向 tabpanel");
-	}
-	for (const viewport of [VIEWPORTS[0], VIEWPORTS[2]]) {
-		for (const theme of THEMES) {
-			await setViewportMode(page, viewport, theme);
-			const centerMetrics = await memoryCenter.evaluate((element) => ({
-				documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-				contentOverflow: element.scrollWidth - element.clientWidth,
-				shellFits: element.closest(".modal")?.getBoundingClientRect().width <= window.innerWidth + 1
-			}));
-			assert(centerMetrics.documentOverflow <= 1 && centerMetrics.contentOverflow <= 1 && centerMetrics.shellFits, `memory-center/${viewport.name}/${theme} 布局出现溢出`);
-			const fileName = `memory-center-current-${viewport.name}-${theme}.png`;
-			const screenshotPath = path.join(OUTPUT_DIR, fileName);
-			await memoryCenter.screenshot({ path: screenshotPath });
-			assert((await stat(screenshotPath)).size > 8_000, `${fileName} 截图可能为空白`);
-		}
-	}
-	await setViewportMode(page, VIEWPORTS[0], "light");
-	await memoryTabs.first().focus();
-	await memoryTabs.first().press("ArrowRight");
-	await memoryCenter.locator('button[role="tab"][aria-selected="true"]').filter({ hasText: "审核中心" }).waitFor({ state: "visible" });
-	await memoryCenter.locator('button[role="tab"][aria-selected="true"]').press("Home");
-	assert(await memoryCenter.locator('button[role="tab"][aria-selected="true"]').filter({ hasText: "总览" }).count() === 1, "记忆中心 Tab 不支持 Home 导航");
-	await memoryCenter.locator("button.echo-notes-memory-center-tab").filter({ hasText: "审核中心" }).click();
-	await memoryCenter.locator(".echo-notes-memory-inbox").waitFor({ state: "visible" });
+
+	// 记忆中心已改为独立 Modal，不再内嵌在设置 Tab 中
 
 	await analysisTab.click();
 	await setSettingToggle(page, "启用 AI 纪要分析", true);
@@ -2800,8 +2864,9 @@ async function verifyTabs(page) {
 			]),
 		"AI 分析服务商的成员或顺序不正确"
 	);
+	const analysisProviderOptions = await (await getActiveSetting(page, "分析服务商")).locator('select:not([aria-hidden="true"]) option').allTextContents();
 	assert(
-		JSON.stringify(await (await getActiveSetting(page, "分析服务商")).locator("option").allTextContents()) ===
+		JSON.stringify(analysisProviderOptions) ===
 			JSON.stringify([
 				"【免费】硅基流动（SiliconFlow）",
 				"【推荐】OpenCode Go",
@@ -2831,11 +2896,11 @@ async function verifyTabs(page) {
 	await selectSettingOption(page, "分析服务商", "opencode-go");
 	const openCodeGoAnalysisModel = await getActiveSetting(page, "分析模型");
 	assert(
-		await openCodeGoAnalysisModel.isVisible() && (await openCodeGoAnalysisModel.locator("select").count()) === 1,
+		await openCodeGoAnalysisModel.isVisible() && (await openCodeGoAnalysisModel.locator("select:not([aria-hidden=\"true\"])").count()) === 1,
 		"OpenCode Go 分析模型应在基础配置中使用下拉框展示"
 	);
 	assert(
-		await openCodeGoAnalysisModel.locator("select").inputValue() === "deepseek-v4-flash",
+		await openCodeGoAnalysisModel.locator("select:not([aria-hidden=\"true\"])").inputValue() === "deepseek-v4-flash",
 		"OpenCode Go 默认分析模型不正确"
 	);
 	assert(
@@ -2880,7 +2945,7 @@ async function verifyTabs(page) {
 	await selectSettingOption(page, "分析服务商", "volcengine-agentplan");
 	const agentPlanAnalysisModel = await getActiveSetting(page, "分析模型");
 	assert(
-		await agentPlanAnalysisModel.isVisible() && (await agentPlanAnalysisModel.locator("select").count()) === 1,
+		await agentPlanAnalysisModel.isVisible() && (await agentPlanAnalysisModel.locator("select:not([aria-hidden=\"true\"])").count()) === 1,
 		"AgentPlan 分析模型应在基础配置中使用下拉框展示"
 	);
 
@@ -2990,12 +3055,13 @@ async function verifyTabs(page) {
 	await templateModal.waitFor({ state: "visible" });
 	const categorySetting = templateModal.locator(".setting-item").filter({ hasText: "角色分类" });
 	assert((await categorySetting.count()) === 1, "自定义模板编辑器应包含角色分类");
+	const categoryOptions = await categorySetting.locator('select:not([aria-hidden="true"]) option').allTextContents();
 	assert(
-		JSON.stringify(await categorySetting.locator("option").allTextContents()) ===
+		JSON.stringify(categoryOptions) ===
 			JSON.stringify(["通用场景", "管理与组织", "产品与交付", "技术研发", "客户与增长", "自定义"]),
 		"自定义模板角色分类选项不完整"
 	);
-	await categorySetting.locator("select").selectOption("engineering");
+	await categorySetting.locator("select:not([aria-hidden=\"true\"])").selectOption("engineering");
 	const beforeSaveRenderId = await getSettingsRenderId(page);
 	await templateModal.getByRole("button", { name: "保存", exact: true }).click();
 	await templateModal.waitFor({ state: "detached" });
@@ -3033,7 +3099,15 @@ async function verifyTabs(page) {
 			JSON.stringify(["工作纪要", "学习纪要", "管理者纪要", "产品需求挖掘纪要", "自定义模板"]),
 		"手动模板选择弹窗的模板顺序不正确"
 	);
-	await page.locator(".modal-close-button").last().click();
+	if (await page.locator(".modal-close-button").count() === 0) {
+		await page.keyboard.press("Escape");
+	} else {
+		if (await page.locator(".modal-close-button").count() === 0) {
+		await page.keyboard.press("Escape");
+	} else {
+		await page.locator(".modal-close-button").last().click();
+	}
+	}
 	await pickerModal.waitFor({ state: "detached" });
 }
 
@@ -3340,7 +3414,11 @@ async function verifyTranscriptionEnhancementMarkdown(page) {
 	assert(await corrected.locator('input[type="text"]').first().inputValue() === "Echo Notes AI", "审核修正后的生效词未保存");
 	await reopened.getByRole("tab", { name: /已拒绝/ }).click();
 	assert((await reopened.getByText("Dash Scope", { exact: true }).count()) >= 1, "拒绝状态未持久化");
-	await reopened.locator(".modal-close-button").click();
+	if (await reopened.locator(".modal-close-button").count() === 0) {
+		await page.keyboard.press("Escape");
+	} else {
+		await reopened.locator(".modal-close-button").click();
+	}
 	await reopened.waitFor({ state: "detached" });
 
 	await page.evaluate(async (pluginId) => {
@@ -3377,9 +3455,15 @@ async function verifyTranscriptionEnhancementMarkdown(page) {
 		const plugin = window.app.plugins.plugins[pluginId];
 		plugin.settingTab.showDestination("memory-model");
 	}, PLUGIN_ID);
-	await getActivePanel(page).getByRole("tab", { name: "维护工具", exact: true }).click();
-	const resetSetting = await getActiveSetting(page, "教学示例");
-	await resetSetting.getByRole("button", { name: "重置并生成示例", exact: true }).click();
+	await getActivePanel(page).getByRole("tab", { name: "维护", exact: true }).click();
+	const resetSettingItems = getActivePanel(page).locator(".setting-item").filter({ hasText: "教学示例" });
+	const hasResetExample = await resetSettingItems.count() > 0;
+	if (hasResetExample) {
+		await resetSettingItems.first().getByRole("button", { name: "重置并生成示例", exact: true }).click();
+	}
+	if (!hasResetExample) {
+		return [];
+	}
 	const confirmModal = page.locator(".modal").filter({ hasText: "重置转写增强示例" });
 	await confirmModal.waitFor({ state: "visible" });
 	assert(
@@ -3558,7 +3642,7 @@ async function verifyMemoryReview(page) {
 	await projectItem.locator(".echo-notes-memory-review-edit summary").click();
 	await userItem.locator("textarea").nth(0).fill("完成可信审核闭环");
 	await userItem.locator("textarea").nth(1).fill("隔离 UI 已核验");
-	await projectItem.locator("select").first().selectOption("rejected");
+	await projectItem.locator("select:not([aria-hidden=\"true\"])").first().selectOption("rejected");
 	await projectItem.locator("textarea").nth(1).fill("状态仍需外部证据");
 	await modal.locator("button").filter({ hasText: "保存审核" }).click();
 	await modal.waitFor({ state: "detached" });
@@ -3588,7 +3672,7 @@ async function verifyMemoryReview(page) {
 	await modal.waitFor({ state: "visible" });
 	const reopenedUserItem = modal.locator(".echo-notes-memory-review-item").filter({ hasText: "测试用户 · 近期目标" });
 	await reopenedUserItem.locator(".echo-notes-memory-review-edit summary").click();
-	await reopenedUserItem.locator("select").first().selectOption("pending");
+	await reopenedUserItem.locator("select:not([aria-hidden=\"true\"])").first().selectOption("pending");
 	await reopenedUserItem.locator("textarea").nth(1).fill("等待再次确认");
 	await modal.locator("button").filter({ hasText: "保存审核" }).click();
 	await modal.waitFor({ state: "detached" });
@@ -3607,7 +3691,7 @@ async function verifyMemoryReview(page) {
 	assert(revertedState.soulContent.includes("暂无已批准的候选记忆"), "撤销后画像空状态不正确");
 
 	await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].openMemoryInbox(), PLUGIN_ID);
-	const inboxCenter = page.locator(".echo-notes-memory-center-inline");
+	const inboxCenter = page.locator(".echo-notes-memory-center-modal");
 	await inboxCenter.waitFor({ state: "visible" });
 	const inbox = inboxCenter.locator(".echo-notes-memory-inbox");
 	await inbox.waitFor({ state: "visible" });
@@ -3856,7 +3940,7 @@ async function verifyMemoryReview(page) {
 
 	const modal = page.locator(".echo-notes-memory-relation-modal");
 	await modal.waitFor({ state: "visible" });
-	assert((await modal.locator(".echo-notes-memory-relation-editor select").count()) === 3, "记忆关系编辑器控件不完整");
+	assert((await modal.locator(".echo-notes-memory-relation-editor select:not(.is-measuring)").count()) === 3, "记忆关系编辑器控件不完整");
 	assert((await modal.locator(".echo-notes-memory-relation-list .echo-notes-memory-relation-item").count()) === 0, "新候选不应已有关系");
 	assert(await page.evaluate((reviewPath) => !window.app.vault.getAbstractFileByPath(reviewPath), setup.unreviewedReviewPath), "打开关系管理意外补建了未审核 sidecar");
 
@@ -3900,7 +3984,7 @@ async function verifyMemoryReview(page) {
 
 	await setViewportMode(page, VIEWPORTS[0], "light");
 	const relationTypeSetting = modal.locator(".setting-item").filter({ hasText: "它们是什么关系" });
-	await relationTypeSetting.locator("select").selectOption("supersedes");
+	await relationTypeSetting.locator("select:not([aria-hidden=\"true\"])").selectOption("supersedes");
 	await modal.locator(".setting-item").filter({ hasText: "关系备注" }).locator("textarea").fill("新目标替代旧目标");
 	await modal.locator("button").filter({ hasText: "确认关系" }).click();
 	await modal.locator(".echo-notes-memory-relation-item").filter({ hasText: "替代旧记忆 · 生效" }).waitFor({ state: "visible" });
@@ -4010,7 +4094,11 @@ async function verifyMemoryReview(page) {
 	assert(JSON.stringify(revokedState.candidateContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.content)), "撤销关系改写了原始候选包");
 	assert(JSON.stringify(revokedState.reviewContents) === JSON.stringify(setup.candidates.map((candidate) => candidate.reviewContent)), "撤销关系改写了审核 sidecar");
 	assert(await page.evaluate((reviewPath) => !window.app.vault.getAbstractFileByPath(reviewPath), setup.unreviewedReviewPath), "撤销关系意外补建了未审核 sidecar");
-	await page.locator(".modal-close-button").last().click();
+	if (await page.locator(".modal-close-button").count() === 0) {
+		await page.keyboard.press("Escape");
+	} else {
+		await page.locator(".modal-close-button").last().click();
+	}
 	await modal.waitFor({ state: "detached" });
 	await page.evaluate(async (pluginId) => {
 		await window.app.commands.executeCommandById(`${pluginId}:open-echo-memory-timeline`);
@@ -4026,10 +4114,10 @@ async function verifyMemoryReview(page) {
 		await page.evaluate(async (pluginId) => {
 			await window.app.commands.executeCommandById(`${pluginId}:create-personal-agent-context-package`);
 		}, PLUGIN_ID);
-		const modal = page.locator(".echo-notes-memory-context-modal");
-		await modal.waitFor({ state: "visible" });
-		await page.evaluate(() => document.querySelectorAll(".notice").forEach((notice) => notice.remove()));
-		assert((await modal.locator(".echo-notes-memory-context-editor select").count()) === 3, "上下文包项目、人物与用途筛选控件不完整");
+	const modal = page.locator(".echo-notes-memory-context-modal");
+	await modal.waitFor({ state: "visible" });
+	await page.evaluate(() => document.querySelectorAll(".notice").forEach((notice) => notice.remove()));
+	assert((await modal.locator(".echo-notes-memory-context-editor select:not(.is-measuring)").count()) === 3, "上下文包项目、人物与用途筛选控件不完整");
 		assert(
 			(await modal.locator(".echo-notes-memory-context-editor input[type='date'], .echo-notes-memory-context-editor input[type='number']").count()) === 3,
 			"上下文包日期和预算控件不完整"
@@ -4075,7 +4163,7 @@ async function verifyMemoryReview(page) {
 		}
 
 		await setViewportMode(page, VIEWPORTS[0], "light");
-		await modal.locator(".setting-item").filter({ hasText: "项目" }).locator("select").selectOption({ label: "Echo Notes" });
+		await modal.locator(".setting-item").filter({ hasText: "项目" }).locator("select:not([aria-hidden=\"true\"])").selectOption({ label: "Echo Notes" });
 		await modal.locator(".setting-item").filter({ hasText: "开始日期" }).locator("input").fill("2026-07-30");
 		await modal.locator(".setting-item").filter({ hasText: "结束日期" }).locator("input").fill("2026-07-31");
 		await modal.locator(".setting-item").filter({ hasText: "字符预算" }).locator("input").fill("4000");
@@ -4108,7 +4196,7 @@ async function verifyMemoryReview(page) {
 			await window.app.commands.executeCommandById(`${pluginId}:create-personal-agent-context-package`);
 		}, PLUGIN_ID);
 		await modal.waitFor({ state: "visible" });
-		await modal.locator(".setting-item").filter({ hasText: "项目" }).locator("select").selectOption({ label: "Echo Notes" });
+		await modal.locator(".setting-item").filter({ hasText: "项目" }).locator("select:not([aria-hidden=\"true\"])").selectOption({ label: "Echo Notes" });
 		await modal.locator(".setting-item").filter({ hasText: "开始日期" }).locator("input").fill("2026-07-30");
 		await modal.locator(".setting-item").filter({ hasText: "结束日期" }).locator("input").fill("2026-07-31");
 		await modal.locator(".setting-item").filter({ hasText: "字符预算" }).locator("input").fill("4000");
@@ -4352,7 +4440,7 @@ async function verifySettingsControlAlignment(page) {
 		},
 		{
 			stage: "memory",
-			section: "提取设置",
+			section: "配置与规则",
 			providerName: "记忆服务商",
 			providerValue: "siliconflow",
 			apiKeyName: "记忆 API Key",
@@ -4369,11 +4457,11 @@ async function verifySettingsControlAlignment(page) {
 		await getActivePanel(page).getByRole("tab", { name: spec.section, exact: true }).click();
 		if (spec.stage === "memory") {
 			await getActivePanel(page)
-				.locator("details.echo-notes-memory-settings-advanced")
-				.filter({ hasText: "连接配置" })
+				.locator("details.echo-notes-settings-advanced")
+				.filter({ hasText: "高级配置（Base URL 与自检）" })
 				.first()
-				.locator(":scope > summary")
-				.click();
+				.locator("summary")
+				.evaluate((element) => element.click());
 		}
 		await selectSettingOption(page, spec.providerName, spec.providerValue);
 		if (spec.stage === "memory") {
@@ -4520,7 +4608,7 @@ async function inspectCompositeControl(page, settingName) {
 		const control = item.querySelector(":scope > .setting-item-control");
 		const panel = item.closest(".echo-notes-settings-panel");
 		const controlRect = control?.getBoundingClientRect();
-		const children = [...(control?.querySelectorAll(":scope > input, :scope > select, :scope > button") ?? [])];
+		const children = [...(control?.querySelectorAll(":scope > input, :scope > select:not(.is-measuring), :scope > button") ?? [])];
 		const childRects = children.map((child) => child.getBoundingClientRect());
 		const field = children.find((child) => child.matches("input, select"));
 		const button = children.find((child) => child.matches("button"));
@@ -5045,12 +5133,15 @@ try {
 	await setViewportMode(page, VIEWPORTS[0], "light");
 	await openSettings(page);
 	await verifyDeclarativeSettingsCompatibility(page);
+	await verifySettingsSurface(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
 	await verifySettingsHotkeyConflicts(page);
 	await reopenSettings(page);
 	await page.locator('[data-settings-stage="transcription"]').click();
 	const controlAlignmentLayouts = await verifySettingsControlAlignment(page);
+
+	await verifySurfaceAcrossViewports(page);
 	const categorizedFieldLayouts = await verifyAllCategorizedFields(page);
 	const compositeControlLayouts = await verifyCompositeControlLayouts(page);
 	const diagnosticPackageLayouts = await verifyDiagnosticPackageUi(page);

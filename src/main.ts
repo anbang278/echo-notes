@@ -137,6 +137,7 @@ import { TranscriptionEnhancementManagerModal } from "./memory/memory-transcript
 import { TranscriptionEnhancementPreviewModal } from "./memory/memory-transcription-enhancement-preview-modal";
 import { TranscriptionEnhancementDocumentError } from "./memory/memory-transcription-enhancement";
 import {
+	MemoryCenterModal,
 	MemoryCenterView,
 	type MemoryCenterCallbacks,
 	type MemoryCenterTab
@@ -863,6 +864,11 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 		if (document.querySelector(".modal.mod-settings")) {
 			(this.app as App & AppWithInternals).setting?.close?.();
+		}
+
+		const settingsManager = (this.app as App & AppWithInternals).setting;
+		if ((settingsManager as { popout?: { win?: { closed?: boolean } } | null })?.popout) {
+			settingsManager?.close?.();
 		}
 		await this.activateTaskCenterView({ revealGettingStarted: true });
 	}
@@ -2420,11 +2426,12 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	async openMemoryCenter(initialTab: "overview" | "inbox" = "overview"): Promise<void> {
-		if (document.querySelector(".modal.mod-settings")) {
-			this.settingTab?.showDestination("memory-center", { memoryCenterTab: initialTab });
+		if (!this.settings.memoryInitialized) {
+			new Notice("请先初始化 Echo Memory。");
 			return;
 		}
-		await this.openSettingsDestination("memory-center", { memoryCenterTab: initialTab });
+		const modal = new MemoryCenterModal(this.app, initialTab, this.createMemoryCenterCallbacks());
+		modal.open();
 	}
 
 	async getMemoryInboxContext(): Promise<MemoryInboxContext> {

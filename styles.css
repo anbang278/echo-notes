@@ -23,6 +23,35 @@ body .setting-item.echo-notes-settings-definition-row {
 	border: 0;
 }
 
+/* Obsidian 1.13+ Declarative Settings injects .setting-items / .setting-group with a
+ * light gray card surface. We add echo-notes-settings-root-wrapper at runtime and
+ * reset only the nodes inside Echo Notes' scope. */
+.echo-notes-settings-root-wrapper,
+.echo-notes-settings-root-wrapper .setting-items,
+.echo-notes-settings-root-wrapper .setting-group {
+	background: transparent;
+	background-image: none;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	padding: 0;
+}
+
+.echo-notes-settings-root-wrapper .setting-item.echo-notes-settings-definition-row.echo-notes-settings-definition-row {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	background-image: none;
+	border-radius: 0;
+	box-shadow: none;
+}
+
 .echo-notes-settings-intro {
 	min-width: 0;
 	margin: 0 0 10px;
@@ -949,7 +978,7 @@ button.echo-notes-settings-step:focus-visible {
 	margin: 10px 0 18px;
 	padding-top: 4px;
 	border-bottom: 1px solid var(--background-modifier-border);
-	background: var(--background-primary);
+	background: transparent;
 }
 
 button.echo-notes-settings-section-tab {
@@ -2033,9 +2062,10 @@ button.echo-notes-quick-recording-hotkey-clear {
 
 .echo-notes-settings-advanced {
 	margin: 14px 0 4px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	background: var(--background-secondary);
+	border: 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	border-radius: 0;
+	background: transparent;
 }
 
 .echo-notes-settings-advanced > summary {
@@ -3966,11 +3996,6 @@ button.echo-notes-task-center-tab.is-active {
 	overflow-y: auto;
 }
 
-.echo-notes-memory-center-inline {
-	max-height: none;
-	overflow: visible;
-}
-
 .echo-notes-memory-inbox-hero {
 	display: flex;
 	align-items: baseline;
@@ -4907,4 +4932,216 @@ button.echo-notes-memory-tool:hover {
 		align-items: stretch;
 		flex-direction: column;
 	}
+}
+
+
+/* ---- 第三阶段「记忆提取」设置页重构新增样式 ---- */
+
+.echo-notes-memory-status-line {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 4px 0 14px;
+	padding: 10px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 8px;
+	background: var(--background-secondary);
+	font-size: var(--font-ui-small);
+}
+
+.echo-notes-memory-status-line.is-ready {
+	border-left-color: var(--color-green);
+}
+
+.echo-notes-memory-status-line.is-warning {
+	border-left-color: var(--color-orange);
+}
+
+.echo-notes-memory-status-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--text-muted);
+	flex: 0 0 auto;
+}
+
+.echo-notes-memory-status-line.is-ready .echo-notes-memory-status-dot {
+	background: var(--color-green);
+}
+
+.echo-notes-memory-status-line.is-warning .echo-notes-memory-status-dot {
+	background: var(--color-orange);
+}
+
+.echo-notes-memory-status-text {
+	color: var(--text-normal);
+}
+
+.echo-notes-memory-review-strip,
+.echo-notes-memory-setup-card {
+	margin: 0 0 14px;
+	padding: 14px 16px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.echo-notes-memory-review-strip {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	border-left: 3px solid var(--interactive-accent);
+	background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
+}
+
+.echo-notes-memory-review-strip-copy {
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.echo-notes-memory-review-strip-copy strong {
+	display: block;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+
+.echo-notes-memory-review-strip-copy span {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-memory-review-strip-count {
+	display: grid;
+	place-items: center;
+	width: 38px;
+	height: 38px;
+	border-radius: 8px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: var(--font-ui-medium);
+	font-weight: 800;
+	flex: 0 0 auto;
+}
+
+.echo-notes-memory-review-strip-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: 0 0 auto;
+}
+
+.echo-notes-memory-review-strip-actions button {
+	min-height: 34px;
+}
+
+.echo-notes-memory-setup-card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 16px;
+	margin-bottom: 10px;
+}
+
+.echo-notes-memory-privacy-block,
+.echo-notes-memory-guidance {
+	margin: 0 0 14px;
+	padding: 12px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.echo-notes-memory-privacy-block strong,
+.echo-notes-memory-guidance summary {
+	display: block;
+	margin-bottom: 6px;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	font-weight: 700;
+}
+
+.echo-notes-memory-privacy-block ul,
+.echo-notes-memory-guidance-body ul {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 4px 18px;
+	margin: 0;
+	padding-left: 18px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-memory-guidance-body p {
+	margin: 0 0 8px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-memory-rules-panel {
+	margin: 0 0 14px;
+	padding: 4px 0 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+}
+
+.echo-notes-memory-rules-panel .setting-item {
+	padding-inline: 16px;
+}
+
+.echo-notes-memory-maintenance-note {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 14px 0 0;
+	padding: 12px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-memory-maintenance-note svg {
+	width: 16px;
+	height: 16px;
+	color: var(--text-faint);
+	flex: 0 0 auto;
+}
+
+@media (max-width: 680px) {
+	.echo-notes-memory-status-line {
+		flex-wrap: wrap;
+	}
+
+	.echo-notes-memory-review-strip {
+		flex-wrap: wrap;
+	}
+
+	.echo-notes-memory-review-strip-actions {
+		width: 100%;
+	}
+
+	.echo-notes-memory-review-strip-actions button {
+		width: 100%;
+		min-height: 44px;
+	}
+
+	.echo-notes-memory-privacy-block ul,
+	.echo-notes-memory-guidance-body ul {
+		grid-template-columns: 1fr;
+	}
+
+	.echo-notes-memory-setup-card-header {
+		flex-direction: column;
+		gap: 8px;
+	}
+}
+
+/* Obsidian 1.13 injects a hidden .is-measuring <select> for dropdown width
+ * calculations. It must not participate in layout / scrollWidth. */
+.setting-item-control select.dropdown.is-measuring {
+	display: none;
 }

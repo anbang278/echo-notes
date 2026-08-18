@@ -1448,3 +1448,6 @@ function isGettingStartedChapterOutcome(value: unknown): value is GettingStarted
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+export function countOnboardingReadinessStages(readiness: GettingStartedReadiness): number {
+	return [readiness.transcriptionReady, readiness.analysisReady, readiness.memoryReady].filter(Boolean).length;
+}
