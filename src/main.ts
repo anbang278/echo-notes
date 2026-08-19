@@ -2830,9 +2830,7 @@ export default class EchoNotesPlugin extends Plugin {
 					item
 						.setTitle("转写当前笔记音频")
 						.setIcon("audio-lines")
-						.onClick(() => {
-							void this.handleTranscribeAllAudioInCurrentNote(editor, info);
-						});
+						.onClick(() => this.handleTranscribeAllAudioInCurrentNote(editor, info));
 				});
 			})
 		);
@@ -3073,17 +3071,17 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private async handleTranscribeAllAudioInCurrentNote(editor: Editor, view: MarkdownFileInfo): Promise<void> {
+	private async handleTranscribeAllAudioInCurrentNote(editor: Editor, view: MarkdownFileInfo): Promise<"no-source" | "no-audio" | "processed"> {
 		const sourceNote = view.file;
 		if (!sourceNote) {
 			new Notice("当前没有可用的 Markdown 文件。");
-			return;
+			return "no-source";
 		}
 
 		const matches = parseAudioLinks(editor.getValue());
 		if (matches.length === 0) {
 			new Notice("没有在当前笔记中找到音频文件。");
-			return;
+			return "no-audio";
 		}
 
 		let completed = 0;
@@ -3116,6 +3114,7 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		new Notice(`Echo Notes 处理完成：${completed} 个音频，插入 ${linked} 个链接。`);
+		return "processed";
 	}
 
 	private async handleAnalyzeCurrentTranscriptWithTemplate(): Promise<void> {

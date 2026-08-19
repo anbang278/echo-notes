@@ -127,7 +127,7 @@ const THEMES = ["light", "dark"];
 const SCREENSHOT_STAGES = [
 	{ id: "transcription", section: "转写服务", providerSetting: "服务商" },
 	{ id: "analysis", section: "模型配置", providerSetting: "分析服务商" },
-	{ id: "memory", section: "配置与规则", providerSetting: "记忆服务商" }
+	{ id: "memory", section: "模型配置", providerSetting: "记忆服务商" }
 ];
 
 function assert(condition, message) {
@@ -1719,6 +1719,11 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 	column-gap: 16px;
 	align-items: start;
 }`;
+		frameworkStyleEl.textContent += `
+.echo-notes-declarative-settings-test .echo-notes-settings-shell {
+	padding: 0;
+	border: 0;
+}`;
 		document.head.append(frameworkStyleEl);
 		const groupEl = scratchEl.createDiv({ cls: "setting-group-list" });
 		const beforeEl = groupEl.createDiv({ cls: "echo-notes-framework-sentinel-before" });
@@ -2038,12 +2043,7 @@ async function verifyIntroduction(page) {
 	assert(result.guideCount === 1, `操作指引数量应为 1，实际为 ${result.guideCount}`);
 	const compactIntro = result.title === "Echo Notes 设置";
 	assert(compactIntro || result.title === EXPECTED_TITLE, "引导区标题不匹配");
-	assert(
-		compactIntro
-			? Boolean(result.copy?.includes("个阶段已就绪"))
-			: result.copy === EXPECTED_INTRO,
-		"引导区理念文案不匹配"
-	);
+	assert(result.copy === EXPECTED_INTRO, "引导区理念文案不匹配");
 	assert(
 		compactIntro
 			? result.guide === "提示：可使用方向键切换配置阶段。"
@@ -2800,16 +2800,14 @@ async function verifyTabs(page) {
 	await memoryTab.click();
 	const memorySectionTabs = activePanel.locator(".echo-notes-settings-section-tab");
 	assert(
-		(await memorySectionTabs.allTextContents()).join("|") === "配置与规则|维护",
-		"记忆阶段应将配置与规则和维护并列展示"
+		(await memorySectionTabs.allTextContents()).join("|") === "模型配置|配置与规则|维护",
+		"记忆阶段应按模型配置、配置与规则、维护的顺序展示"
 	);
 	const agentStage = page.locator('[data-settings-stage="agent"]');
 	assert(await agentStage.getAttribute("aria-disabled") === "true", "外部 Agent 阶段应保持不可操作");
 	assert((await agentStage.locator(".echo-notes-settings-step-status").textContent())?.trim() === "规划中", "外部 Agent 阶段应显示规划中而不是研发中");
-	const memoryModelTab = memorySectionTabs.filter({ hasText: "配置与规则" });
+	const memoryModelTab = memorySectionTabs.filter({ hasText: "模型配置" });
 	await memoryModelTab.click();
-	assert(await activePanel.getByText("确认 3 件事，就可以开始", { exact: true }).count() === 1, "提取设置缺少准备度分组");
-	assert(await activePanel.getByText("隐私与费用", { exact: true }).count() === 1, "提取设置缺少隐私与费用说明");
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "记忆服务商")) ===
 			JSON.stringify([
@@ -2825,6 +2823,9 @@ async function verifyTabs(page) {
 	);
 	await selectSettingOption(page, "记忆服务商", "siliconflow");
 	assert((await getSettingTextValue(page, "记忆模型")) === "Qwen/Qwen3.5-4B", "硅基流动默认记忆模型不正确");
+	await memorySectionTabs.filter({ hasText: "配置与规则" }).click();
+	assert(await activePanel.getByText("确认 3 件事，就可以开始", { exact: true }).count() === 1, "提取设置缺少准备度分组");
+	assert(await activePanel.getByText("隐私与费用", { exact: true }).count() === 1, "提取设置缺少隐私与费用说明");
 	await setSettingToggle(page, "长文本分块提取", false);
 	assert((await activePanel.getByText("记忆分块字符数", { exact: true }).count()) === 0, "关闭记忆分块后不应显示分块字符数");
 	await setSettingToggle(page, "长文本分块提取", true);
@@ -4440,7 +4441,7 @@ async function verifySettingsControlAlignment(page) {
 		},
 		{
 			stage: "memory",
-			section: "配置与规则",
+			section: "模型配置",
 			providerName: "记忆服务商",
 			providerValue: "siliconflow",
 			apiKeyName: "记忆 API Key",
@@ -4464,15 +4465,6 @@ async function verifySettingsControlAlignment(page) {
 				.evaluate((element) => element.click());
 		}
 		await selectSettingOption(page, spec.providerName, spec.providerValue);
-		if (spec.stage === "memory") {
-			const connection = getActivePanel(page)
-				.locator("details.echo-notes-memory-settings-advanced")
-				.filter({ hasText: "连接配置" })
-				.first();
-			if ((await connection.getAttribute("open")) === null) {
-				await connection.locator(":scope > summary").click();
-			}
-		}
 		const basicMetrics = await inspectNamedSettingControls(page, spec.basicNames);
 		assertAlignedControlGroup(basicMetrics, `${spec.stage}/基础配置`);
 		const feedbackMetrics = await verifyApiKeyFeedback(page, spec.apiKeyName, spec.stage);
@@ -4754,6 +4746,100 @@ async function inspectLayout(page, providerSettingName) {
 
 async function captureViewports(page) {
 	const results = [];
+	// 回归场景固定到拥有最长服务商和模型标签的阿里百炼，确保度量的是
+	// 实际渲染选项而不是仅存在于其他服务商配置中的字符串。
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.transcriptionMode = "offline";
+		plugin.settings.offlineTranscription.provider = "aliyun-bailian";
+		plugin.settings.offlineTranscription.model = "qwen-audio-3.0-asr-flash-filetrans";
+		await plugin.saveSettings();
+		plugin.settingTab.display();
+	}, PLUGIN_ID);
+
+	async function inspectTranscriptionDropdownTextVisibility(viewport) {
+		const metrics = await page.evaluate(() => {
+			const canvas = document.createElement('canvas');
+			const context = canvas.getContext('2d');
+			const allSettings = [...document.querySelectorAll('.echo-notes-settings-panel:not([hidden]) .setting-item')];
+			const findSetting = (name) => allSettings.find((s) => s.querySelector('.setting-item-name')?.textContent?.trim().includes(name));
+			const targets = [
+				{ key: "mode", name: "转写模式", longestOptionText: "实时转写" },
+				{ key: "provider", name: "服务商", longestOptionText: "【推荐】阿里百炼（Alibaba Bailian）" },
+				{ key: "model", name: "转写模型", longestOptionText: "qwen-audio-3.0-asr-flash-filetrans（推荐）" }
+			];
+			const result = {};
+			for (const target of targets) {
+				const settingEl = findSetting(target.name);
+				const selectEl = settingEl?.querySelector('select.dropdown:not(.is-measuring)');
+				if (!selectEl) {
+					result[target.key] = { found: false };
+					continue;
+				}
+				const controlEl = selectEl.parentElement;
+				const style = getComputedStyle(selectEl);
+				const rect = selectEl.getBoundingClientRect();
+				context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+				const selectedText = selectEl.options[selectEl.selectedIndex]?.text ?? "";
+				const textWidth = context.measureText(selectedText).width;
+				const longestOptionText = target.longestOptionText;
+				const longestOptionExists = [...selectEl.options].some((option) => option.text === longestOptionText);
+				const longestOptionTextWidth = context.measureText(longestOptionText).width;
+				const paddingStart = parseFloat(style.paddingInlineStart);
+				const paddingEnd = parseFloat(style.paddingInlineEnd);
+				const availableWidth = rect.width - paddingStart - paddingEnd;
+				result[target.key] = {
+					found: true,
+					controlWidth: controlEl.getBoundingClientRect().width,
+					nativeSelectWidth: rect.width,
+					nativeSelectClientWidth: selectEl.clientWidth,
+					nativeSelectScrollWidth: selectEl.scrollWidth,
+					visibleDropdownWidth: rect.width,
+					visibleDropdownScrollWidth: selectEl.scrollWidth,
+					selectedText,
+					textWidth,
+					availableWidth,
+					selectedTextFullyVisible: textWidth <= availableWidth + 1,
+					longestOptionText,
+					longestOptionExists,
+					longestOptionTextWidth,
+					longestOptionTextFullyVisible: longestOptionTextWidth <= availableWidth + 1,
+					computedStyle: {
+						width: style.width,
+						maxWidth: style.maxWidth,
+						paddingInlineStart: style.paddingInlineStart,
+						paddingInlineEnd: style.paddingInlineEnd,
+						overflow: style.overflow,
+						textOverflow: style.textOverflow,
+						whiteSpace: style.whiteSpace
+					}
+				};
+			}
+			return result;
+		});
+		for (const [key, metric] of Object.entries(metrics)) {
+			const context = `dropdown-visibility/transcription/${viewport.name}/${key}`;
+			assert(metric.found, `${context} 未找到下拉控件`);
+			if (key === "mode" && !viewport.stackedSettings && !viewport.mobileShell) {
+				assert(metric.visibleDropdownWidth >= 100 && metric.visibleDropdownWidth <= 130, `${context} 模式下拉框未收窄到短文案所需宽度（${metric.visibleDropdownWidth}）`);
+			} else {
+				assert(Math.abs(metric.visibleDropdownWidth - metric.controlWidth) <= 1, `${context} 可见下拉框宽度（${metric.visibleDropdownWidth}）未填满控制区（${metric.controlWidth}）`);
+			}
+			if (!viewport.stackedSettings && !viewport.mobileShell) {
+				assert(
+					metric.selectedTextFullyVisible,
+					`${context} 选中文本（"${metric.selectedText}"，宽度 ${metric.textWidth.toFixed(1)}px）超出可用区域（${metric.availableWidth.toFixed(1)}px）`
+				);
+				assert(metric.longestOptionExists, `${context} 未找到最长回归选项：${metric.longestOptionText}`);
+				assert(
+					metric.longestOptionTextFullyVisible,
+					`${context} 最长选项（"${metric.longestOptionText}"，宽度 ${metric.longestOptionTextWidth.toFixed(1)}px）超出可用区域（${metric.availableWidth.toFixed(1)}px）`
+				);
+			}
+		}
+		return metrics;
+	}
+
 	for (const viewport of VIEWPORTS) {
 		for (const theme of THEMES) {
 			for (const stage of SCREENSHOT_STAGES) {
@@ -4782,12 +4868,16 @@ async function captureViewports(page) {
 					`${context} 的服务商设置行响应式布局不符合预期`
 				);
 
+				const dropdownMetrics = stage.id === "transcription"
+					? await inspectTranscriptionDropdownTextVisibility(viewport)
+					: undefined;
+
 				const fileName = `settings-${stage.id}-${viewport.name}-${theme}.png`;
 				const screenshotPath = path.join(OUTPUT_DIR, fileName);
 				await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
 				const screenshotStat = await stat(screenshotPath);
 				assert(screenshotStat.size > 10_000, `${fileName} 截图可能为空白`);
-				results.push({ stage: stage.id, viewport: viewport.name, theme, fileName, metrics });
+				results.push({ stage: stage.id, viewport: viewport.name, theme, fileName, metrics, dropdownMetrics });
 			}
 		}
 	}

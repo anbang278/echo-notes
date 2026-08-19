@@ -23,7 +23,6 @@ import {
 } from "../providers/provider-diagnostics";
 import { captureHotkeyFromKeyboardEvent } from "../getting-started/getting-started-hotkeys";
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
-import { countOnboardingReadinessStages } from "../getting-started/getting-started-state";
 import { diagnoseMemoryProviderSettings } from "../memory/memory-provider";
 import { getSanitizedErrorMessage } from "../security/redaction";
 import {
@@ -80,7 +79,7 @@ type SettingsStage = "transcription" | "analysis" | "memory";
 
 type TranscriptionSettingsSection = "service" | "advanced" | "output" | "automation";
 type AnalysisSettingsSection = "model" | "processing" | "templates";
-type MemorySettingsSection = "config" | "maintenance";
+type MemorySettingsSection = "model" | "config" | "maintenance";
 
 export type EchoNotesSettingsDestination =
 	| "transcription-service"
@@ -149,6 +148,7 @@ const ANALYSIS_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<AnalysisSet
 ];
 
 const MEMORY_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<MemorySettingsSection>[] = [
+	{ id: "model", label: "模型配置" },
 	{ id: "config", label: "配置与规则" },
 	{ id: "maintenance", label: "维护" }
 ];
@@ -159,7 +159,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private activeSettingsStage: SettingsStage = "transcription";
 	private activeTranscriptionSettingsSection: TranscriptionSettingsSection = "service";
 	private activeAnalysisSettingsSection: AnalysisSettingsSection = "model";
-	private activeMemorySettingsSection: MemorySettingsSection = "config";
+	private activeMemorySettingsSection: MemorySettingsSection = "model";
 	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
 	private settingsRenderSequence = 0;
 	private readonly settingsSpotlight: SettingsSpotlight;
@@ -244,7 +244,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				break;
 			case "memory-model":
 				this.activeSettingsStage = "memory";
-				this.activeMemorySettingsSection = "config";
+				this.activeMemorySettingsSection = "model";
 				break;
 			case "memory-center":
 				this.activeSettingsStage = "memory";
@@ -294,11 +294,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		this.settingsContainerEl = containerEl;
 		containerEl.closest<HTMLElement>(".modal-content")?.addClass("echo-notes-settings-modal-content");
 		containerEl.empty();
+		const shellEl = containerEl.createDiv({ cls: "echo-notes-settings-shell" });
 		const renderId = ++this.settingsRenderSequence;
-		this.renderSettingsIntroduction(containerEl, renderId);
-		const workflowEl = this.renderSettingsWorkflow(containerEl, renderId);
+		this.renderSettingsIntroduction(shellEl, renderId);
+		const workflowEl = this.renderSettingsWorkflow(shellEl, renderId);
 
-		const transcriptionPanelEl = containerEl.createDiv({ cls: "echo-notes-settings-panel" });
+		const transcriptionPanelEl = shellEl.createDiv({ cls: "echo-notes-settings-panel" });
 		transcriptionPanelEl.id = `echo-notes-settings-panel-${renderId}-transcription`;
 		transcriptionPanelEl.setAttribute("role", "tabpanel");
 		transcriptionPanelEl.setAttribute(
@@ -306,8 +307,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			`echo-notes-settings-step-${renderId}-transcription`
 		);
 		this.renderTranscriptionSettings(transcriptionPanelEl, renderId);
+		this.markUniformSettingsFields(transcriptionPanelEl);
 
-		const analysisPanelEl = containerEl.createDiv({ cls: "echo-notes-settings-panel" });
+		const analysisPanelEl = shellEl.createDiv({ cls: "echo-notes-settings-panel" });
 		analysisPanelEl.id = `echo-notes-settings-panel-${renderId}-analysis`;
 		analysisPanelEl.setAttribute("role", "tabpanel");
 		analysisPanelEl.setAttribute(
@@ -315,8 +317,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			`echo-notes-settings-step-${renderId}-analysis`
 		);
 		this.renderAnalysisSettings(analysisPanelEl, renderId);
+		this.markUniformSettingsFields(analysisPanelEl);
 
-		const memoryPanelEl = containerEl.createDiv({ cls: "echo-notes-settings-panel" });
+		const memoryPanelEl = shellEl.createDiv({ cls: "echo-notes-settings-panel" });
 		memoryPanelEl.id = `echo-notes-settings-panel-${renderId}-memory`;
 		memoryPanelEl.setAttribute("role", "tabpanel");
 		memoryPanelEl.setAttribute(
@@ -324,6 +327,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			`echo-notes-settings-step-${renderId}-memory`
 		);
 		this.renderMemorySettings(memoryPanelEl, renderId);
+		this.markUniformSettingsFields(memoryPanelEl);
 
 		this.activateSettingsStage(
 			workflowEl,
@@ -358,12 +362,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const headingEl = headingSetting.nameEl;
 		headingEl.addClass("echo-notes-settings-intro-title");
 		headingEl.id = headingId;
-		const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
-		conceptEl.createSpan({
-			text: newcomer
-				? "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。"
-				: `${countOnboardingReadinessStages(guide.readiness)}/3 个阶段已就绪 · 按下方工作流补齐或调整当前配置。`
-		});
+	const conceptEl = introEl.createEl("p", { cls: "echo-notes-settings-intro-copy" });
+	conceptEl.createSpan({
+		text: "Echo Notes 以录音为入口，将转写与 AI 分析沉淀为 Vault 中可搜索、可链接、可长期复用的 Markdown 上下文，并为未来的 Personal Agent 构建个人记忆。 "
+	});
 		const readmeLinkEl = conceptEl.createEl("a", {
 			cls: "echo-notes-settings-intro-link echo-notes-settings-intro-inline-action",
 			text: "查看完整设计理念",
@@ -2074,6 +2076,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.activeMemorySettingsSection,
 			(section, panelEl) => {
 				switch (section) {
+					case "model":
+						this.renderMemoryModelSettings(panelEl);
+						break;
 					case "config":
 						this.renderMemoryExtractionPanel(panelEl);
 						break;
@@ -2240,10 +2245,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	});
 	centerBtn.addEventListener("click", () => void this.plugin.openMemoryCenter("overview"));
 
-	const modelDetails = card.createEl("details", { cls: "echo-notes-memory-settings-advanced" });
-	modelDetails.createEl("summary", { text: "连接配置（服务商、API Key 与模型）" });
-	const modelBody = modelDetails.createDiv({ cls: "echo-notes-memory-settings-advanced-body" });
-	this.renderMemoryModelSettings(modelBody);
 	}
 
 	private renderMemoryReviewSummaryStrip(containerEl: HTMLElement, context: MemoryInboxContext): void {

@@ -358,7 +358,14 @@ async function openNote(page, notePath) {
 		await leaf.openFile(file);
 	}, notePath);
 	await page.waitForFunction(
-		(targetPath) => window.app.workspace.getActiveFile()?.path === targetPath,
+		async (targetPath) => {
+			const activeFile = window.app.workspace.getActiveFile();
+			const view = window.app.workspace.activeLeaf?.view;
+			if (activeFile?.path !== targetPath || !view?.editor) {
+				return false;
+			}
+			return view.editor.getValue() === await window.app.vault.read(activeFile);
+		},
 		notePath
 	);
 	await page.locator(".workspace-leaf.mod-active .cm-editor .cm-content").waitFor({ state: "visible" });
@@ -430,15 +437,22 @@ async function clickTranscriptionMenuItem(page) {
 		if (matches.length !== 1 || typeof matches[0].onClick !== "function") {
 			throw new Error(`右键菜单项数量不正确：${matches.length}`);
 		}
-		matches[0].onClick();
+		globalThis.__echoNotesEditorMenuClickPromise = Promise.resolve(matches[0].onClick());
+		return true;
 	}, menuTitle);
 }
 
 async function waitForNotice(page, text) {
-	await page.locator(".notice").filter({ hasText: text }).last().waitFor({
-		state: "visible",
-		timeout: workflowTimeoutMs
-	});
+	try {
+		await page.locator(".notice").filter({ hasText: text }).last().waitFor({
+			state: "visible",
+			timeout: workflowTimeoutMs
+		});
+	} catch (error) {
+		const notices = await page.locator(".notice").allTextContents();
+		console.error(`等待 notice "${text}" 失败，当前 .notice 内容：`, JSON.stringify(notices));
+		throw error;
+	}
 }
 
 async function waitForTask(page, targetPath, status) {
@@ -544,8 +558,12 @@ try {
 		tasks: window.app.plugins.plugins[id].taskCenter.getTasks().length,
 		files: window.app.vault.getMarkdownFiles().length
 	}), pluginId);
-	await clickTranscriptionMenuItem(page);
-	await waitForNotice(page, "没有在当前笔记中找到音频文件");
+	const emptyResult = await page.evaluate(async (expectedTitle) => {
+		const item = (globalThis.__echoNotesEditorMenuItems ?? [])
+			.find((candidate) => candidate.title === expectedTitle);
+		return await item.onClick();
+	}, menuTitle);
+	assert(emptyResult === "no-audio", `无音频分支结果不正确：${emptyResult}`);
 	const emptyAfter = await page.evaluate((id) => ({
 		tasks: window.app.plugins.plugins[id].taskCenter.getTasks().length,
 		files: window.app.vault.getMarkdownFiles().length
@@ -565,7 +583,23 @@ try {
 	);
 	assert(await openEditorMenu(page) === 1, "上传确认笔记右键菜单项不是唯一实例");
 	await clickTranscriptionMenuItem(page);
-	await page.locator(".modal-title").filter({ hasText: "确认上传音频" }).waitFor({ state: "visible" });
+	const confirmInvocation = await page.evaluate(async () => Promise.race([
+		globalThis.__echoNotesEditorMenuClickPromise.then((result) => ({ done: true, result })),
+		new Promise((resolve) => setTimeout(() => resolve({ done: false }), 300))
+	]));
+	assert(!confirmInvocation.done, `上传确认菜单回调意外提前结束：${confirmInvocation.result}`);
+	try {
+		await page.locator(".modal-title").filter({ hasText: "确认上传音频" }).waitFor({ state: "visible" });
+	} catch (error) {
+		const snapshot = await page.evaluate((id) => ({
+			editorValue: window.app.workspace.activeLeaf?.view?.editor?.getValue?.(),
+			activeFile: window.app.workspace.getActiveFile()?.path,
+			tasks: window.app.plugins.plugins[id]?.taskCenter.getTasks(),
+			modals: [...document.querySelectorAll(".modal-container")].map((modal) => modal.textContent?.trim())
+		}), pluginId);
+		console.error("等待上传确认弹窗失败，运行时快照：", JSON.stringify(snapshot));
+		throw error;
+	}
 	assert(transcriptionMock.calls.length === 0, "确认前已发送音频请求");
 	await page.getByRole("button", { name: "取消", exact: true }).click();
 	await waitForNotice(page, "已取消转写：confirm.wav");

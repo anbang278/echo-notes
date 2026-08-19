@@ -52,6 +52,22 @@ body .setting-item.echo-notes-settings-definition-row {
 	box-shadow: none;
 }
 
+
+/* Echo Notes 设置页外层边框 Shell。
+ * 在 Obsidian 1.13 清除灰色 surface 后，给 Echo Notes 自己的内容区域建立轻量边界。
+ * 注意：Shell 的职责是 Echo Notes 自己的内容边界，不要与 Obsidian 1.13 surface reset 混合。 */
+.echo-notes-settings-shell {
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+	min-width: 0;
+	padding: 18px 20px 20px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: transparent;
+	box-shadow: none;
+}
+
 .echo-notes-settings-intro {
 	min-width: 0;
 	margin: 0 0 10px;
@@ -1031,6 +1047,14 @@ button.echo-notes-settings-section-tab.is-active {
 	min-width: 0;
 }
 
+/* 录音转写“转写模式”等字段直接挂在 .echo-notes-settings-panel 下，
+ * 需要与内部 section-panel 共享统一字段宽度变量。 */
+.echo-notes-settings-panel {
+	--echo-notes-settings-field-width: 320px;
+	--echo-notes-settings-field-height: var(--input-height, 30px);
+	--echo-notes-settings-mode-width: 112px;
+}
+
 .echo-notes-settings-section-panel[hidden] {
 	display: none;
 }
@@ -1610,9 +1634,9 @@ button.echo-notes-memory-settings-review-filter.is-active {
 }
 
 .echo-notes-settings-basic-heading {
-	margin: 4px 0 2px;
-	padding-bottom: 8px;
-	border-bottom: 1px solid var(--background-modifier-border);
+	margin: 8px 0 2px;
+	padding: 6px 0 4px;
+	border-bottom: 0;
 	color: var(--text-normal);
 	font-size: var(--font-ui-small);
 	font-weight: 700;
@@ -1990,7 +2014,16 @@ button.echo-notes-quick-recording-hotkey-clear {
 	justify-content: flex-end;
 }
 
-.echo-notes-settings-section-panel .setting-item-control > .echo-notes-settings-field {
+/* 转写模式等直接挂在 .echo-notes-settings-panel 下的设置项也需要统一字段宽度，
+ * 而不是随内容收缩。 */
+.echo-notes-settings-panel > .setting-item:not(.setting-item-heading) > .setting-item-control {
+	width: var(--echo-notes-settings-field-width);
+	min-width: var(--echo-notes-settings-field-width);
+	flex: 0 0 var(--echo-notes-settings-field-width);
+	justify-content: flex-end;
+}
+
+.echo-notes-settings-panel .setting-item-control > .echo-notes-settings-field {
 	width: 100% !important;
 	min-width: 0 !important;
 	max-width: 100% !important;
@@ -1999,6 +2032,45 @@ button.echo-notes-quick-recording-hotkey-clear {
 	max-height: var(--echo-notes-settings-field-height) !important;
 	box-sizing: border-box;
 	flex: 0 0 100%;
+}
+
+/* 下拉选择框需要明确的输入控件边界，在 Obsidian 1.13 下避免与普通文本混淆。
+ * 只针对 setting-item-control 下的真实 select；.is-measuring 辅助元素保持隐藏。 */
+.echo-notes-settings-panel .setting-item-control > .dropdown:not(.is-measuring) {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--input-radius);
+	background-color: var(--background-modifier-form-field);
+	padding-inline: 8px 28px;
+	appearance: none;
+	-webkit-appearance: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 10px center;
+	text-align: left;
+}
+
+/* 顶部模式只有“实时转写/离线转写”两个短选项，避免占用完整字段宽度。 */
+.echo-notes-settings-panel > .setting-item:first-child > .setting-item-control > select.echo-notes-settings-field {
+	width: var(--echo-notes-settings-mode-width) !important;
+	min-width: var(--echo-notes-settings-mode-width) !important;
+	max-width: var(--echo-notes-settings-mode-width) !important;
+	flex: 0 0 var(--echo-notes-settings-mode-width);
+}
+
+.echo-notes-settings-panel .setting-item-control > .dropdown:not(.is-measuring):hover {
+	border-color: var(--background-modifier-border-hover);
+}
+
+.echo-notes-settings-panel .setting-item-control > .dropdown:not(.is-measuring):focus,
+.echo-notes-settings-panel .setting-item-control > .dropdown:not(.is-measuring):focus-visible {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--interactive-accent) 20%, transparent);
+}
+
+.echo-notes-settings-panel .setting-item-control > .dropdown:not(.is-measuring):disabled,
+.echo-notes-settings-panel .setting-item-control > .dropdown:not(.is-measuring).is-disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
 }
 
 .echo-notes-settings-control-feedback {
@@ -2146,10 +2218,25 @@ button.echo-notes-quick-recording-hotkey-clear {
 		justify-content: flex-start;
 	}
 
+	/* 转写模式等外层设置项在窄屏下同样要堆叠，不能保留 320px 固定宽度。 */
+	.echo-notes-settings-panel > .setting-item:not(.setting-item-heading) > .setting-item-control {
+		width: 100%;
+		min-width: 0;
+		flex: 1 1 auto;
+		justify-content: flex-start;
+	}
+
+	.echo-notes-settings-panel > .setting-item:first-child > .setting-item-control > select.echo-notes-settings-field {
+		width: 100% !important;
+		min-width: 0 !important;
+		max-width: 100% !important;
+		flex: 0 0 100%;
+	}
+
 	.echo-notes-settings-section-panel .setting-item-control > .echo-notes-settings-field {
 		width: 100% !important;
 		max-width: 100% !important;
-	}
+}
 
 	.echo-notes-settings-control-composite > button {
 		margin-left: 0;
@@ -3499,6 +3586,10 @@ button.echo-notes-task-center-tab.is-active {
 
 	.echo-notes-settings-spotlight-footer button {
 		flex: 1 1 140px;
+	}
+
+	.echo-notes-settings-shell {
+		padding: 14px 14px 16px;
 	}
 
 	.echo-notes-settings-intro {
