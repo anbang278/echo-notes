@@ -85,6 +85,14 @@ export interface RealtimeTranscriptionConfig extends TranscriptionConfig<Realtim
 
 export type OutputStrategy = "same-name-subfolder" | "same-folder" | "custom-folder";
 
+export type RecordingStorageStrategy = "obsidian" | "same-folder" | "note-subfolder" | "custom-folder";
+
+export interface RecordingStorageSettings {
+	strategy: RecordingStorageStrategy;
+	subfolder: string;
+	customFolder: string;
+}
+
 export type InsertStyle = "linkOnly" | "callout";
 
 export type CopyLanguage = "zh" | "en";
@@ -228,6 +236,7 @@ export interface EchoNotesSettings {
 	agentPlanSpeakerLabelStyle: AgentPlanSpeakerLabelStyle;
 	mosiSpeakerDiarizationEnabled: boolean;
 	outputStrategy: OutputStrategy;
+	recordingStorage: RecordingStorageSettings;
 	customOutputFolder: string;
 	insertStyle: InsertStyle;
 	copyLanguage: CopyLanguage;
@@ -1015,6 +1024,11 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	agentPlanSpeakerLabelStyle: "speaker-with-time",
 	mosiSpeakerDiarizationEnabled: true,
 	outputStrategy: "same-name-subfolder",
+	recordingStorage: {
+		strategy: "obsidian",
+		subfolder: "Recordings",
+		customFolder: "Recordings"
+	},
 	customOutputFolder: "Transcripts",
 	insertStyle: "linkOnly",
 	copyLanguage: "zh",
@@ -1203,9 +1217,24 @@ export function createDefaultAnalysisTemplates(): AnalysisTemplateConfig[] {
 	return BUILTIN_ANALYSIS_TEMPLATE_IDS.map((id) => cloneAnalysisTemplate(DEFAULT_ANALYSIS_TEMPLATES[id]));
 }
 
+export function normalizeRecordingStorageSettings(value: unknown): RecordingStorageSettings {
+	const raw = isRecord(value) ? value : {};
+	const defaults = DEFAULT_SETTINGS.recordingStorage;
+	const strategy = raw.strategy;
+	return {
+		strategy: strategy === "same-folder" || strategy === "note-subfolder" || strategy === "custom-folder"
+			? strategy
+			: "obsidian",
+		// 显式非法目录保留为空或原字符串，交给路径校验提示；不静默改存其他目录。
+		subfolder: raw.subfolder === undefined ? defaults.subfolder : typeof raw.subfolder === "string" ? raw.subfolder.trim() : "",
+		customFolder: raw.customFolder === undefined ? defaults.customFolder : typeof raw.customFolder === "string" ? raw.customFolder.trim() : ""
+	};
+}
+
 export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings {
 	const raw = isRecord(rawData) ? rawData : {};
 	const settings = Object.assign({}, DEFAULT_SETTINGS, raw) as EchoNotesSettings;
+	settings.recordingStorage = normalizeRecordingStorageSettings(raw.recordingStorage);
 	const mosiSpeakerDiarizationEnabled =
 		typeof raw.mosiSpeakerDiarizationEnabled === "boolean"
 			? raw.mosiSpeakerDiarizationEnabled

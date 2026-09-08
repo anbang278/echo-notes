@@ -233,6 +233,23 @@ Recommended defaults:
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
 | LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |
 
+## Configure recording storage
+
+Open **Echo Notes → Transcription → Output rules → Recording storage**. This setting applies to Echo Notes real-time recording and to the Obsidian core Audio recorder's hotkeys, command palette entries, and microphone button.
+
+| Strategy | Location |
+| --- | --- |
+| Follow Obsidian attachments (default) | Uses Obsidian's existing attachment-folder rule |
+| Same folder as the current note | The source note's directory |
+| Subfolder under the current note | A named child folder of the source-note directory, such as `Recordings` or `Attachments/Recordings` |
+| Fixed folder in the vault | A named folder under the vault root, such as `Recordings`; `.` means the vault root |
+
+Folders may use Chinese names and nested paths, are created when needed, and avoid collisions by numbering a new file. They must be vault-relative paths: absolute paths, URLs, `..`, empty paths, and invalid path segments are rejected. Save a folder field by pressing Enter or moving focus away; invalid values remain visible with an error instead of being silently redirected elsewhere.
+
+Core-recorder audio uses the note visible at save time and inserts its link there. With no source note, same-folder and note-subfolder strategies resolve from the vault root and the saved audio opens directly. Real-time recording freezes both its source note and storage configuration when it starts, so switching notes or editing settings does not move an in-progress recording.
+
+This setting affects only new recordings and never moves history. The separate **Transcript output strategy** continues to control transcript placement. When Echo Notes is disabled, the core recorder returns to native save behavior. If a compatible core save hook is unavailable, or a custom save fails before an audio file exists, Echo Notes reports the condition and falls back to Obsidian's attachment rule. A link-write failure after audio exists never creates a duplicate recording.
+
 ## Configure the Obsidian Core Plugin Audio Recorder
 
 Obsidian's `Audio recorder` core plugin is used only by the offline workflow: it saves a complete recording after stop, then Echo Notes transcribes that file with the offline provider. Real-time mode uses Echo Notes' own recorder because the core recorder exposes no stable public live-audio chunk API. The core-plugin controls appear in the offline settings section.

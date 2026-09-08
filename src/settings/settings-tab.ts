@@ -12,6 +12,7 @@ import {
 	type SettingDefinitionItem
 } from "obsidian";
 import type EchoNotesPlugin from "../main";
+import { validateRecordingStorage } from "../audio/recording-storage-path";
 import {
 	getProviderCapabilitySummary,
 	getTranscriptionProviderCapability
@@ -72,6 +73,8 @@ import {
 	type MemoryProviderId,
 	type OfflineTranscriptionProviderId,
 	type OutputStrategy,
+	type RecordingStorageSettings,
+	type RecordingStorageStrategy,
 	type TranscriptionConfig
 } from "./settings";
 
@@ -652,10 +655,90 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		).forEach((fieldEl) => fieldEl.addClass("echo-notes-settings-field"));
 	}
 
+	private renderRecordingStorageSettings(containerEl: HTMLElement): void {
+		this.renderBasicHeading(containerEl, "录音文件");
+		const locationSetting = new Setting(containerEl)
+			.setName("录音存放位置")
+			.setDesc("适用于 Echo Notes 实时录音及核心录音机的快捷键、命令和麦克风按钮。仅影响新录音，不移动已有文件。核心录音按保存时的笔记归档；实时录音按开始时的笔记归档。")
+			.addDropdown((dropdown) => dropdown
+				.addOption("obsidian", "跟随 Obsidian 附件设置")
+				.addOption("same-folder", "当前笔记同目录")
+				.addOption("note-subfolder", "当前笔记下指定子目录")
+				.addOption("custom-folder", "库内固定目录")
+				.setValue(this.plugin.settings.recordingStorage.strategy)
+				.onChange(async (value) => {
+					this.plugin.settings.recordingStorage = {
+						...this.plugin.settings.recordingStorage,
+						strategy: value as RecordingStorageStrategy
+					};
+					await this.plugin.saveSettings();
+					this.refreshSettings();
+				}));
+		locationSetting.settingEl.addClass("echo-notes-recording-storage-setting");
+
+		const storage = this.plugin.settings.recordingStorage;
+		if (storage.strategy !== "note-subfolder" && storage.strategy !== "custom-folder") {
+			return;
+		}
+		const field: keyof Pick<RecordingStorageSettings, "subfolder" | "customFolder"> =
+			storage.strategy === "note-subfolder" ? "subfolder" : "customFolder";
+		const folderSetting = new Setting(containerEl)
+			.setName(field === "subfolder" ? "录音子目录" : "录音固定目录")
+			.setDesc(field === "subfolder"
+				? "相对于所属笔记的目录，例如 Recordings 或 附件/录音；没有来源笔记时，以库根目录为基准。目录不存在时自动创建，同名文件自动编号。"
+				: "相对于库根目录，例如 Recordings 或 附件/录音；填写 . 表示库根目录。目录不存在时自动创建，同名文件自动编号。");
+		folderSetting.settingEl.addClass("echo-notes-recording-storage-setting");
+		const errorEl = folderSetting.descEl.createDiv({
+			cls: "echo-notes-recording-storage-error",
+			attr: { role: "status", "aria-live": "polite", id: `echo-notes-recording-storage-error-${this.settingsRenderSequence}` }
+		});
+		folderSetting.addText((text) => {
+			const showError = (message: string | null): void => {
+				errorEl.setText(message ? `${message} 修改后请移出输入框或按 Enter 保存。` : "");
+				errorEl.hidden = !message;
+				text.inputEl.setAttribute("aria-invalid", String(Boolean(message)));
+			};
+			let draftValue = storage[field];
+			text.setPlaceholder("Recordings").setValue(draftValue).onChange((value) => {
+				draftValue = value;
+				showError(validateRecordingStorage({ ...storage, [field]: value }));
+			});
+			text.inputEl.setAttribute("aria-label", field === "subfolder" ? "录音子目录" : "录音固定目录");
+			text.inputEl.setAttribute("aria-describedby", errorEl.id);
+			showError(validateRecordingStorage(storage));
+			const commit = (): void => {
+				const next = { ...this.plugin.settings.recordingStorage, [field]: draftValue.trim() };
+				const error = validateRecordingStorage(next);
+				showError(error);
+				if (error || next[field] === this.plugin.settings.recordingStorage[field]) {
+					return;
+				}
+				const previous = this.plugin.settings.recordingStorage;
+				this.plugin.settings.recordingStorage = next;
+				text.setValue(next[field]);
+				void this.plugin.saveSettings().catch(() => {
+					if (JSON.stringify(this.plugin.settings.recordingStorage) === JSON.stringify(next)) {
+						this.plugin.settings.recordingStorage = previous;
+					}
+					showError("录音目录配置未能保存，请重试。");
+				});
+			};
+			text.inputEl.addEventListener("blur", commit);
+			text.inputEl.addEventListener("keydown", (event) => {
+				if (event.key === "Enter" && !event.isComposing) {
+					event.preventDefault();
+					commit();
+				}
+			});
+		});
+	}
+
 	private renderTranscriptionOutputSettings(containerEl: HTMLElement): void {
+		this.renderRecordingStorageSettings(containerEl);
+		this.renderBasicHeading(containerEl, "转写稿输出");
 		new Setting(containerEl)
 			.setName("输出目录策略")
-			.setDesc("选择 transcript 生成位置。括号内为配置文件中的英文枚举值。")
+			.setDesc("仅控制 transcript 生成位置，录音文件使用上方独立的存放设置。括号内为配置文件中的英文枚举值。")
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOption("same-name-subfolder", "同名子目录（same-name-subfolder）")

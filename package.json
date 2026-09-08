@@ -1,6 +1,6 @@
 {
 	"name": "echo-notes",
-	"version": "0.4.23",
+	"version": "0.4.24",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
@@ -43,7 +43,7 @@
 		"typescript-eslint": "^8.63.0"
 	},
 	"dependencies": {
-		"fflate": "^0.8.2",
+		"fflate": "^0.8.3",
 		"ws": "8.21.1"
 	}
 }

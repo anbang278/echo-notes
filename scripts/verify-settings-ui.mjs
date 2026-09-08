@@ -19,6 +19,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { verifyCoreRecordingStorage, verifyRecordingStorageSettings } from "./verify-recording-storage.mjs";
 
 // 该脚本只用于本地验收，通过隔离的 Obsidian renderer 调用内部 API，不进入插件运行时代码。
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -4528,6 +4529,7 @@ async function inspectActiveSectionFields(page) {
 				const settingItem = field.closest(".setting-item");
 				return {
 					name: settingItem?.querySelector(".setting-item-name")?.textContent?.trim() ?? "未命名字段",
+					recordingTouchField: Boolean(settingItem?.classList.contains("echo-notes-recording-storage-setting")),
 					tag: field.tagName,
 					type: field instanceof HTMLInputElement ? field.type : null,
 					hasUniformFieldClass: field.classList.contains("echo-notes-settings-field"),
@@ -4565,8 +4567,10 @@ async function verifyAllCategorizedFields(page) {
 				assert(metrics.sectionOverflow <= 1, `${context} 分类面板出现横向溢出`);
 				for (const field of metrics.fields) {
 					assert(field.hasUniformFieldClass, `${context}/${field.name} 缺少统一字段 class`);
+					const recordingTouchTarget = field.recordingTouchField && metrics.panelWidth <= 560;
+					const expectedHeight = recordingTouchTarget ? Math.max(44, metrics.expectedFieldHeight) : metrics.expectedFieldHeight;
 					assert(
-						Math.abs(field.fieldHeight - metrics.expectedFieldHeight) <= 1,
+						Math.abs(field.fieldHeight - expectedHeight) <= 1,
 						`${context}/${field.name} 字段高度异常：${field.fieldHeight}`
 					);
 					assert(
@@ -4580,7 +4584,8 @@ async function verifyAllCategorizedFields(page) {
 							`${context}/${field.name} 宽屏字段不是 320px：${field.fieldWidth}`
 						);
 					}
-					viewportHeights.push(field.fieldHeight);
+					// 新录音控件在窄屏具有明确的 44px 触控契约，其他字段继续检验统一原生高度。
+					if (!recordingTouchTarget) viewportHeights.push(field.fieldHeight);
 				}
 				results.push({ viewport: viewport.name, stage: stage.id, section: sectionName, ...metrics });
 			}
@@ -5217,6 +5222,22 @@ try {
 	assert(runtimeState.pluginVersion === manifest.version, `宿主插件版本不匹配：${runtimeState.pluginVersion ?? "未找到"}`);
 	assert(runtimeState.audioWorkletAvailable, "Obsidian 宿主的 AudioContext.audioWorklet 不可用");
 	assert(runtimeState.audioWorkletNodeAvailable, "Obsidian 宿主的 AudioWorkletNode 不可用");
+	if (process.env.ECHO_NOTES_VERIFY_RECORDING_ONLY === "1") {
+		await setViewportMode(page, VIEWPORTS[0], "light");
+		await openSettings(page);
+		const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
+			pluginId: PLUGIN_ID, getActiveSetting, selectSettingOption, getActivePanel,
+			setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR
+		});
+		const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
+		assert(pageErrors.length === 0, `录音存储验收出现运行时错误：${pageErrors.join(" | ")}`);
+		await writeFile(path.join(OUTPUT_DIR, "recording-summary.json"), JSON.stringify({
+			pluginVersion: manifest.version, obsidianVersion: obsidianAsar.version,
+			generatedAt: new Date().toISOString(), durationMs: Date.now() - verificationStartedAt,
+			recordingStorageLayouts, recordingStorageIntegration, runtimeErrors: pageErrors
+		}, null, "\t"));
+		console.log("录音存储定向验收通过；完整设置页验收需运行不带筛选变量的命令。");
+	} else {
 	const realtimeStatusLayout = await verifyRealtimeStatusIndicator(page);
 	const gettingStartedLayouts = await verifyGettingStarted(page);
 	const taskCenterLayouts = await captureTaskCenterLayouts(page);
@@ -5226,6 +5247,10 @@ try {
 	await verifySettingsSurface(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
+	const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
+		pluginId: PLUGIN_ID, getActiveSetting, selectSettingOption, getActivePanel,
+		setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR
+	});
 	await verifySettingsHotkeyConflicts(page);
 	await reopenSettings(page);
 	await page.locator('[data-settings-stage="transcription"]').click();
@@ -5244,6 +5269,7 @@ try {
 	const memoryReviewLayouts = await verifyMemoryReview(page);
 	const memoryRelationLayouts = await verifyMemoryRelations(page);
 	const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
+	const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
 	assert(pageErrors.length === 0, `设置页出现运行时错误：${pageErrors.join(" | ")}`);
 
 	const summary = {
@@ -5254,6 +5280,8 @@ try {
 		generatedAt: new Date().toISOString(),
 		durationMs: Date.now() - verificationStartedAt,
 		semanticChecks: {
+			recordingStorageSettings: true,
+			recordingStorageIntegration: true,
 			audioWorkletSupport: true,
 			declarativeSettingsCompatibility: true,
 			introduction: true,
@@ -5288,6 +5316,8 @@ try {
 			runtimeErrors: pageErrors.length
 		},
 		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
+		recordingStorageLayouts,
+		recordingStorageIntegration,
 		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
 		realtimeStatusLayout,
@@ -5313,6 +5343,7 @@ try {
 	console.log(`Echo Notes 设置页验证通过：Obsidian ${obsidianAsar.version}`);
 	console.log(`耗时：${summary.durationMs} ms；新人边栏初始截图：${gettingStartedLayouts.initialLayouts.length} 张；新人阶段截图：${gettingStartedLayouts.guideLayouts.length} 张；配置 Spotlight 截图：${gettingStartedLayouts.spotlightLayouts.length} 张；任务中心截图：${taskCenterLayouts.length} 张；标准截图：${screenshots.length} 张；高级能力截图：${advancedCapabilityLayouts.length} 张；模板管理截图：${templateLayouts.length} 张；术语候选截图：${transcriptionEnhancementLayouts.length} 张；记忆候选审核截图：${memoryReviewLayouts.length} 张；记忆关系截图：${memoryRelationLayouts.length} 张；上下文包截图：${memoryContextLayouts.length} 张`);
 	console.log(`截图与指标：${OUTPUT_DIR}`);
+	}
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);
 	const obsidianOutput = getObsidianOutput();

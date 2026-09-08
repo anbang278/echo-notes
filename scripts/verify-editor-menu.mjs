@@ -303,19 +303,33 @@ async function ensurePluginLoaded(page) {
 }
 
 async function closeStartupModals(page) {
-	const welcomeClose = page.locator(
-		".echo-notes-getting-started-modal-shell:visible .modal-close-button"
-	);
-	if (await welcomeClose.count()) {
-		await welcomeClose.click();
-		await page.locator(".echo-notes-getting-started-modal-shell").waitFor({ state: "detached" });
+	// Obsidian 1.13 可能将首次第三方插件确认放进独立设置窗口；必须先处理全部 CDP 页面，
+	// 否则后续 Modal 会跟随该窗口，令主编辑器页的验收选择器产生假阴性。
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		let handled = false;
+		for (const candidate of browser.contexts().flatMap((context) => context.pages())) {
+			const welcomeClose = candidate.locator(
+				".echo-notes-getting-started-modal-shell:visible .modal-close-button"
+			);
+			if (await welcomeClose.count()) {
+				await welcomeClose.click();
+				await candidate.locator(".echo-notes-getting-started-modal-shell").waitFor({ state: "detached" });
+				handled = true;
+			}
+			const trustButton = candidate.locator(".modal-container:visible")
+				.getByRole("button", { name: "信任仓库作者并启用插件", exact: true });
+			if (await trustButton.count()) {
+				await trustButton.click();
+				handled = true;
+			}
+		}
+		if (!handled) break;
+		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
-	const trustButton = page.locator(".modal-container:visible")
-		.getByRole("button", { name: "信任仓库作者并启用插件", exact: true });
-	if (await trustButton.count()) {
-		await trustButton.click();
-		await page.waitForFunction((id) => Boolean(window.app.plugins.plugins[id]), pluginId);
-	}
+	await page.bringToFront();
+	await page.evaluate(() => window.focus());
+	await page.waitForFunction((id) => Boolean(window.app.plugins.plugins[id]), pluginId);
 }
 
 async function configurePlugin(page, baseUrl) {
@@ -432,6 +446,9 @@ async function openEditorMenu(page) {
 
 async function clickTranscriptionMenuItem(page) {
 	await page.evaluate((expectedTitle) => {
+		// 菜单回调在 CDP 中直接调用，不会产生真实的 Electron 焦点事件；显式模拟用户
+		// 在编辑器窗口点击，保证 Obsidian Modal 挂载到当前受测窗口而非旧设置 popout。
+		window.activeWindow = window;
 		const matches = (globalThis.__echoNotesEditorMenuItems ?? [])
 			.filter((item) => item.title === expectedTitle);
 		if (matches.length !== 1 || typeof matches[0].onClick !== "function") {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { runRecordingStorageTests } from "./recording-storage-tests";
 import { readFileSync } from "node:fs";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { unzipSync } from "fflate";
@@ -6960,4 +6961,5 @@ assert.equal(reviewV2Approved.reviews["assertion-review-v2"].effectiveTier, unde
 	);
 }
 
+await runRecordingStorageTests();
 console.log("Smoke tests passed.");

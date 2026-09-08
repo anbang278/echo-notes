@@ -5236,3 +5236,14 @@ button.echo-notes-memory-tool:hover {
 .setting-item-control select.dropdown.is-measuring {
 	display: none;
 }
+
+.echo-notes-recording-storage-error {
+	color: var(--text-error);
+	margin-top: 6px;
+}
+
+@container echo-notes-settings-panel (max-width: 560px) {
+	.echo-notes-recording-storage-setting {
+		--echo-notes-settings-field-height: max(44px, var(--input-height, 30px));
+	}
+}

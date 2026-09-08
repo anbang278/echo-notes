@@ -33,6 +33,8 @@ import {
 	selectAnalysisTemplatesForSourceMarkdown
 } from "./analysis/analysis-templates";
 import { AudioFileService } from "./audio/audio-file-service";
+import { CoreRecordingStorageAdapter } from "./audio/core-recording-storage-adapter";
+import { RecordingStorageService } from "./audio/recording-storage-service";
 import {
 	DiagnosticStore
 } from "./diagnostics/diagnostic-store";
@@ -328,6 +330,9 @@ interface ActiveRealtimeRecording {
 	audioFile: TFile;
 	sourceNote: TFile;
 	transcriptFile: TFile;
+	transcriptService: TranscriptService;
+	provider: string;
+	model: string;
 	mediaStream: MediaStream;
 	mediaRecorder: ChunkedMediaRecorder;
 	pcmCapture: RealtimePcmCapture;
@@ -381,6 +386,11 @@ export default class EchoNotesPlugin extends Plugin {
 	private markdownDebounceTimers = new Map<string, number>();
 	private processedMarkdownAudioLinks = new Set<string>();
 	private realtimeAudioPaths = new Set<string>();
+	private recordingStorage!: RecordingStorageService;
+	private coreRecordingStorageAdapter: CoreRecordingStorageAdapter | null = null;
+	private realtimeStarting = false;
+	private realtimeUnloading = false;
+	private realtimeStartingStream: MediaStream | null = null;
 	private audioInputDevices: AudioInputDevice[] = [];
 	private activeRealtimeRecording: ActiveRealtimeRecording | null = null;
 	private realtimeRibbonEl: HTMLElement | null = null;
@@ -401,6 +411,15 @@ export default class EchoNotesPlugin extends Plugin {
 		await this.loadSettings();
 		this.refreshServices();
 		this.diagnosticFiles = new FileService(this.app);
+		this.recordingStorage = new RecordingStorageService(this.app, (path) => this.diagnosticFiles.ensureFolder(path));
+		this.coreRecordingStorageAdapter = new CoreRecordingStorageAdapter({
+			app: this.app,
+			storage: this.recordingStorage,
+			getSettings: () => this.settings.recordingStorage,
+			getRecorder: () => this.getInternalPlugins()?.getEnabledPluginById?.(AUDIO_RECORDER_PLUGIN_ID),
+			getView: () => this.app.workspace.getActiveViewOfType(MarkdownView),
+			notify: (message) => { new Notice(message); }
+		});
 		this.diagnostics.restore(this.settings.diagnosticState);
 		this.unsubscribeTaskCenterPersistence = this.taskCenter.subscribe(() => {
 			this.schedulePersistentState();
@@ -437,6 +456,8 @@ export default class EchoNotesPlugin extends Plugin {
 		this.registerEditorContextMenu();
 		this.registerAutomation();
 		this.app.workspace.onLayoutReady(() => {
+			this.coreRecordingStorageAdapter?.refresh();
+			this.registerInterval(window.setInterval(() => this.coreRecordingStorageAdapter?.refresh(), 1000));
 			this.registerGettingStartedFileEvents();
 			void (async () => {
 				await this.ensureOfficialAudioRecorderEnabled();
@@ -452,6 +473,9 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.realtimeUnloading = true;
+		this.realtimeStartingStream?.getTracks().forEach((track) => track.stop());
+		this.coreRecordingStorageAdapter?.dispose();
 		if (this.persistentStateTimer !== null) {
 			window.clearTimeout(this.persistentStateTimer);
 			this.persistentStateTimer = null;
@@ -513,6 +537,7 @@ export default class EchoNotesPlugin extends Plugin {
 		delete this.settings.memoryApiKey;
 		await this.enqueueSettingsWrite();
 		this.refreshServices();
+		this.coreRecordingStorageAdapter?.refresh();
 		this.updateRealtimeUi();
 		this.notifySettingsChanged();
 		this.notifyGettingStartedChanged();
@@ -1917,6 +1942,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	async ensureOfficialAudioRecorderEnabled(notify = false): Promise<"enabled" | "unavailable" | "failed"> {
 		if (this.isOfficialAudioRecorderEnabled() === true) {
+			this.coreRecordingStorageAdapter?.refresh();
 			return "enabled";
 		}
 		const internalPlugins = this.getInternalPlugins();
@@ -1948,6 +1974,7 @@ export default class EchoNotesPlugin extends Plugin {
 			this.log("自动开启 Obsidian 核心录音机失败", error);
 			return "failed";
 		}
+		this.coreRecordingStorageAdapter?.refresh();
 		const enabledState = this.isOfficialAudioRecorderEnabled();
 		if (enabledState !== true) {
 			if (notify) {
@@ -4372,6 +4399,11 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async startRealtimeTranscription(): Promise<void> {
+		if (this.realtimeUnloading) return;
+		if (this.realtimeStarting) {
+			new Notice("实时录音正在准备，请稍候。");
+			return;
+		}
 		if (this.activeRealtimeRecording) {
 			new Notice("实时转写已经在运行。");
 			await this.app.workspace.getLeaf(false).openFile(this.activeRealtimeRecording.transcriptFile);
@@ -4392,7 +4424,15 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 
-		const config = this.settings.realtimeTranscription;
+		const storageSettings = { ...this.settings.recordingStorage };
+		const sourcePath = sourceNote.path;
+		const storageError = this.recordingStorage.validate(storageSettings, sourcePath);
+		if (storageError) {
+			new Notice(`录音存放位置配置不可用：${storageError}`);
+			return;
+		}
+		const config = { ...this.settings.realtimeTranscription };
+		const transcriptService = new TranscriptService(this.app, { ...this.settings });
 		const apiKey = this.getApiKey(config.provider);
 		const diagnostics = diagnoseTranscriptionProviderSettings(config, apiKey, {
 			isMobile: false,
@@ -4424,19 +4464,24 @@ export default class EchoNotesPlugin extends Plugin {
 		let pcmCapture: RealtimePcmCapture | null = null;
 		let agentPlanSession: AgentPlanRealtimeSession | null = null;
 		let audioPath = "";
+		const ensureStarting = (): void => {
+			if (this.realtimeUnloading) throw new Error("Echo Notes 插件已停用，实时录音启动已取消。");
+		};
+		this.realtimeStarting = true;
 		try {
 			mediaStream = await requestRealtimeMicrophone(config.inputDeviceId);
+			this.realtimeStartingStream = mediaStream;
+			ensureStarting();
 			const audioName = `Recording ${formatRecordingTimestamp(new Date())}`;
-			const attachmentVault = this.app.vault as typeof this.app.vault & {
-				getAvailablePathForAttachments(name: string, extension: string, sourceFile: TFile): Promise<string>;
-			};
-			audioPath = await attachmentVault.getAvailablePathForAttachments(
-				audioName,
-				REALTIME_RECORDING_EXTENSION,
-				sourceNote
-			);
-			this.realtimeAudioPaths.add(audioPath);
-			const sink = await VaultRecordingSink.create(this.app, audioPath);
+			const sink = await this.recordingStorage.create({
+				settings: storageSettings, sourcePath, name: audioName, extension: REALTIME_RECORDING_EXTENSION
+			}, async (path) => {
+				ensureStarting();
+				audioPath = path;
+				this.realtimeAudioPaths.add(path);
+				return VaultRecordingSink.create(this.app, path);
+			});
+			ensureStarting();
 			const audioFile = sink.file;
 			const startedAt = Date.now();
 			const streamingState: StreamingTranscriptionState = {
@@ -4448,7 +4493,7 @@ export default class EchoNotesPlugin extends Plugin {
 				realtime: true,
 				connectionStatus: "正在连接 AgentPlan"
 			};
-			const transcriptFile = await this.transcriptService.writeTranscribingTranscript(
+			const transcriptFile = await transcriptService.writeTranscribingTranscript(
 				audioFile,
 				sourceNote,
 				config.provider,
@@ -4456,14 +4501,26 @@ export default class EchoNotesPlugin extends Plugin {
 				[],
 				streamingState
 			);
+			ensureStarting();
 			try {
-				this.insertRealtimeLinks(view.editor, sourceNote, audioFile, transcriptFile);
+				if (view.file === sourceNote && this.app.workspace.getActiveFile() === sourceNote) {
+					this.insertRealtimeLinks(view.editor, sourceNote, audioFile, transcriptFile);
+				} else {
+					const audioLink = this.app.fileManager.generateMarkdownLink(audioFile, sourceNote.path);
+					const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
+					await this.app.vault.process(sourceNote, (content) => {
+						const lines = getMissingRealtimeLinkLines(content, audioLink, transcriptLink);
+						return lines.length ? `${content}\n${lines.join("\n")}\n` : content;
+					});
+				}
 			} catch (error) {
 				new Notice("录音和转写稿已创建，但未能写入当前笔记；实时录音仍会继续。");
 				this.log("实时录音链接写回失败", error);
 			}
 
+			ensureStarting();
 			const socketFactory = await loadAgentPlanSocketFactory();
+			ensureStarting();
 			const session = new AgentPlanRealtimeSession({
 				url: config.baseUrl,
 				apiKey,
@@ -4504,6 +4561,9 @@ export default class EchoNotesPlugin extends Plugin {
 				audioFile,
 				sourceNote,
 				transcriptFile,
+				transcriptService,
+				provider: config.provider,
+				model: config.model,
 				mediaStream,
 				mediaRecorder,
 				pcmCapture,
@@ -4543,6 +4603,8 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			mediaRecorder.start();
 			await pcmCapture.start();
+			// 已有会话由 stopRealtimeTranscription 收尾，不能在停用后重新连接或启动计时器。
+			if (this.realtimeUnloading || recording.stopping) return;
 			void agentPlanSession.start().catch((error) => {
 				if (!this.activeRealtimeRecording || this.activeRealtimeRecording !== recording) {
 					return;
@@ -4571,6 +4633,9 @@ export default class EchoNotesPlugin extends Plugin {
 			this.updateRealtimeUi();
 			new Notice(`无法开始实时转写：${getErrorMessage(error)}`);
 			this.log("开始实时转写失败", error);
+		} finally {
+			this.realtimeStartingStream = null;
+			this.realtimeStarting = false;
 		}
 	}
 
@@ -4618,14 +4683,14 @@ export default class EchoNotesPlugin extends Plugin {
 		if (finalAsr.status === "fulfilled" && !audioSaveError) {
 			const result = finalAsr.value;
 			await recording.writeQueue;
-			const transcriptFile = await this.transcriptService.writeSuccessTranscript(
+			const transcriptFile = await recording.transcriptService.writeSuccessTranscript(
 				recording.audioFile,
 				recording.sourceNote,
 				{
 					text: result.text,
 					utterances: result.utterances,
-					provider: this.settings.realtimeTranscription.provider,
-					model: this.settings.realtimeTranscription.model,
+					provider: recording.provider,
+					model: recording.model,
 					traceId: result.traceId,
 					raw: result.raw
 				}
@@ -4668,11 +4733,11 @@ export default class EchoNotesPlugin extends Plugin {
 				? "本地录音保存失败"
 				: "实时识别已中断";
 			await recording.writeQueue;
-			const transcriptFile = await this.transcriptService.writeFailedTranscript(
+			const transcriptFile = await recording.transcriptService.writeFailedTranscript(
 				recording.audioFile,
 				recording.sourceNote,
-				this.settings.realtimeTranscription.provider,
-				this.settings.realtimeTranscription.model,
+				recording.provider,
+				recording.model,
 				getErrorMessage(error),
 				recording.streamingState.traceId,
 				[],
@@ -4747,11 +4812,11 @@ export default class EchoNotesPlugin extends Plugin {
 			recording.writeTimer = undefined;
 			recording.writeQueue = recording.writeQueue
 				.then(async () => {
-					recording.transcriptFile = await this.transcriptService.writeTranscribingTranscript(
+					recording.transcriptFile = await recording.transcriptService.writeTranscribingTranscript(
 						recording.audioFile,
 						recording.sourceNote,
-						this.settings.realtimeTranscription.provider,
-						this.settings.realtimeTranscription.model,
+						recording.provider,
+						recording.model,
 						[],
 						{ ...recording.streamingState }
 					);
@@ -4878,6 +4943,9 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			const audioFile = this.audioFileService.resolveAudioFile(audioMatch.linkPath, file);
+			if (audioFile && this.realtimeAudioPaths.has(audioFile.path)) {
+				continue;
+			}
 			if (!audioFile) {
 				this.log("自动扫描未能解析音频文件", audioMatch.linkPath);
 				continue;
