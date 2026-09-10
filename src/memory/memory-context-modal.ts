@@ -52,6 +52,7 @@ export class MemoryContextModal extends Modal {
 
 	onOpen(): void {
 		this.setTitle("生成个人上下文包");
+		this.modalEl.addClass("echo-notes-memory-context-modal-shell");
 		this.contentEl.addClass("echo-notes-memory-context-modal");
 		this.render();
 	}

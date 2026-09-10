@@ -1,5 +1,21 @@
 # Echo Notes 迭代记录
 
+## 2026-09-10：0.4.26 审核提示整改
+
+### 发布前改动
+
+- 最低 Obsidian 版本升至 1.12.3；实时录音使用 `Vault.appendBinary()` 顺序写入 WebM 分片，移除 Node.js `fs` 访问与兼容回退。
+- 队列首次写入失败后停止已排队的后续分片，并把原始错误留给停止流程处理。
+- 删除冗余类型断言，收敛 `display: contents`、`!important` 和 `:has()`；Memory 弹窗直接带有尺寸 class。
+- 历史转写稿仅在用户打开选择器时枚举；README 披露枚举范围和用户点击后才会写入剪贴板的行为。
+- 引入 Obsidian Stylelint 门禁，兼容目标为 Electron 39；保留与 Community 审核直接相关的规则，排除历史样式表的通用选择器排序检查。
+
+### 验证
+
+- `npm run verify` 通过：测试、ESLint、Obsidian ESLint、Stylelint、类型检查、生产构建和运行时产物检查、隔离设置页与编辑器菜单、Git diff 格式检查、生产依赖审计均成功。
+- 隔离 Obsidian 1.13.7 使用合成流完成 60 秒实时录音：首段 15,618 字节，持续写入后 971,936 字节，停止后 989,339 字节；WebM 可由 `AudioContext.decodeAudioData()` 解码。
+- GitHub Release 与 Community 后台审核状态以对应远端记录为准。
+
 ## 2026-07-31：首轮完整审计与 Task Center 重启恢复
 
 ### 发现的问题

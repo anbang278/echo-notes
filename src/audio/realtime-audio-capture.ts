@@ -70,18 +70,13 @@ export class VaultRecordingSink {
 	private app: App;
 	private writeQueue: SequentialBlobWriteQueue;
 
-	private constructor(app: App, file: TFile, fullPath: string) {
+	private constructor(app: App, file: TFile) {
 		this.app = app;
 		this.file = file;
 		this.writeQueue = new SequentialBlobWriteQueue(async (bytes) => {
-			if (!Platform.isDesktop) {
-				throw new Error("实时录音文件写入仅支持 Obsidian 桌面端。");
-			}
-			if (!Platform.isDesktopApp) {
-				throw new Error("实时录音文件写入仅支持 Obsidian 桌面端。");
-			}
-			const fs = await import("node:fs/promises");
-			await fs.appendFile(fullPath, bytes);
+			const chunk = new Uint8Array(bytes.byteLength);
+			chunk.set(bytes);
+			await this.app.vault.appendBinary(this.file, chunk.buffer);
 		});
 	}
 
@@ -89,9 +84,12 @@ export class VaultRecordingSink {
 		if (!Platform.isDesktop || !Platform.isDesktopApp || !(app.vault.adapter instanceof FileSystemAdapter)) {
 			throw new Error("实时录音仅支持本地文件系统 Vault。");
 		}
+		if (typeof app.vault.appendBinary !== "function") {
+			throw new Error("实时录音需要 Obsidian 1.12.3 或更高版本，请升级 Obsidian 后重试。");
+		}
 		await new FileService(app).ensureFolder(getParentPath(path));
 		const file = await app.vault.createBinary(path, new ArrayBuffer(0));
-		return new VaultRecordingSink(app, file, app.vault.adapter.getFullPath(path));
+		return new VaultRecordingSink(app, file);
 	}
 
 	append(blob: Blob): void {

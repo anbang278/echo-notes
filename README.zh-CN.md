@@ -135,6 +135,10 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 
 实时 AgentPlan 和开启说话人分离后的 MOSI 返回的说话人编号只能区分声音，不能识别真实姓名。MOSI 的说话人编号只在每个独立分段内有效。AI 纪要分析只读取完成后的最终正文，并把文本发送给分析 Provider；选择 AgentPlan 时使用其专属 Chat API，选择 OpenCode Go 时则发送到所选模型的官方接口。Echo Memory 会把转写正文和纳入本批次的成功纪要发送给记忆 Provider。转写、分析和记忆 API Key 会按 Provider 与用途隔离保存到 Obsidian `SecretStorage`；密钥不会写入插件设置、转写稿、候选包或日志。转写稿、录音、AI 纪要和记忆文件保存在你的 Obsidian Vault。
 
+### 本地 Vault 访问与剪贴板
+
+只有你主动打开两个历史转写稿选择入口时，Echo Notes 才会列出 Markdown 文件路径，用于显示按最后修改时间排序的匹配 `.transcript.md` 文件；插件不会读取这些笔记的正文、建立后台索引，也不会在启动时扫描文件。“复制任务详情”和“复制路径”按钮只会在你点击后向系统剪贴板写入内容。任务详情可能包含 Vault 相对路径和错误文本，请在对外分享前自行核对。
+
 ## 诊断日志包
 
 当转写、分析或 Echo Memory 出现难以复述的问题时，可在任务中心任务卡选择“导出诊断包”，或在“自动化与日志”中导出近期记录。ZIP 仅生成在当前 Vault 的 `Echo Notes/诊断包/`，由你自行发送；插件不会自动上传。桌面端本地文件系统 Vault 的导出完成弹窗可在 macOS 访达或 Windows 文件资源管理器中定位该 ZIP。清空诊断记录不会删除已经生成的 ZIP。
@@ -465,7 +469,7 @@ npm test
 npm run build
 ```
 
-开发环境要求 Node.js 22 或更高版本。
+开发环境要求 Node.js 22 或更高版本。Echo Notes 0.4.26 要求 Obsidian 1.12.3 或更高版本；旧客户端需先升级才能使用实时录音。
 
 后续版本迭代的本地常规回归统一执行：
 
@@ -509,7 +513,7 @@ unset SILICONFLOW_API_KEY AGENTPLAN_API_KEY
 ## 当前限制
 
 - 火山引擎 AgentPlan 实时转写始终提供说话人分离和时间范围，MOSI 离线转写可选择开启；这些标签只能标记说话人编号，不能识别真实姓名。
-- 实时转写仅支持 Obsidian 桌面端和本地文件系统 Vault。
+- 实时转写仅支持 Obsidian 1.12.3 及以上的桌面端本地文件系统 Vault；旧客户端需要先升级。
 - 首版实时录音只有开始和停止，没有暂停/恢复；异常退出最多可能丢失尚未产生的最后一个短 WebM 分片。
 - 百炼新异步模型会解析句子与逐词时间戳；其他不提供该字段的 Provider 仍不输出逐词时间戳。
 - 暂不支持所有 Provider 通用的大文件自动切片；共享 AudioChunkPipeline 已覆盖阿里百炼 `qwen3-asr-flash`、硅基流动官方或自定义模型与 MOSI。

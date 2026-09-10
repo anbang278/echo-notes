@@ -29,6 +29,7 @@ export default [
 			}
 		},
 		rules: {
+			"@typescript-eslint/no-unnecessary-type-assertion": "error",
 			"obsidianmd/ui/sentence-case": [
 				"warn",
 				{

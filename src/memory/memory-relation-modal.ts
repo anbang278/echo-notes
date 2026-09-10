@@ -37,6 +37,7 @@ export class MemoryRelationModal extends Modal {
 
 	onOpen(): void {
 		this.setTitle("整理记忆之间的关系");
+		this.modalEl.addClass("echo-notes-memory-relation-modal-shell");
 		this.contentEl.addClass("echo-notes-memory-relation-modal");
 		this.render();
 	}

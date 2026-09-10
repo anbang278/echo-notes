@@ -33,6 +33,7 @@ export class MemoryRelationSuggestionModal extends Modal {
 
 	onOpen(): void {
 		this.setTitle("发现可能相关的记忆");
+		this.modalEl.addClass("echo-notes-memory-relation-suggestion-modal-shell");
 		this.contentEl.addClass("echo-notes-memory-relation-suggestion-modal");
 		this.render();
 	}

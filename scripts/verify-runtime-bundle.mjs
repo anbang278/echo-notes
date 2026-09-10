@@ -14,8 +14,13 @@ if (nodeDynamicImports.length > 0) {
 	);
 }
 
-if (!/\brequire\(\s*["']node:fs\/promises["']\s*\)/.test(source)) {
-	throw new Error("运行时产物未包含本地录音所需的 CommonJS node:fs/promises 加载。");
+const filesystemLoads = Array.from(
+	source.matchAll(/\b(?:require|import)\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)/g),
+	(match) => match[0]
+);
+
+if (filesystemLoads.length > 0) {
+	throw new Error(`运行时产物不应加载 Node 文件系统模块：${Array.from(new Set(filesystemLoads)).join(", ")}`);
 }
 
-console.log(`运行时产物模块加载检查通过：${bundlePath}`);
+console.log(`运行时产物模块加载检查通过，未发现 Node 文件系统模块：${bundlePath}`);

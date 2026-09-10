@@ -14,6 +14,9 @@ export class SequentialBlobWriteQueue {
 		}
 		this.appendQueue = this.appendQueue
 			.then(async () => {
+				if (this.appendError) {
+					return;
+				}
 				const bytes = new Uint8Array(await blob.arrayBuffer());
 				await this.writeBytes(bytes);
 				this.byteCount += bytes.byteLength;

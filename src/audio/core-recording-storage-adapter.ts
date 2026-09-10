@@ -3,7 +3,7 @@ import type { RecordingStorageSettings } from "../settings/settings";
 import { RecordingMayExistError, RecordingStorageService } from "./recording-storage-service";
 
 interface CoreRecorder {
-	saveRecording: (data: ArrayBuffer) => Promise<unknown>;
+	saveRecording: (this: CoreRecorder, data: ArrayBuffer) => Promise<unknown>;
 	onStartRecording: (...args: unknown[]) => unknown;
 	onStopRecording: (...args: unknown[]) => unknown;
 	extension: string;
@@ -48,8 +48,8 @@ export class CoreRecordingStorageAdapter {
 		}
 		const original = recorder.saveRecording;
 		const owned = Object.hasOwn(recorder, "saveRecording");
-		const wrapped = (data: ArrayBuffer) => {
-			if (this.disposed || this.options.getSettings().strategy === "obsidian") return original.call(recorder, data) as Promise<unknown>;
+		const wrapped = async (data: ArrayBuffer): Promise<unknown> => {
+			if (this.disposed || this.options.getSettings().strategy === "obsidian") return await original.call(recorder, data);
 			return this.save(recorder, original, data);
 		};
 		try {

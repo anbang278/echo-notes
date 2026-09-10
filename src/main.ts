@@ -1710,9 +1710,7 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async selectGettingStartedMemoryTranscript(): Promise<void> {
-		const transcripts = this.app.vault.getMarkdownFiles()
-			.filter((file) => this.isTranscriptMarkdownFile(file))
-			.sort((left, right) => right.stat.mtime - left.stat.mtime);
+		const transcripts = this.getTranscriptMarkdownFiles();
 		if (transcripts.length === 0) {
 			new Notice("Vault 中还没有可用的 Echo Notes 转写稿。");
 			return;
@@ -2226,9 +2224,7 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async selectMemoryTranscriptAndExtract(): Promise<void> {
-		const transcripts = this.app.vault.getMarkdownFiles()
-			.filter((file) => this.isTranscriptMarkdownFile(file))
-			.sort((left, right) => right.stat.mtime - left.stat.mtime);
+		const transcripts = this.getTranscriptMarkdownFiles();
 		if (transcripts.length === 0) {
 			new Notice("Vault 中还没有可用的 Echo Notes 转写稿。");
 			return;
@@ -4446,6 +4442,10 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice("实时录音仅支持本地文件系统 Vault。");
 			return;
 		}
+		if (typeof this.app.vault.appendBinary !== "function") {
+			new Notice("实时录音需要 Obsidian 1.12.3 或更高版本，请升级 Obsidian 后重试。");
+			return;
+		}
 		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 		const sourceNote = view?.file;
 		if (!view || !sourceNote || sourceNote.extension !== "md") {
@@ -5024,6 +5024,12 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private isTranscriptMarkdownFile(file: TFile): boolean {
 		return file.extension === "md" && file.basename.endsWith(".transcript");
+	}
+
+	private getTranscriptMarkdownFiles(): TFile[] {
+		return this.app.vault.getMarkdownFiles()
+			.filter((file) => this.isTranscriptMarkdownFile(file))
+			.sort((left, right) => right.stat.mtime - left.stat.mtime);
 	}
 
 	private log(message: string, ...args: unknown[]): void {

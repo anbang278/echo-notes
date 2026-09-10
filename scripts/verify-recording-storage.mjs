@@ -266,6 +266,21 @@ export async function verifyCoreRecordingStorage(page, pluginId) {
 			};
 			plugin.getApiKey = () => "isolated-recording-storage-test";
 			await app.workspace.getLeaf(false).openFile(noteA);
+			const appendBinary = app.vault.appendBinary;
+			const hadOwnAppendBinary = Object.hasOwn(app.vault, "appendBinary");
+			try {
+				app.vault.appendBinary = undefined;
+				plugin.settings.recordingStorage = { strategy: "note-subfolder", subfolder: "升级检查", customFolder: "Recordings" };
+				const beforeUnsupported = microphoneRequests;
+				const beforeUnsupportedFiles = captured.length;
+				await plugin.startRealtimeTranscription();
+				check(microphoneRequests === beforeUnsupported, "缺少 appendBinary 时仍申请了麦克风");
+				check(captured.length === beforeUnsupportedFiles && !plugin.activeRealtimeRecording, "缺少 appendBinary 时仍创建或启动了实时录音");
+				results.push({ scenario: "缺少 appendBinary 时提示升级且不启动录音" });
+			} finally {
+				if (hadOwnAppendBinary) app.vault.appendBinary = appendBinary;
+				else delete app.vault.appendBinary;
+			}
 			plugin.settings.recordingStorage = { strategy: "custom-folder", customFolder: "../禁止目录", subfolder: "Recordings" };
 			const beforeInvalid = microphoneRequests;
 			await plugin.startRealtimeTranscription();
@@ -285,16 +300,36 @@ export async function verifyCoreRecordingStorage(page, pluginId) {
 			await waitFor(() => Boolean(realtime.asrError), "本地 ASR 连接未按预期失败");
 			check(redirectedRealtimeRequests === 1, "实时请求未经过本地替身");
 			await new Promise((resolve) => setTimeout(resolve, 1300));
+			const initialRealtimeBytes = (await app.vault.readBinary(realtime.audioFile)).byteLength;
+			check(initialRealtimeBytes > 0, "实时录音首个分片未写入 Vault");
+			await new Promise((resolve) => setTimeout(resolve, 60_000));
+			const continuedRealtimeBytes = (await app.vault.readBinary(realtime.audioFile)).byteLength;
+			check(continuedRealtimeBytes > initialRealtimeBytes, "实时录音未在 60 秒内持续增长");
 			await plugin.handleAutoMarkdownFile(noteA);
 			check(!automaticPaths.includes(realtimePath), "实时录音链接修改事件误触发离线转写");
 			await plugin.stopRealtimeTranscription();
 			check(realtime.audioFile.path === realtimePath && realtime.transcriptFile.path === transcriptPath, "录音中修改配置改变了当前文件路径");
-			check((await app.vault.readBinary(realtime.audioFile)).byteLength > 0, "实时录音未保留音频");
+			const completedRealtimeAudio = await app.vault.readBinary(realtime.audioFile);
+			check(completedRealtimeAudio.byteLength > continuedRealtimeBytes, "停止时未写入实时录音尾部分片");
+			const decodeContext = new AudioContext();
+			try {
+				const decoded = await decodeContext.decodeAudioData(completedRealtimeAudio.slice(0));
+				check(decoded.duration >= 60, `实时录音无法解码为完整的 60 秒音频：${decoded.duration}`);
+			} finally {
+				await decodeContext.close();
+			}
 			await waitFor(() => linksTo(noteA, realtime.audioFile), "实时录音来源链接不正确");
 			check(!linksTo(noteB, realtime.audioFile), "实时录音误写入停止时笔记");
 			const task = plugin.taskCenter.getTask(realtime.taskId);
 			check(task?.targetPath === realtimePath && task?.outputPath === transcriptPath, "实时任务路径未与文件一致");
-			results.push({ scenario: "实时录音目录冻结与 ASR 失败保留", path: realtimePath, transcriptPath });
+			results.push({
+				scenario: "实时录音目录冻结、60 秒持续写入与 ASR 失败保留",
+				path: realtimePath,
+				transcriptPath,
+				initialRealtimeBytes,
+				continuedRealtimeBytes,
+				completedRealtimeBytes: completedRealtimeAudio.byteLength
+			});
 
 			const corePlugin = app.internalPlugins.getPluginById("audio-recorder");
 			corePlugin.disable(false);

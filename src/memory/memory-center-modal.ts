@@ -379,6 +379,7 @@ export class MemoryCenterModal extends Modal {
 
 	onOpen(): void {
 		this.setTitle("记忆中心");
+		this.modalEl.addClass("echo-notes-memory-center-modal-shell");
 		this.view = new MemoryCenterView(this.app, this.contentEl, this.initialTab, this.callbacks);
 		this.view.render();
 	}

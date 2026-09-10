@@ -263,10 +263,7 @@ button.echo-notes-settings-intro-guide-link:focus-visible {
 }
 
 .echo-notes-settings-spotlight-popover.is-mobile {
-	top: auto;
-	right: 12px;
-	bottom: 12px;
-	left: 12px;
+	inset: auto 12px 12px;
 	width: auto;
 	max-height: min(300px, calc(100vh - 24px));
 }
@@ -1181,7 +1178,7 @@ button.echo-notes-settings-section-tab.is-active {
 	height: 8px;
 	flex: 0 0 auto;
 	border-radius: 50%;
-	background: currentColor;
+	background: currentcolor;
 }
 
 .echo-notes-memory-settings-grid {
@@ -1769,14 +1766,16 @@ button.echo-notes-memory-settings-review-filter.is-active {
 }
 
 .echo-notes-transcription-context-details-body {
-	display: grid;
-	grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
-	gap: 6px 14px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 	margin-top: 10px;
 }
 
 .echo-notes-transcription-context-detail {
-	display: contents;
+	display: grid;
+	grid-template-columns: 88px minmax(0, 1fr);
+	gap: 14px;
 	font-size: var(--font-ui-smaller);
 	line-height: 1.4;
 }
@@ -2023,13 +2022,14 @@ button.echo-notes-quick-recording-hotkey-clear {
 	justify-content: flex-end;
 }
 
-.echo-notes-settings-panel .setting-item-control > .echo-notes-settings-field {
-	width: 100% !important;
-	min-width: 0 !important;
-	max-width: 100% !important;
-	height: var(--echo-notes-settings-field-height) !important;
-	min-height: var(--echo-notes-settings-field-height) !important;
-	max-height: var(--echo-notes-settings-field-height) !important;
+.echo-notes-settings-panel .setting-item-control > input.echo-notes-settings-field,
+.echo-notes-settings-panel .setting-item-control > select.echo-notes-settings-field {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	height: var(--echo-notes-settings-field-height);
+	min-height: var(--echo-notes-settings-field-height);
+	max-height: var(--echo-notes-settings-field-height);
 	box-sizing: border-box;
 	flex: 0 0 100%;
 }
@@ -2042,7 +2042,6 @@ button.echo-notes-quick-recording-hotkey-clear {
 	background-color: var(--background-modifier-form-field);
 	padding-inline: 8px 28px;
 	appearance: none;
-	-webkit-appearance: none;
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 	background-repeat: no-repeat;
 	background-position: right 10px center;
@@ -2051,9 +2050,9 @@ button.echo-notes-quick-recording-hotkey-clear {
 
 /* 顶部模式只有“实时转写/离线转写”两个短选项，避免占用完整字段宽度。 */
 .echo-notes-settings-panel > .setting-item:first-child > .setting-item-control > select.echo-notes-settings-field {
-	width: var(--echo-notes-settings-mode-width) !important;
-	min-width: var(--echo-notes-settings-mode-width) !important;
-	max-width: var(--echo-notes-settings-mode-width) !important;
+	width: var(--echo-notes-settings-mode-width);
+	min-width: var(--echo-notes-settings-mode-width);
+	max-width: var(--echo-notes-settings-mode-width);
 	flex: 0 0 var(--echo-notes-settings-mode-width);
 }
 
@@ -2227,15 +2226,16 @@ button.echo-notes-quick-recording-hotkey-clear {
 	}
 
 	.echo-notes-settings-panel > .setting-item:first-child > .setting-item-control > select.echo-notes-settings-field {
-		width: 100% !important;
-		min-width: 0 !important;
-		max-width: 100% !important;
+		width: 100%;
+		min-width: 0;
+		max-width: 100%;
 		flex: 0 0 100%;
 	}
 
-	.echo-notes-settings-section-panel .setting-item-control > .echo-notes-settings-field {
-		width: 100% !important;
-		max-width: 100% !important;
+	.echo-notes-settings-section-panel .setting-item-control > input.echo-notes-settings-field,
+	.echo-notes-settings-section-panel .setting-item-control > select.echo-notes-settings-field {
+		width: 100%;
+		max-width: 100%;
 }
 
 	.echo-notes-settings-control-composite > button {
@@ -2245,9 +2245,6 @@ button.echo-notes-quick-recording-hotkey-clear {
 	.echo-notes-inline-validation {
 		text-align: left;
 	}
-}
-
-@container echo-notes-settings-panel (max-width: 360px) {
 }
 
 .echo-notes-secret-save-status {
@@ -2722,7 +2719,6 @@ body.echo-notes-verify-mobile-shell .echo-notes-template-category-tabs {
 .echo-notes-template-keywords-value {
 	min-width: 0;
 	overflow-wrap: anywhere;
-	word-break: break-word;
 }
 
 .echo-notes-template-card-actions {
@@ -3175,7 +3171,7 @@ button.echo-notes-task-center-tab.is-active {
 	cursor: pointer;
 }
 
-.modal:has(.echo-notes-memory-review-modal) {
+.echo-notes-memory-review-modal-shell {
 	width: min(820px, calc(100vw - 32px));
 	max-width: 820px;
 }
@@ -3278,7 +3274,7 @@ button.echo-notes-task-center-tab.is-active {
 	text-align: center;
 }
 
-.modal:has(.echo-notes-memory-relation-modal) {
+.echo-notes-memory-relation-modal-shell {
 	width: min(860px, calc(100vw - 32px));
 	max-width: 860px;
 }
@@ -3454,7 +3450,7 @@ button.echo-notes-task-center-tab.is-active {
 	border-radius: 999px;
 }
 
-.modal:has(.echo-notes-memory-context-modal) {
+.echo-notes-memory-context-modal-shell {
 	width: min(920px, calc(100vw - 32px));
 	max-width: 920px;
 }
@@ -3553,7 +3549,6 @@ button.echo-notes-task-center-tab.is-active {
 	line-height: 1.55;
 	white-space: pre-wrap;
 	overflow: auto;
-	word-break: break-word;
 }
 
 .echo-notes-memory-context-preview-details {
@@ -3577,7 +3572,7 @@ button.echo-notes-task-center-tab.is-active {
 	gap: 6px;
 }
 
-@media (max-width: 720px) {
+@media (width <= 720px) {
 	.echo-notes-getting-started-actions button,
 	.echo-notes-getting-started-chapter-controls button,
 	.echo-notes-settings-spotlight-footer button {
@@ -3850,7 +3845,7 @@ button.echo-notes-task-center-tab.is-active {
 	}
 }
 
-@media (max-width: 520px) {
+@media (width <= 520px) {
 	.echo-notes-getting-started-actions .setting-item-control {
 		width: 100%;
 		justify-content: flex-start;
@@ -4015,7 +4010,7 @@ button.echo-notes-task-center-tab.is-active {
 	margin-top: 18px;
 }
 
-@media (max-width: 520px) {
+@media (width <= 520px) {
 	.modal.echo-notes-transcription-candidate-review-modal,
 	.modal.echo-notes-transcription-enhancement-preview-modal {
 		width: calc(100vw - 16px);
@@ -4077,7 +4072,7 @@ button.echo-notes-task-center-tab.is-active {
 	}
 }
 
-.modal:not(.mod-settings):has(.echo-notes-memory-center-modal) {
+.echo-notes-memory-center-modal-shell {
 	width: min(880px, calc(100vw - 32px));
 	max-width: 880px;
 }
@@ -4357,7 +4352,7 @@ button.echo-notes-task-center-tab.is-active {
 	flex-wrap: wrap;
 }
 
-@media (max-width: 620px) {
+@media (width <= 620px) {
 	button.echo-notes-memory-center-tab,
 	button.echo-notes-memory-quick-link,
 	button.echo-notes-memory-tool,
@@ -4382,13 +4377,13 @@ button.echo-notes-task-center-tab.is-active {
 	}
 }
 
-@media (max-width: 380px) {
+@media (width <= 380px) {
 	.echo-notes-memory-inbox-filters-grid {
 		grid-template-columns: minmax(0, 1fr);
 	}
 }
 
-.modal:has(.echo-notes-memory-relation-suggestion-modal) {
+.echo-notes-memory-relation-suggestion-modal-shell {
 	width: min(820px, calc(100vw - 32px));
 	max-width: 820px;
 }
@@ -4996,7 +4991,7 @@ button.echo-notes-memory-tool:hover {
 
 /* 窄屏适配 */
 
-@media (max-width: 620px) {
+@media (width <= 620px) {
 	.echo-notes-memory-hero {
 		grid-template-columns: minmax(0, 1fr);
 	}
@@ -5202,7 +5197,7 @@ button.echo-notes-memory-tool:hover {
 	flex: 0 0 auto;
 }
 
-@media (max-width: 680px) {
+@media (width <= 680px) {
 	.echo-notes-memory-status-line {
 		flex-wrap: wrap;
 	}

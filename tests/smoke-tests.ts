@@ -4271,6 +4271,18 @@ sequentialBlobWriteQueue.append(new Blob([Uint8Array.from([1, 2])]));
 sequentialBlobWriteQueue.append(new Blob([Uint8Array.from([3])]));
 assert.equal(await sequentialBlobWriteQueue.finish(), 3);
 assert.deepEqual(sequentialBlobWriteOrder, [1, 3]);
+const writeFailure = new Error("写入失败");
+const failedBlobWriteOrder: number[] = [];
+const failedBlobWriteQueue = new SequentialBlobWriteQueue(async (bytes) => {
+	failedBlobWriteOrder.push(bytes[0]);
+	if (bytes[0] === 4) {
+		throw writeFailure;
+	}
+});
+failedBlobWriteQueue.append(new Blob([Uint8Array.from([4])]));
+failedBlobWriteQueue.append(new Blob([Uint8Array.from([5])]));
+await assert.rejects(failedBlobWriteQueue.finish(), (error: unknown) => error === writeFailure);
+assert.deepEqual(failedBlobWriteOrder, [4], "首次追加失败后不能写入已排队的后续块");
 const resampler = new StreamingMonoResampler(48000, 16000);
 const firstResampled = resampler.process(new Float32Array(480).fill(0.25));
 const secondResampled = resampler.process(new Float32Array(480).fill(0.25));

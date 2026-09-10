@@ -47,6 +47,7 @@ export class MemoryReviewModal extends Modal {
 
 	onOpen(): void {
 		this.setTitle("记忆候选详情");
+		this.modalEl.addClass("echo-notes-memory-review-modal-shell");
 		this.contentEl.addClass("echo-notes-memory-review-modal");
 		this.render();
 	}

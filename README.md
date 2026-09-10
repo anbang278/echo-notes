@@ -138,6 +138,10 @@ Real-time mode does not create or convert a complete WAV first. Echo Notes runs 
 
 Real-time AgentPlan and diarization-enabled MOSI speaker IDs distinguish voices but do not identify real names. MOSI speaker IDs remain local to each independently submitted segment. AI analysis reads only completed final transcript text; selecting AgentPlan sends it to the plan-specific Chat API, while selecting OpenCode Go sends it to the official endpoint for the chosen model. Echo Memory sends the transcript body and successful analyses included in the run to the memory provider. Transcription, analysis, and memory API keys remain isolated by provider and purpose in Obsidian `SecretStorage`. Keys are not written to plugin settings, transcripts, candidate packages, or logs. Recordings, transcripts, AI analysis output, and Echo Memory files remain in the Obsidian vault.
 
+### Local Vault access and clipboard
+
+Echo Notes lists Markdown file paths only when you explicitly open either historical-transcript picker. It uses those paths to show matching `.transcript.md` files ordered by last modification time; it does not read their note bodies, build a background index, or scan files when the plugin starts. The **Copy task details** and **Copy path** buttons write to the system clipboard only after you click them. Copied task details can contain Vault-relative paths and error text, so review them before sharing.
+
 ## Diagnostic package
 
 When transcription, analysis, or Echo Memory has a problem that is hard to describe, choose **Export diagnostic package** on the Task Center card or export recent records from **Automation and logs**. ZIP files are created only in `Echo Notes/诊断包/` within the current Vault and are sent by the user; Echo Notes never uploads them automatically. On desktop local-file Vaults, the completion dialog can locate the ZIP in macOS Finder or Windows File Explorer. Clearing diagnostic records does not delete ZIP files already generated.
@@ -493,7 +497,7 @@ npm test
 npm run build
 ```
 
-Development requires Node.js 22 or newer.
+Development requires Node.js 22 or newer. Echo Notes 0.4.26 requires Obsidian 1.12.3 or newer; older clients must upgrade before using real-time recording.
 
 For routine local regression, use the single complete verification entry point:
 
