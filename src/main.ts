@@ -63,9 +63,10 @@ import {
 import { isSupportedAudioFile } from "./audio/audio-detector";
 import { formatSegmentTimeRange, formatSegmentTimestamp } from "./audio/audio-segmenter";
 import { createAudioLinkFingerprints } from "./audio/audio-link-fingerprint";
-import { normalizeAudioLinkPath, parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
+import { parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
+import { TranscriptLinkService, type SourceAudioAnchor, type TranscriptLinkResult } from "./obsidian/transcript-link-service";
 import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
 import {
 	type GettingStartedGuideActions,
@@ -268,7 +269,7 @@ interface ProcessAudioResult {
 }
 
 interface ProcessAudioOptions {
-	onTranscriptFileReady?: (transcriptFile: TFile) => Promise<void> | void;
+	onTranscriptFileReady?: (transcriptFile: TFile, final: boolean) => Promise<TranscriptLinkResult | void> | TranscriptLinkResult | void;
 	allowUploadConfirmation?: boolean;
 	audioLinkPath?: string;
 	forceTranscription?: boolean;
@@ -372,6 +373,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private audioFileService: AudioFileService;
 	private transcriptService: TranscriptService;
 	private linkService: LinkService;
+	private transcriptLinkService: TranscriptLinkService;
 	private analysisService: AnalysisService;
 	private memoryService: MemoryService;
 	private diagnostics = new DiagnosticStore();
@@ -406,6 +408,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private gettingStartedNativeSettingsTimer: number | null = null;
 	private gettingStartedKnownAudioPaths = new Set<string>();
 	private loadedAt = Date.now();
+	private unloading = false;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -473,6 +476,7 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	onunload(): void {
+		this.unloading = true;
 		this.realtimeUnloading = true;
 		this.realtimeStartingStream?.getTracks().forEach((track) => track.stop());
 		this.coreRecordingStorageAdapter?.dispose();
@@ -1622,10 +1626,13 @@ export default class EchoNotesPlugin extends Plugin {
 		const audioMatch = parseAudioLinks(content).find((match) =>
 			this.audioFileService.resolveAudioFile(match.linkPath, sourceNote)?.path === audioFile.path
 		);
+		const anchor = audioMatch
+			? this.transcriptLinkService.captureAnchor(sourceNote, audioFile, audioMatch.linkPath, content)
+			: undefined;
 		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
 			audioLinkPath: audioMatch?.linkPath,
-			onTranscriptFileReady: audioMatch
-				? (transcriptFile) => this.insertTranscriptLinkIntoFile(sourceNote, audioMatch.linkPath, transcriptFile)
+		onTranscriptFileReady: audioMatch
+				? (transcriptFile, final) => this.insertTranscriptLink(anchor!, transcriptFile, final)
 				: undefined
 		});
 		if (!result && getGettingStartedPracticeStage(this.settings.gettingStartedState) === "first-transcribing") {
@@ -2657,6 +2664,10 @@ export default class EchoNotesPlugin extends Plugin {
 		this.audioFileService = new AudioFileService(this.app);
 		this.transcriptService = new TranscriptService(this.app, this.settings);
 		this.linkService = new LinkService(this.app, this.settings);
+		this.transcriptLinkService = new TranscriptLinkService(this.app, this.audioFileService, this.linkService, {
+			withMutatingFile: (file, operation) => this.withMutatingFile(file, operation),
+			isDisposed: () => this.unloading
+		});
 		this.analysisService = new AnalysisService(this.app);
 		this.memoryService = new MemoryService(this.app);
 	}
@@ -3081,11 +3092,13 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		const absoluteMatch = toAbsoluteMatch(audioMatch, range.lineStart);
-		const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(editor.getValue(), absoluteMatch);
+		const editorContent = editor.getValue();
+		const anchor = this.transcriptLinkService.captureAnchor(sourceNote, audioFile, audioMatch.linkPath, editorContent);
+		const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(editorContent, absoluteMatch);
 		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
 			audioLinkPath: audioMatch.linkPath,
-			onTranscriptFileReady: async (transcriptFile) => {
-				this.insertTranscriptLinkIntoEditor(editor, sourceNote, absoluteMatch, transcriptFile, true);
+			onTranscriptFileReady: async (transcriptFile, final) => {
+				return this.insertTranscriptLink(anchor, transcriptFile, final);
 			}
 		});
 		if (!result) {
@@ -3111,23 +3124,30 @@ export default class EchoNotesPlugin extends Plugin {
 			return "no-audio";
 		}
 
-		let completed = 0;
-		let linked = 0;
-
-		for (const audioMatch of [...matches].reverse()) {
+		const audioTasks = matches.map((audioMatch) => {
 			const audioFile = this.audioFileService.resolveAudioFile(audioMatch.linkPath, sourceNote);
 			if (!audioFile) {
 				new Notice(`文件不存在或格式不支持，请确认链接包含正确的 Vault 路径：${audioMatch.linkPath}`);
-				continue;
+				return null;
 			}
+			const content = editor.getValue();
+			return {
+				audioMatch,
+				audioFile,
+				anchor: this.transcriptLinkService.captureAnchor(sourceNote, audioFile, audioMatch.linkPath, content),
+				analysisTemplates: this.resolveAnalysisTemplatesForAudioMatch(content, audioMatch)
+			};
+		}).filter((task): task is NonNullable<typeof task> => task !== null);
+		let completed = 0;
+		const linkResults = new Map<SourceAudioAnchor, TranscriptLinkResult>();
 
-			const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(editor.getValue(), audioMatch);
-			const result = await this.processAudioToTranscript(audioFile, sourceNote, {
-				audioLinkPath: audioMatch.linkPath,
+		for (const task of [...audioTasks].reverse()) {
+			const result = await this.processAudioToTranscript(task.audioFile, sourceNote, {
+				audioLinkPath: task.audioMatch.linkPath,
 				onTranscriptFileReady: async (transcriptFile) => {
-					if (this.insertTranscriptLinkIntoEditor(editor, sourceNote, audioMatch, transcriptFile, false)) {
-						linked += 1;
-					}
+					const linkResult = await this.insertTranscriptLink(task.anchor, transcriptFile, false);
+					linkResults.set(task.anchor, linkResult);
+					return linkResult;
 				}
 			});
 			if (!result) {
@@ -3135,12 +3155,16 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			const transcriptFile = result.transcriptFile;
 			if (result.analysisEligible) {
-				this.startAnalysisTasks(transcriptFile, analysisTemplates, result.diagnosticChainId);
+				this.startAnalysisTasks(transcriptFile, task.analysisTemplates, result.diagnosticChainId);
 			}
 			completed += 1;
 		}
 
-		new Notice(`Echo Notes 处理完成：${completed} 个音频，插入 ${linked} 个链接。`);
+		const linked = Array.from(linkResults.values());
+		const inserted = linked.filter((result) => result.status === "inserted").length;
+		const alreadyPresent = linked.filter((result) => result.status === "already-present").length;
+		const unlinked = linked.filter((result) => result.status === "skipped" || result.status === "failed").length;
+		new Notice(`Echo Notes 处理完成：${completed} 个音频，已插入 ${inserted} 个，已有 ${alreadyPresent} 个，未回链 ${unlinked} 个。`);
 		return "processed";
 	}
 
@@ -3193,7 +3217,7 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`音频正在转写中：${audioFile.name}`);
 			const result = await inFlightTranscription;
 			if (result) {
-				await options.onTranscriptFileReady?.(result.transcriptFile);
+				await options.onTranscriptFileReady?.(result.transcriptFile, true);
 			}
 			return result;
 		}
@@ -3246,14 +3270,16 @@ export default class EchoNotesPlugin extends Plugin {
 			};
 		}
 		let notifiedTranscriptPath: string | null = null;
-		const notifyTranscriptFileReady = async (transcriptFile: TFile): Promise<void> => {
-			if (notifiedTranscriptPath === transcriptFile.path) {
+		let backlinkNeedsFinalRetry = false;
+		const notifyTranscriptFileReady = async (transcriptFile: TFile, final = false): Promise<void> => {
+			if (notifiedTranscriptPath === transcriptFile.path && (!final || !backlinkNeedsFinalRetry)) {
 				return;
 			}
 
 			notifiedTranscriptPath = transcriptFile.path;
 			try {
-				await options.onTranscriptFileReady?.(transcriptFile);
+				const backlinkResult = await options.onTranscriptFileReady?.(transcriptFile, final);
+				backlinkNeedsFinalRetry = backlinkResult?.status === "skipped" || backlinkResult?.status === "failed";
 			} catch (error) {
 				const message = getErrorMessage(error);
 				new Notice(`转写稿已生成，但来源笔记链接回写失败：${message}`);
@@ -3671,7 +3697,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			result.configurationFingerprint = checkpointIdentity.configurationFingerprint;
 			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
-			await notifyTranscriptFileReady(transcriptFile);
+			await notifyTranscriptFileReady(transcriptFile, true);
 			hideLongAudioNotice();
 			this.taskCenter.updateTask(transcriptionTaskId, {
 				status: "success",
@@ -3737,7 +3763,7 @@ export default class EchoNotesPlugin extends Plugin {
 						streamingState,
 						checkpointIdentity
 					);
-					await notifyTranscriptFileReady(transcriptFile);
+					await notifyTranscriptFileReady(transcriptFile, true);
 					this.taskCenter.updateTask(transcriptionTaskId, {
 						outputPath: transcriptFile.path
 					});
@@ -3779,6 +3805,10 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const sourceFile = sourcePath ? this.app.vault.getAbstractFileByPath(sourcePath) : null;
 		const sourceNote = sourceFile instanceof TFile ? sourceFile : undefined;
+		const sourceContent = sourceNote ? await this.app.vault.cachedRead(sourceNote) : undefined;
+		const anchor = sourceNote && sourceContent && audioLinkPath
+			? this.transcriptLinkService.captureAnchor(sourceNote, audioFile, audioLinkPath, sourceContent)
+			: undefined;
 		const previousTask = this.taskCenter.getTask(createTaskId("transcription", audioPath));
 		const result = await this.processAudioToTranscript(audioFile, sourceNote, {
 			allowUploadConfirmation: true,
@@ -3787,10 +3817,11 @@ export default class EchoNotesPlugin extends Plugin {
 			resumeRemoteTask,
 			diagnosticChainId: diagnosticChainId ?? previousTask?.diagnosticChainId,
 			diagnosticRetryOfSessionId: diagnosticRetryOfSessionId ?? previousTask?.diagnosticSessionId,
-			onTranscriptFileReady: async (transcriptFile) => {
-				if (sourceNote && audioLinkPath) {
-					await this.insertTranscriptLinkIntoFile(sourceNote, audioLinkPath, transcriptFile);
+			onTranscriptFileReady: async (transcriptFile, final) => {
+				if (anchor) {
+					return this.insertTranscriptLink(anchor, transcriptFile, final);
 				}
+				return undefined;
 			}
 		});
 
@@ -3799,26 +3830,24 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private insertTranscriptLinkIntoEditor(
-		editor: Editor,
-		sourceNote: TFile,
-		audioMatch: AudioLinkMatch,
-		transcriptFile: TFile,
-		showNotice: boolean
-	): boolean {
-		const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
-		if (this.linkService.hasTranscriptLinkNear(editor.getValue(), audioMatch, transcriptLink)) {
-			if (showNotice) {
-				new Notice("Transcript 链接已存在，已跳过插入。");
-			}
-			return false;
+	private async insertTranscriptLink(anchor: SourceAudioAnchor, transcriptFile: TFile, showNotice: boolean): Promise<TranscriptLinkResult> {
+		const result = await this.transcriptLinkService.insertTranscriptLink(anchor, transcriptFile);
+		this.taskCenter.updateTask(createTaskId("transcription", anchor.audioFile.path), {
+			backlink: { status: result.status, sourcePath: result.sourcePath, reason: result.reason ? getTranscriptLinkResultMessage(result) : undefined }
+		});
+		if (result.status === "inserted") {
+			if (showNotice) new Notice("已插入 transcript 链接。");
+			return result;
+		}
+		if (result.status === "already-present") {
+			if (showNotice) new Notice("Transcript 链接已存在，已跳过插入。");
+			return result;
 		}
 
-		this.editorService.insertAfterLine(editor, audioMatch.lineEnd, transcriptLink);
-		if (showNotice) {
-			new Notice("已插入 transcript 链接。");
-		}
-		return true;
+		const detail = getTranscriptLinkResultMessage(result);
+		this.log("来源笔记链接未回写", { ...result, transcriptPath: transcriptFile.path });
+		if (showNotice) new Notice(`转写稿已生成，但未自动回链：${detail}。可从任务中心打开转写稿。`);
+		return result;
 	}
 
 	private resolveAnalysisTemplatesForAudioMatch(content: string, audioMatch: AudioLinkMatch): AnalysisTemplateConfig[] {
@@ -4950,13 +4979,14 @@ export default class EchoNotesPlugin extends Plugin {
 				this.log("自动扫描未能解析音频文件", audioMatch.linkPath);
 				continue;
 			}
+			const anchor = this.transcriptLinkService.captureAnchor(file, audioFile, audioMatch.linkPath, content);
 
 			const analysisTemplates = this.resolveAnalysisTemplatesForAudioMatch(content, audioMatch);
 			const result = await this.processAudioToTranscript(audioFile, file, {
 				allowUploadConfirmation: false,
 				audioLinkPath: audioMatch.linkPath,
 				onTranscriptFileReady: async (transcriptFile) => {
-					await this.insertTranscriptLinkIntoFile(file, audioMatch.linkPath, transcriptFile);
+					return this.insertTranscriptLink(anchor, transcriptFile, false);
 				}
 			});
 			if (!result) {
@@ -4969,23 +4999,6 @@ export default class EchoNotesPlugin extends Plugin {
 				this.startAnalysisTasks(transcriptFile, analysisTemplates, result.diagnosticChainId);
 			}
 		}
-	}
-
-	private async insertTranscriptLinkIntoFile(sourceNote: TFile, audioLinkPath: string, transcriptFile: TFile): Promise<void> {
-		const normalizedAudioPath = normalizeAudioLinkPath(audioLinkPath);
-		const transcriptLink = this.linkService.createTranscriptLink(transcriptFile, sourceNote.path);
-
-		await this.withMutatingFile(sourceNote, async () => {
-			await this.app.vault.process(sourceNote, (content) => {
-				const freshMatches = parseAudioLinks(content);
-				const freshMatch = freshMatches.find((match) => normalizeAudioLinkPath(match.linkPath) === normalizedAudioPath);
-				if (!freshMatch || this.linkService.hasTranscriptLinkNear(content, freshMatch, transcriptLink)) {
-					return content;
-				}
-
-				return this.linkService.insertTranscriptLinkAfterMatch(content, freshMatch, transcriptLink);
-			});
-		});
 	}
 
 	private async confirmTranscriptionUpload(audioFile: TFile): Promise<boolean> {
@@ -5026,6 +5039,26 @@ function toAbsoluteMatch(match: AudioLinkMatch, lineOffset: number): AudioLinkMa
 		lineStart: match.lineStart + lineOffset,
 		lineEnd: match.lineEnd + lineOffset
 	};
+}
+
+function getTranscriptLinkResultMessage(result: TranscriptLinkResult): string {
+	switch (result.reason) {
+		case "initially-ambiguous":
+		case "ambiguous-audio":
+			return "原笔记中存在多个相同录音引用";
+		case "multiple-audio-on-line":
+			return "录音所在行包含多个音频引用";
+		case "audio-missing":
+			return "原笔记中的录音引用已不存在";
+		case "source-missing":
+			return "原笔记已不存在或已被替换";
+		case "multiple-source-editors":
+			return "同一笔记的多个编辑器内容不一致";
+		case "plugin-unloaded":
+			return "插件已停用";
+		default:
+			return "来源笔记写入失败";
+	}
 }
 
 function formatRejectedMemoryAssertionSummary(count: number): string {

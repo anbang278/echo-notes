@@ -30,6 +30,12 @@ export interface EchoNotesTaskRetry {
 	allowWhileRunning?: boolean;
 }
 
+export interface TranscriptBacklinkSummary {
+	status: "inserted" | "already-present" | "skipped" | "failed";
+	sourcePath: string;
+	reason?: string;
+}
+
 export interface EchoNotesTask {
 	id: string;
 	kind: EchoNotesTaskKind;
@@ -53,6 +59,7 @@ export interface EchoNotesTask {
 	completedAt?: number;
 	recovery?: EchoNotesTaskRecovery;
 	remoteTask?: RemoteTranscriptionTaskResume;
+	backlink?: TranscriptBacklinkSummary;
 	retry?: EchoNotesTaskRetry;
 }
 
@@ -341,7 +348,18 @@ function parsePersistedTask(value: unknown): PersistedEchoNotesTask | null {
 	if (remoteTask) {
 		task.remoteTask = remoteTask;
 	}
+	const backlink = parseTranscriptBacklink(value.backlink);
+	if (backlink) {
+		task.backlink = backlink;
+	}
 	return task;
+}
+
+function parseTranscriptBacklink(value: unknown): TranscriptBacklinkSummary | undefined {
+	if (!isRecord(value)) return undefined;
+	const status = readEnum(value.status, ["inserted", "already-present", "skipped", "failed"] as const);
+	const sourcePath = readRequiredString(value.sourcePath);
+	return status && sourcePath ? { status, sourcePath, reason: readOptionalString(value.reason, 200) } : undefined;
 }
 
 function parseRemoteTask(value: unknown): RemoteTranscriptionTaskResume | undefined {

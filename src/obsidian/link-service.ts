@@ -1,5 +1,5 @@
 import type { App, TFile } from "obsidian";
-import type { AudioLinkMatch } from "../audio/audio-link-parser";
+import { parseAudioLinks, type AudioLinkMatch } from "../audio/audio-link-parser";
 import { getLocalizedCopy, type EchoNotesSettings } from "../settings/settings";
 
 export class LinkService {
@@ -21,31 +21,43 @@ export class LinkService {
 		return link;
 	}
 
-	hasTranscriptLinkNear(content: string, audioMatch: AudioLinkMatch, transcriptLink: string): boolean {
-		if (content.includes(transcriptLink)) {
-			return true;
-		}
-
+	hasTranscriptLinkNear(content: string, audioMatch: AudioLinkMatch, transcriptFile: TFile, sourcePath: string): boolean {
 		const lines = content.split("\n");
-		const startLine = audioMatch.lineEnd + 1;
-		const endLine = Math.min(lines.length - 1, audioMatch.lineEnd + 3);
-		for (let line = startLine; line <= endLine; line += 1) {
-			if (lines[line]?.includes(transcriptLink)) {
+		for (let line = audioMatch.lineEnd + 1; line < lines.length; line += 1) {
+			const value = lines[line].trim();
+			if (!value) {
+				continue;
+			}
+			if (/^#{1,6}\s/.test(value) || parseAudioLinks(lines[line]).length > 0) {
+				return false;
+			}
+			if (this.lineLinksToTranscript(lines[line], transcriptFile, sourcePath)) {
 				return true;
+			}
+			if (!value.startsWith(">")) {
+				return false;
 			}
 		}
 
 		return false;
 	}
 
-	insertTranscriptLinkAfterMatch(content: string, audioMatch: AudioLinkMatch, transcriptLink: string): string {
-		if (this.hasTranscriptLinkNear(content, audioMatch, transcriptLink)) {
+	insertTranscriptLinkAfterMatch(content: string, audioMatch: AudioLinkMatch, transcriptFile: TFile, sourcePath: string): string {
+		if (this.hasTranscriptLinkNear(content, audioMatch, transcriptFile, sourcePath)) {
 			return content;
 		}
 
 		const lines = content.split("\n");
-		const insertLine = Math.min(audioMatch.lineEnd + 1, lines.length);
-		lines.splice(insertLine, 0, transcriptLink);
+		const transcriptLink = this.createTranscriptLink(transcriptFile, sourcePath);
+		lines.splice(audioMatch.lineEnd + 1, 0, transcriptLink);
 		return lines.join("\n");
+	}
+
+	private lineLinksToTranscript(line: string, transcriptFile: TFile, sourcePath: string): boolean {
+		const candidates = [
+			...line.matchAll(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g),
+			...line.matchAll(/!?\[[^\]]*]\(([^)#]+)(?:#[^)]*)?\)/g)
+		];
+		return candidates.some((match) => this.app.metadataCache.getFirstLinkpathDest(match[1].trim(), sourcePath)?.path === transcriptFile.path);
 	}
 }

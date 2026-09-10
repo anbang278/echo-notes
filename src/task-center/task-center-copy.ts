@@ -1,5 +1,5 @@
 import type { GettingStartedStatus } from "../getting-started/getting-started-state";
-import type { EchoNotesTask, EchoNotesTaskKind, EchoNotesTaskStatus } from "./task-center-store";
+import type { EchoNotesTask, EchoNotesTaskKind, EchoNotesTaskStatus, TranscriptBacklinkSummary } from "./task-center-store";
 
 export type TaskCenterSection = "guide" | "tasks";
 
@@ -79,6 +79,9 @@ export function formatTaskDetailsForClipboard(task: EchoNotesTask): string {
 	if (task.outputPath) {
 		lines.push(`完整输出路径：${task.outputPath}`);
 	}
+	if (task.backlink) {
+		lines.push(`来源回链：${formatTranscriptBacklink(task.backlink)}`);
+	}
 	if (task.traceId) {
 		lines.push(`Trace ID：${task.traceId}`);
 	}
@@ -86,6 +89,16 @@ export function formatTaskDetailsForClipboard(task: EchoNotesTask): string {
 		lines.push(`错误：${task.error}`);
 	}
 	return lines.join("\n");
+}
+
+export function formatTranscriptBacklink(backlink: TranscriptBacklinkSummary): string {
+	const status = {
+		inserted: "已插入",
+		"already-present": "已存在",
+		skipped: "未回链",
+		failed: "回链失败"
+	}[backlink.status];
+	return backlink.reason ? `${status}：${backlink.reason}` : status;
 }
 
 export function getTaskFailureGuidance(kind: EchoNotesTaskKind, error: string): TaskFailureGuidance {

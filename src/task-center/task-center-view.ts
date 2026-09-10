@@ -11,6 +11,7 @@ import {
 } from "./task-center-store";
 import {
 	filterTaskCenterTasks,
+	formatTranscriptBacklink,
 	formatTaskDetailsForClipboard,
 	getDefaultTaskCenterSection,
 	getTaskFailureGuidance,
@@ -297,6 +298,9 @@ export class EchoNotesTaskCenterView extends ItemView {
 		}
 		if (task.sourcePath) {
 			this.renderPathMeta(metaEl, "来源", task.sourcePath);
+		}
+		if (task.backlink) {
+			this.renderMeta(metaEl, "来源回链", formatTranscriptBacklink(task.backlink));
 		}
 		this.renderPathMeta(metaEl, task.outputPath ? "输出" : "目标", task.outputPath ?? task.targetPath);
 		if (task.traceId) {

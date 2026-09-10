@@ -60,6 +60,7 @@ import { SequentialBlobWriteQueue } from "../src/audio/realtime-blob-write-queue
 import { createAudioLinkFingerprint, createAudioLinkFingerprints } from "../src/audio/audio-link-fingerprint";
 import { LinkService } from "../src/obsidian/link-service";
 import { getMissingRealtimeLinkLines } from "../src/obsidian/realtime-link-insertion";
+import { TranscriptLinkService } from "../src/obsidian/transcript-link-service";
 import {
 	acknowledgeFirstGettingStartedChapter,
 	acknowledgeShortcutGettingStartedChapter,
@@ -2320,6 +2321,9 @@ const fakeApp = {
 	fileManager: {
 		generateMarkdownLink: (_file: unknown, _sourcePath: string, _subpath?: string, alias?: string) =>
 			`[[Recording 20260531001942/Recording 20260531001942.transcript|${alias ?? "Recording 20260531001942.transcript"}]]`
+	},
+	metadataCache: {
+		getFirstLinkpathDest: (path: string) => path.includes(".transcript") ? { path: "Recording 20260531001942/Recording 20260531001942.transcript.md" } : null
 	}
 };
 const linkService = new LinkService(fakeApp as never, { insertStyle: "linkOnly" } as never);
@@ -2333,18 +2337,102 @@ const transcriptLink = "[[Recording 20260531001942/Recording 20260531001942.tran
 const englishTranscriptLink =
 	"[[Recording 20260531001942/Recording 20260531001942.transcript|View the transcribed manuscript]]";
 
-assert.equal(linkService.createTranscriptLink({} as never, "Daily.md"), transcriptLink);
-assert.equal(englishLinkService.createTranscriptLink({} as never, "Daily.md"), englishTranscriptLink);
+const transcriptFile = { path: "Recording 20260531001942/Recording 20260531001942.transcript.md" } as never;
+assert.equal(linkService.createTranscriptLink(transcriptFile, "Daily.md"), transcriptLink);
+assert.equal(englishLinkService.createTranscriptLink(transcriptFile, "Daily.md"), englishTranscriptLink);
 
 assert.equal(
-	linkService.insertTranscriptLinkAfterMatch(audioOnly, audioMatch, transcriptLink),
+	linkService.insertTranscriptLinkAfterMatch(audioOnly, audioMatch, transcriptFile, "Daily.md"),
 	`${audioOnly}\n${transcriptLink}`
 );
 
 assert.equal(
-	linkService.insertTranscriptLinkAfterMatch(`${audioOnly}\n${transcriptLink}`, audioMatch, transcriptLink),
+	linkService.insertTranscriptLinkAfterMatch(`${audioOnly}\n${transcriptLink}`, audioMatch, transcriptFile, "Daily.md"),
 	`${audioOnly}\n${transcriptLink}`
 );
+
+const transcriptSourceNote = { path: "Daily.md" } as never;
+const sourceAudio = { path: "Attachments/meeting.m4a" } as never;
+let sourceContent = "原始正文\n![[meeting.m4a]]\n结尾";
+const transcriptLinkApp = {
+	...fakeApp,
+	vault: {
+		getAbstractFileByPath: (path: string) => path === "Daily.md" ? transcriptSourceNote : null,
+		process: async (_file: unknown, update: (content: string) => string) => { sourceContent = update(sourceContent); }
+	},
+	workspace: {
+		getLeavesOfType: () => []
+	}
+};
+const transcriptLinkService = new TranscriptLinkService(
+	transcriptLinkApp as never,
+	{ resolveAudioFile: (path: string) => path === "meeting.m4a" ? sourceAudio : null } as never,
+	linkService,
+	{ withMutatingFile: async (_file, operation) => { await operation(); }, isDisposed: () => false }
+);
+const stableAnchor = transcriptLinkService.captureAnchor(transcriptSourceNote, sourceAudio, "meeting.m4a", sourceContent);
+sourceContent = "新增正文\n新增正文二\n![[meeting.m4a]]\n结尾";
+assert.equal((await transcriptLinkService.insertTranscriptLink(stableAnchor, transcriptFile)).status, "inserted");
+assert.equal(sourceContent, `新增正文\n新增正文二\n![[meeting.m4a]]\n${transcriptLink}\n结尾`);
+
+let editorContent = "插入前正文\n![[meeting.m4a]]\n结尾";
+const sourceEditor = {
+	getValue: () => editorContent,
+	getLine: (line: number) => editorContent.split("\n")[line],
+	replaceRange: (text: string, position: { line: number }) => {
+		const lines = editorContent.split("\n");
+		lines.splice(position.line + 1, 0, ...text.slice(1).split("\n"));
+		editorContent = lines.join("\n");
+	}
+};
+const editorLinkService = new TranscriptLinkService(
+	{
+		...transcriptLinkApp,
+		workspace: {
+			getLeavesOfType: () => [{ view: { getViewType: () => "markdown", file: transcriptSourceNote, editor: sourceEditor } }]
+		}
+	} as never,
+	{ resolveAudioFile: (path: string) => path === "meeting.m4a" ? sourceAudio : null } as never,
+	linkService,
+	{ withMutatingFile: async (_file, operation) => { await operation(); }, isDisposed: () => false }
+);
+const editorAnchor = editorLinkService.captureAnchor(transcriptSourceNote, sourceAudio, "meeting.m4a", editorContent);
+assert.equal((await editorLinkService.insertTranscriptLink(editorAnchor, transcriptFile)).status, "inserted");
+assert.equal(editorContent, `插入前正文\n![[meeting.m4a]]\n${transcriptLink}\n结尾`);
+
+const conflictingEditors = new TranscriptLinkService(
+	{
+		...transcriptLinkApp,
+		workspace: {
+			getLeavesOfType: () => [
+				{ view: { getViewType: () => "markdown", file: transcriptSourceNote, editor: { getValue: () => "![[meeting.m4a]]" } } },
+				{ view: { getViewType: () => "markdown", file: transcriptSourceNote, editor: { getValue: () => "已编辑的另一份内容" } } }
+			]
+		}
+	} as never,
+	{ resolveAudioFile: (path: string) => path === "meeting.m4a" ? sourceAudio : null } as never,
+	linkService,
+	{ withMutatingFile: async (_file, operation) => { await operation(); }, isDisposed: () => false }
+);
+assert.equal((await conflictingEditors.insertTranscriptLink(editorAnchor, transcriptFile)).reason, "multiple-source-editors");
+
+sourceContent = "![[meeting.m4a]]\n![[meeting.m4a]]";
+const ambiguousAnchor = transcriptLinkService.captureAnchor(transcriptSourceNote, sourceAudio, "meeting.m4a", sourceContent);
+assert.deepEqual(await transcriptLinkService.insertTranscriptLink(ambiguousAnchor, transcriptFile), {
+	status: "skipped", sourcePath: "Daily.md", reason: "initially-ambiguous"
+});
+
+sourceContent = "正文\n![[meeting.m4a]] ![[other.m4a]]";
+const sameLineAnchor = transcriptLinkService.captureAnchor(transcriptSourceNote, sourceAudio, "meeting.m4a", "正文\n![[meeting.m4a]]");
+assert.equal((await transcriptLinkService.insertTranscriptLink(sameLineAnchor, transcriptFile)).reason, "multiple-audio-on-line");
+
+sourceContent = `${transcriptLink}\n正文\n![[meeting.m4a]]`;
+const unrelatedLinkAnchor = transcriptLinkService.captureAnchor(transcriptSourceNote, sourceAudio, "meeting.m4a", sourceContent);
+assert.equal((await transcriptLinkService.insertTranscriptLink(unrelatedLinkAnchor, transcriptFile)).status, "inserted");
+assert.equal(sourceContent, `${transcriptLink}\n正文\n![[meeting.m4a]]\n${transcriptLink}`);
+
+sourceContent = "正文";
+assert.equal((await transcriptLinkService.insertTranscriptLink(stableAnchor, transcriptFile)).reason, "audio-missing");
 assert.deepEqual(
 	getMissingRealtimeLinkLines("", "[[Recording.webm]]", "[[Recording.transcript|查看转写稿]]"),
 	["![[Recording.webm]]", "[[Recording.transcript|查看转写稿]]"]
