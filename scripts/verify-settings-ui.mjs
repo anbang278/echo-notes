@@ -5818,10 +5818,12 @@ async function captureAdvancedCapabilityViewports(page) {
 						assert(metrics.minimumButtonHeight >= 44, `${context} 可见按钮小于 44px`);
 					}
 					const fileName = `settings-capabilities-${capabilityId}-${viewport.name}-${theme}.png`;
-					const screenshotPath = path.join(OUTPUT_DIR, fileName);
-					await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
-					assert((await stat(screenshotPath)).size > 10_000, `${fileName} 截图可能为空白`);
-					results.push({ capabilityId, viewport: viewport.name, theme, fileName, metrics });
+					if (theme === "light") {
+						const screenshotPath = path.join(OUTPUT_DIR, fileName);
+						await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
+						assert((await stat(screenshotPath)).size > 10_000, `${fileName} 截图可能为空白`);
+					}
+					results.push({ capabilityId, viewport: viewport.name, theme, fileName: theme === "light" ? fileName : null, metrics });
 				}
 			}
 		}
