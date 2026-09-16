@@ -2980,6 +2980,8 @@ async function verifySiliconFlowUpgradeModal(page) {
 		const plugin = window.app.plugins.plugins[pluginId];
 		window.__echoNotesSingleCloseSettings = JSON.parse(JSON.stringify(plugin.settings));
 		window.__echoNotesSingleCloseUpload = plugin.confirmTranscriptionUpload;
+		window.__echoNotesSingleCloseGetApiKey = plugin.getApiKey;
+		plugin.getApiKey = () => "isolated-gate-key";
 		plugin.settings.autoTranscribeOnAudioCreated = false;
 		plugin.settings.skipExistingTranscript = false;
 		plugin.settings.confirmBeforeTranscription = true;
@@ -3008,6 +3010,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 			const plugin = window.app.plugins.plugins[pluginId];
 			plugin.siliconFlowUpgradeModal?.abort();
 			plugin.confirmTranscriptionUpload = window.__echoNotesSingleCloseUpload;
+			plugin.getApiKey = window.__echoNotesSingleCloseGetApiKey;
 			Object.assign(plugin.settings, window.__echoNotesSingleCloseSettings);
 			await plugin.saveSettings();
 			await window.app.vault.delete(window.__echoNotesSingleCloseFile);
@@ -3018,6 +3021,8 @@ async function verifySiliconFlowUpgradeModal(page) {
 		const plugin = window.app.plugins.plugins[pluginId];
 		window.__echoNotesBatchSettings = JSON.parse(JSON.stringify(plugin.settings));
 		window.__echoNotesBatchUpload = plugin.confirmTranscriptionUpload;
+		window.__echoNotesBatchGetApiKey = plugin.getApiKey;
+		plugin.getApiKey = () => "isolated-gate-key";
 		plugin.settings.autoTranscribeOnAudioCreated = false;
 		plugin.settings.autoTranscribeOnAudioLink = false;
 		plugin.settings.skipExistingTranscript = false;
@@ -3051,6 +3056,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 			const plugin = window.app.plugins.plugins[pluginId];
 			plugin.siliconFlowUpgradeModal?.abort();
 			plugin.confirmTranscriptionUpload = window.__echoNotesBatchUpload;
+			plugin.getApiKey = window.__echoNotesBatchGetApiKey;
 			Object.assign(plugin.settings, window.__echoNotesBatchSettings);
 			await plugin.saveSettings();
 			for (const file of window.__echoNotesBatchFiles) await window.app.vault.delete(file);
