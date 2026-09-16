@@ -6136,6 +6136,7 @@ try {
 	const memoryRelationLayouts = await verifyMemoryRelations(page);
 	const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
 	const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
+	await verifySiliconFlowSettingsSaveFailure(page);
 	const siliconFlowMockChain = await verifySiliconFlowMockChain(page, siliconFlowTranscriptionMock);
 	await verifySiliconFlowModelPersistence(page);
 	await verifySiliconFlowUpgradeUnload(page);
