@@ -5386,54 +5386,80 @@ class SiliconFlowModelUpgradeModal extends Modal {
 		this.modalEl.addClass("echo-notes-siliconflow-upgrade-dialog");
 		this.backdrop = this.modalEl.closest(".modal-container")?.querySelector(".modal-bg") ?? null;
 		this.backdrop?.addEventListener("click", this.ignoreBackdropClick, true);
-		this.titleEl.setText("硅基流动有新的转写模型可选");
+
+		const eyebrow = createDiv({ cls: "echo-notes-siliconflow-upgrade-eyebrow" });
+		const eyebrowIcon = eyebrow.createSpan({ cls: "echo-notes-siliconflow-upgrade-brand-mark" });
+		setIcon(eyebrowIcon, "audio-waveform");
+		eyebrow.createSpan({ text: "Echo Notes" });
+		eyebrow.createSpan({ cls: "echo-notes-siliconflow-upgrade-separator", text: "/" });
+		eyebrow.createSpan({ text: "硅基流动" });
+		this.titleEl.parentElement?.insertBefore(eyebrow, this.titleEl);
+		this.titleEl.setText("选择更适合的转写模型");
+		this.titleEl.addClass("echo-notes-siliconflow-upgrade-title");
 		this.titleEl.tabIndex = -1;
 		this.titleEl.focus();
+		this.titleEl.insertAdjacentElement("afterend", createDiv({
+			cls: "echo-notes-siliconflow-upgrade-subtitle",
+			text: "有新的模型可选。按录音特点选择，也可以继续使用当前模型。"
+		}));
+
 		const body = contentEl.createDiv({ cls: "echo-notes-siliconflow-upgrade-body" });
 		const baseline = SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.find((option) => option.id === SILICONFLOW_SENSEVOICE_MODEL_ID)!;
 		const baselineEl = body.createDiv({ cls: "echo-notes-siliconflow-current-model" });
-		baselineEl.createDiv({ cls: "echo-notes-siliconflow-current-model-label", text: "当前配置" });
-		baselineEl.createEl("strong", { text: baseline.id });
-		baselineEl.createDiv({ text: baseline.description });
-		baselineEl.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: baseline.note });
-		body.createEl("p", {
-			text: "按录音特点选择模型，也可以继续使用当前配置。"
-		});
+		baselineEl.createSpan({ cls: "echo-notes-siliconflow-current-model-label", text: "当前模型" });
+		baselineEl.createEl("code", { text: baseline.id });
 
-		const savedModel = body.createDiv({ cls: "echo-notes-siliconflow-model-note", text: `将保存为：${this.selectedModelId}` });
-		const group = body.createDiv({ cls: "echo-notes-siliconflow-model-options", attr: { role: "radiogroup", "aria-label": "选择新模型" } });
-		for (const option of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.slice(0, 4)) {
-			const label = group.createEl("label", { cls: "echo-notes-siliconflow-model-option" });
+		const group = body.createEl("fieldset", { cls: "echo-notes-siliconflow-model-fieldset" });
+		group.createEl("legend", { text: "选择新模型" });
+		const grid = group.createDiv({ cls: "echo-notes-siliconflow-model-options" });
+		const presentation = [
+			{ title: "综合且快速", icon: "globe-2", description: "支持 52 种语言和方言识别，适合日常录音与多语言内容。", note: undefined },
+			{ title: "说话人分离", icon: "users-round", description: "针对多人会议优化，结合语音识别与说话人分离，适应复杂交流场景。", note: "当前插件使用服务返回的文本；结构化说话人展示尚未接入。" },
+			{ title: "方言优化", icon: "message-square", description: "支持中英与 60 种方言混合识别，可将粤语、上海话转为普通话文本。", note: undefined },
+			{ title: "语义理解矫正", icon: "sparkles", description: "融合上下文理解，在语音识别的同时优化语义，让转写更符合自然表达。", note: undefined }
+		] as const;
+		for (const [index, option] of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.slice(0, 4).entries()) {
+			const detail = presentation[index];
+			const label = grid.createEl("label", { cls: "echo-notes-siliconflow-model-option" });
 			const input = label.createEl("input", {
 				type: "radio",
 				attr: { name: "echo-notes-siliconflow-upgrade-model", value: option.id }
 			});
 			input.checked = option.id === this.selectedModelId;
-			if (input.checked) label.addClass("is-selected");
+			const card = label.createDiv({ cls: "echo-notes-siliconflow-model-card" });
+			const cardTop = card.createDiv({ cls: "echo-notes-siliconflow-model-card-top" });
+			const heading = cardTop.createDiv({ cls: "echo-notes-siliconflow-model-card-heading" });
+			const icon = heading.createSpan({ cls: "echo-notes-siliconflow-model-card-icon" });
+			setIcon(icon, detail.icon);
+			heading.createEl("strong", { text: detail.title });
+			cardTop.createSpan({ cls: "echo-notes-siliconflow-model-radio-mark", attr: { "aria-hidden": "true" } });
+			card.createDiv({ cls: "echo-notes-siliconflow-model-option-description", text: detail.description });
+			if (detail.note) card.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: detail.note });
+			card.createEl("code", { cls: "echo-notes-siliconflow-model-id", text: option.id });
 			input.addEventListener("change", () => {
-				if (!input.checked) return;
-				this.selectedModelId = input.value;
-				savedModel.setText(`将保存为：${this.selectedModelId}`);
-				group.querySelectorAll(".echo-notes-siliconflow-model-option.is-selected").forEach((selected) => selected.classList.remove("is-selected"));
-				label.addClass("is-selected");
+				if (input.checked) this.selectedModelId = input.value;
 			});
-			const copy = label.createDiv({ cls: "echo-notes-siliconflow-model-option-copy" });
-			copy.createEl("strong", { text: option.label });
-			copy.createDiv({ text: option.description });
-			copy.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: option.note });
 		}
 
-		body.appendChild(savedModel);
-		body.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "直接更新模型配置，本批次与后续转写均使用新模型。" });
-		body.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "关闭后下次仍会提示；“不再提醒”仅关闭此提醒，两者均保留当前模型。" });
-		const status = contentEl.createDiv({ cls: "echo-notes-inline-validation", attr: { role: "status", "aria-live": "polite" } });
-		const actions = new Setting(contentEl);
-		actions.addButton((button) => button.setButtonText("本次关闭，继续转写").onClick(() => this.resolve({ kind: "close" })));
-		actions.addButton((button) => button.setButtonText("不再提醒，继续转写").onClick(() => void this.saveAndResolve({ kind: "dont-remind" }, status)));
-		actions.addButton((button) => button.setButtonText("一键更换并转写").setCta().onClick(() => void this.saveAndResolve({
-			kind: "switch",
-			modelId: this.selectedModelId
-		}, status)));
+		const footer = contentEl.createDiv({ cls: "echo-notes-siliconflow-upgrade-footer" });
+		const saveNote = footer.createEl("p", { cls: "echo-notes-siliconflow-save-note" });
+		const saveIcon = saveNote.createSpan({ attr: { "aria-hidden": "true" } });
+		setIcon(saveIcon, "info");
+		saveNote.appendText("更换将保存到设置，");
+		saveNote.createEl("strong", { text: "本批次及后续转写" });
+		saveNote.appendText("均使用新模型。");
+		const status = footer.createDiv({ cls: "echo-notes-inline-validation", attr: { role: "status", "aria-live": "polite" } });
+		const actions = footer.createDiv({ cls: "echo-notes-siliconflow-upgrade-actions" });
+		const dontRemind = actions.createEl("button", { cls: "echo-notes-siliconflow-upgrade-quiet-action", text: "不再提醒，继续转写" });
+		dontRemind.type = "button";
+		dontRemind.addEventListener("click", () => void this.saveAndResolve({ kind: "dont-remind" }, status));
+		const primaryActions = actions.createDiv({ cls: "echo-notes-siliconflow-upgrade-primary-actions" });
+		const close = primaryActions.createEl("button", { text: "本次关闭，继续转写" });
+		close.type = "button";
+		close.addEventListener("click", () => this.resolve({ kind: "close" }));
+		const change = primaryActions.createEl("button", { cls: "mod-cta", text: "一键更换并转写" });
+		change.type = "button";
+		change.addEventListener("click", () => void this.saveAndResolve({ kind: "switch", modelId: this.selectedModelId }, status));
 	}
 
 	close(): void {

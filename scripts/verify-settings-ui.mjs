@@ -2738,21 +2738,49 @@ async function verifySiliconFlowUpgradeModal(page) {
 
 	await open();
 	await page.locator(selector).waitFor();
+	const dialog = page.locator(".echo-notes-siliconflow-upgrade-dialog");
+	assert(await dialog.getByText("Echo Notes", { exact: true }).count() === 1,
+		"模型提醒缺少 Echo Notes 品牌眉题");
+	assert(await dialog.getByText("选择更适合的转写模型", { exact: true }).count() === 1,
+		"模型提醒缺少冻结原型标题");
+	assert(await dialog.getByText("有新的模型可选。按录音特点选择，也可以继续使用当前模型。", { exact: true }).count() === 1,
+		"模型提醒缺少冻结原型副标题");
 	assert(await page.locator(selector).getByText("FunAudioLLM/SenseVoiceSmall", { exact: true }).count() === 1,
 		"模型提醒缺少当前 SenseVoiceSmall 完整 ID");
 	assert(await page.locator(selector).locator('input[type="radio"]').count() === 4,
 		"模型提醒应提供四个升级候选");
+	for (const copy of [
+		"支持 52 种语言和方言识别，适合日常录音与多语言内容。",
+		"针对多人会议优化，结合语音识别与说话人分离，适应复杂交流场景。",
+		"当前插件使用服务返回的文本；结构化说话人展示尚未接入。",
+		"支持中英与 60 种方言混合识别，可将粤语、上海话转为普通话文本。",
+		"融合上下文理解，在语音识别的同时优化语义，让转写更符合自然表达。"
+	]) {
+		assert(await page.locator(selector).getByText(copy, { exact: true }).count() === 1,
+			`模型提醒缺少冻结描述文案：${copy}`);
+	}
+	const radioGroup = page.locator(selector).locator('input[type="radio"]');
+	await radioGroup.first().focus();
+	await page.keyboard.press("ArrowRight");
+	assert(await radioGroup.nth(1).isChecked(), "方向键应切换原生模型单选项");
+	await page.keyboard.press("ArrowLeft");
+	assert(await radioGroup.first().isChecked(), "方向键应可返回默认 Qwen 单选项");
 	await page.locator(selector).screenshot({ path: path.join(OUTPUT_DIR, "siliconflow-upgrade-modal-desktop.png") });
 	const originalViewport = page.viewportSize();
-	await page.setViewportSize({ width: 375, height: 812 });
+	await page.setViewportSize({ width: 375, height: 500 });
 	try {
 		const overflow = await page.locator(selector).evaluate((element) => element.scrollWidth > element.clientWidth + 1);
 		assert(!overflow, "375px 模型提醒的长 ID 不应水平溢出");
-		const buttonsVisible = await page.locator(selector).locator("button").evaluateAll((buttons) => buttons.every((button) => {
-			const rect = button.getBoundingClientRect();
+		const footerVisible = await page.locator(selector).locator(".echo-notes-siliconflow-upgrade-footer").evaluate((footer) => {
+			const rect = footer.getBoundingClientRect();
 			return rect.top >= 0 && rect.bottom <= window.innerHeight && rect.left >= 0 && rect.right <= window.innerWidth;
+		});
+		assert(footerVisible, "短窗口模型提醒的固定操作区必须保持可见");
+		const buttonsVisible = await page.locator(selector).locator(".echo-notes-siliconflow-upgrade-footer button").evaluateAll((buttons) => buttons.every((button) => {
+			const rect = button.getBoundingClientRect();
+			return rect.width >= 44 && rect.height >= 44 && rect.left >= 0 && rect.right <= window.innerWidth;
 		}));
-		assert(buttonsVisible, "375px 模型提醒的全部动作必须位于可见窗口内");
+		assert(buttonsVisible, "375px 模型提醒的全部动作必须可见且满足 44px 触控目标");
 		await page.locator(".echo-notes-siliconflow-upgrade-dialog").screenshot({ path: path.join(OUTPUT_DIR, "siliconflow-upgrade-modal-375.png") });
 	} finally {
 		if (originalViewport) await page.setViewportSize(originalViewport);
