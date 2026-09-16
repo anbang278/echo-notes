@@ -3168,7 +3168,7 @@ export default class EchoNotesPlugin extends Plugin {
 			provider: batchConfig.provider,
 			model: batchConfig.model,
 			needsUpload: true,
-			uploadPolicyAllowsAttempt: true,
+			uploadPolicyAllowsAttempt: diagnoseTranscriptionProviderSettings(batchConfig, this.getApiKey(batchConfig.provider), { usage: "offline" }).canAttemptTranscription,
 			reminderDismissed: this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed,
 			isRemoteResume: false
 		})) {
@@ -3324,7 +3324,9 @@ export default class EchoNotesPlugin extends Plugin {
 					}
 				});
 				this.siliconFlowUpgradeModal = modal;
-				modal.open();
+				this.app.workspace.onLayoutReady(() => {
+					if (!this.unloading) modal.open();
+				});
 			});
 			this.siliconFlowUpgradeModal = null;
 			return this.unloading ? null : decision;
@@ -3377,12 +3379,12 @@ export default class EchoNotesPlugin extends Plugin {
 		options: ProcessAudioOptions
 	): Promise<ProcessAudioResult | null> {
 		const sourceConfig = options.siliconFlowUpgradeDecision?.config ?? this.settings.offlineTranscription;
-		const transcriptionConfig = {
+		const transcriptionConfig = Object.freeze({
 			...sourceConfig,
 			aliyunFiletrans: sourceConfig.aliyunFiletrans
-				? { ...sourceConfig.aliyunFiletrans }
+				? Object.freeze({ ...sourceConfig.aliyunFiletrans })
 				: undefined
-		};
+		});
 		const diagnostic = this.startDiagnosticSession(
 			"transcription",
 			options.diagnosticChainId,
@@ -3488,7 +3490,8 @@ export default class EchoNotesPlugin extends Plugin {
 			provider: transcriptionConfig.provider,
 			model: transcriptionConfig.model,
 			needsUpload: true,
-			uploadPolicyAllowsAttempt: options.allowUploadConfirmation !== false || !this.settings.confirmBeforeTranscription,
+			uploadPolicyAllowsAttempt: (options.allowUploadConfirmation !== false || !this.settings.confirmBeforeTranscription) &&
+				diagnoseTranscriptionProviderSettings(transcriptionConfig, this.getApiKey(transcriptionConfig.provider), { usage: "offline" }).canAttemptTranscription,
 			reminderDismissed: this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed,
 			isRemoteResume: Boolean(options.resumeRemoteTask)
 		}) && options.siliconFlowUpgradeDecision?.value === undefined) {
@@ -5386,18 +5389,19 @@ class SiliconFlowModelUpgradeModal extends Modal {
 		this.titleEl.setText("硅基流动有新的转写模型可选");
 		this.titleEl.tabIndex = -1;
 		this.titleEl.focus();
+		const body = contentEl.createDiv({ cls: "echo-notes-siliconflow-upgrade-body" });
 		const baseline = SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.find((option) => option.id === SILICONFLOW_SENSEVOICE_MODEL_ID)!;
-		const baselineEl = contentEl.createDiv({ cls: "echo-notes-siliconflow-current-model" });
+		const baselineEl = body.createDiv({ cls: "echo-notes-siliconflow-current-model" });
 		baselineEl.createDiv({ cls: "echo-notes-siliconflow-current-model-label", text: "当前配置" });
 		baselineEl.createEl("strong", { text: baseline.id });
 		baselineEl.createDiv({ text: baseline.description });
 		baselineEl.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: baseline.note });
-		contentEl.createEl("p", {
+		body.createEl("p", {
 			text: "按录音特点选择模型，也可以继续使用当前配置。"
 		});
 
-		const savedModel = contentEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: `将保存为：${this.selectedModelId}` });
-		const group = contentEl.createDiv({ cls: "echo-notes-siliconflow-model-options", attr: { role: "radiogroup", "aria-label": "选择新模型" } });
+		const savedModel = body.createDiv({ cls: "echo-notes-siliconflow-model-note", text: `将保存为：${this.selectedModelId}` });
+		const group = body.createDiv({ cls: "echo-notes-siliconflow-model-options", attr: { role: "radiogroup", "aria-label": "选择新模型" } });
 		for (const option of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.slice(0, 4)) {
 			const label = group.createEl("label", { cls: "echo-notes-siliconflow-model-option" });
 			const input = label.createEl("input", {
@@ -5419,9 +5423,9 @@ class SiliconFlowModelUpgradeModal extends Modal {
 			copy.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: option.note });
 		}
 
-		contentEl.appendChild(savedModel);
-		contentEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "直接更新模型配置，本批次与后续转写均使用新模型。" });
-		contentEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "关闭后下次仍会提示；“不再提醒”仅关闭此提醒，两者均保留当前模型。" });
+		body.appendChild(savedModel);
+		body.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "直接更新模型配置，本批次与后续转写均使用新模型。" });
+		body.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "关闭后下次仍会提示；“不再提醒”仅关闭此提醒，两者均保留当前模型。" });
 		const status = contentEl.createDiv({ cls: "echo-notes-inline-validation", attr: { role: "status", "aria-live": "polite" } });
 		const actions = new Setting(contentEl);
 		actions.addButton((button) => button.setButtonText("本次关闭，继续转写").onClick(() => this.resolve({ kind: "close" })));

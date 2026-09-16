@@ -5349,3 +5349,37 @@ button.echo-notes-memory-tool:hover {
 		width: 100%;
 	}
 }
+
+.echo-notes-siliconflow-upgrade-dialog {
+	width: min(760px, calc(100vw - 32px));
+	max-width: calc(100vw - 32px);
+	max-height: calc(100vh - 32px);
+}
+
+.echo-notes-siliconflow-upgrade-modal {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	overflow: hidden;
+}
+
+.echo-notes-siliconflow-upgrade-body {
+	min-height: 0;
+	overflow-y: auto;
+	overflow-wrap: anywhere;
+	padding: 2px;
+}
+
+.echo-notes-siliconflow-upgrade-modal > .setting-item {
+	flex: 0 0 auto;
+	margin-top: 12px;
+}
+
+.echo-notes-siliconflow-upgrade-modal > .setting-item .setting-item-info {
+	display: none;
+}
+
+.echo-notes-siliconflow-upgrade-modal > .setting-item .setting-item-control {
+	width: 100%;
+	justify-content: flex-end;
+}

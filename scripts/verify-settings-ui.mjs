@@ -2748,7 +2748,12 @@ async function verifySiliconFlowUpgradeModal(page) {
 	try {
 		const overflow = await page.locator(selector).evaluate((element) => element.scrollWidth > element.clientWidth + 1);
 		assert(!overflow, "375px 模型提醒的长 ID 不应水平溢出");
-		await page.locator(selector).screenshot({ path: path.join(OUTPUT_DIR, "siliconflow-upgrade-modal-375.png") });
+		const buttonsVisible = await page.locator(selector).locator("button").evaluateAll((buttons) => buttons.every((button) => {
+			const rect = button.getBoundingClientRect();
+			return rect.top >= 0 && rect.bottom <= window.innerHeight && rect.left >= 0 && rect.right <= window.innerWidth;
+		}));
+		assert(buttonsVisible, "375px 模型提醒的全部动作必须位于可见窗口内");
+		await page.locator(".echo-notes-siliconflow-upgrade-dialog").screenshot({ path: path.join(OUTPUT_DIR, "siliconflow-upgrade-modal-375.png") });
 	} finally {
 		if (originalViewport) await page.setViewportSize(originalViewport);
 	}
@@ -2924,6 +2929,8 @@ async function verifySiliconFlowUpgradeModal(page) {
 		const plugin = window.app.plugins.plugins[pluginId];
 		window.__echoNotesGateSettings = JSON.parse(JSON.stringify(plugin.settings));
 		window.__echoNotesConfirmUpload = plugin.confirmTranscriptionUpload;
+		window.__echoNotesGateGetApiKey = plugin.getApiKey;
+		plugin.getApiKey = () => "isolated-gate-key";
 		plugin.settings.autoTranscribeOnAudioCreated = false;
 		plugin.settings.autoTranscribeOnAudioLink = false;
 		plugin.settings.skipExistingTranscript = false;
@@ -2962,6 +2969,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 		await page.evaluate(async (pluginId) => {
 			const plugin = window.app.plugins.plugins[pluginId];
 			plugin.confirmTranscriptionUpload = window.__echoNotesConfirmUpload;
+			plugin.getApiKey = window.__echoNotesGateGetApiKey;
 			Object.assign(plugin.settings, window.__echoNotesGateSettings);
 			await plugin.saveSettings();
 			await window.app.vault.delete(window.__echoNotesGateFile);
