@@ -160,11 +160,20 @@ test("新版本部署使先前批准失效且不同任务不能覆盖待验收�
 	const first = await f.installer.deploy(f.pkg);
 	await approve(f, first);
 	await f.update("0.4.28");
-	await f.installer.deploy(await f.packageFixture());
-	assert.equal((await f.installer.status()).approvalValid, false);
+	const current = await f.installer.deploy(await f.packageFixture());
+	await approve(f, current);
+	assert.equal((await f.installer.status()).approvalValid, true);
 	const otherTask = path.join(f.project, ".trellis/tasks/other");
 	await writeJson(path.join(otherTask, "task.json"), { id: "other" });
 	await assert.rejects(f.installer.deploy({ ...await f.packageFixture(), task: otherTask }), /其他任务仍占用/);
+	await f.update("0.4.29");
+	const takeover = await f.installer.deploy({ ...await f.packageFixture(), task: otherTask, takeover: true });
+	assert.equal(takeover.state, "awaiting-human");
+	assert.deepEqual(takeover.current.takeoverPrevious, {
+		deliveryId: current.current.id,
+		taskId: "fixture",
+		authorizedAt: takeover.current.takeoverPrevious.authorizedAt
+	});
 });
 
 test("替换第一个产物失败后恢复三个旧产物且保留配置", async (t) => {

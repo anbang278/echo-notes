@@ -48,10 +48,17 @@ async function withPausedPlugin(action) {
 }
 function options(args) {
 	const values = {};
-	for (let index = 0; index < args.length; index += 2) {
+	for (let index = 0; index < args.length;) {
 		const key = args[index];
-		if (!["--task", "--zip"].includes(key) || !args[index + 1] || values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP>");
+		if (key === "--takeover") {
+			if (values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP> [--takeover]");
+			values[key] = true;
+			index += 1;
+			continue;
+		}
+		if (!["--task", "--zip"].includes(key) || !args[index + 1] || values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP> [--takeover]");
 		values[key] = args[index + 1];
+		index += 2;
 	}
 	return values;
 }
@@ -61,10 +68,10 @@ try {
 	if (command === "deploy") {
 		const values = options(args);
 		if (!values["--task"] || !values["--zip"]) throw new Error("deploy 需要 --task 和 --zip");
-		result = await installer.deploy({ project, task: path.resolve(values["--task"]), zip: path.resolve(values["--zip"]) });
+		result = await installer.deploy({ project, task: path.resolve(values["--task"]), zip: path.resolve(values["--zip"]), takeover: values["--takeover"] === true });
 	} else if (["migrate", "status", "rollback"].includes(command) && args.length === 0) {
 		result = command === "status" ? await installer.status() : await withPausedPlugin(() => installer[command]());
-	} else throw new Error("用法：npm run test-install -- migrate | deploy --task <目录> --zip <ZIP> | status | rollback");
+	} else throw new Error("用法：npm run test-install -- migrate | deploy --task <目录> --zip <ZIP> [--takeover] | status | rollback");
 	console.log(JSON.stringify(result, null, 2));
 } catch (error) {
 	console.error(`测试插件操作失败：${error.message}`);

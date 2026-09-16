@@ -258,7 +258,7 @@ export function createInstaller({ root, install, legacySource, fault = async () 
 			await fault("current-written");
 		});
 	}
-	async function deploy({ project, task, zip }) {
+	async function deploy({ project, task, zip, takeover = false }) {
 		project = path.resolve(project); task = path.resolve(task); zip = path.resolve(zip);
 		return locked(async () => {
 			await ordinaryPath(project); await ordinaryPath(task); await ordinaryPath(zip);
@@ -267,10 +267,13 @@ export function createInstaller({ root, install, legacySource, fault = async () 
 			if (!/^[a-z0-9-]+$/.test(taskInfo.id)) throw new Error("任务 ID 非法");
 			const previous = await loadCurrent();
 			await assertCurrentMatches(previous);
+			let takeoverPrevious;
 			if (previous.taskId && previous.taskId !== taskInfo.id) {
 				const release = await optionalJson(path.join(recordPath(previous.id), "release.json"));
 				const approval = await optionalJson(path.join(recordPath(previous.id), "approval.json"));
-				if (!approved(previous, approval) || release?.deliveryId !== previous.id || release.sourceCommit !== previous.sourceCommit || release.tag !== previous.version || !release.releaseUrl?.startsWith("https://github.com/anbang278/echo-notes/releases/tag/") || !release.completedAt || !release.reviewStatus) throw new Error("其他任务仍占用人工验收目录，不得自动覆盖");
+				const released = release?.deliveryId === previous.id && release.sourceCommit === previous.sourceCommit && release.tag === previous.version && release.releaseUrl?.startsWith("https://github.com/anbang278/echo-notes/releases/tag/") && release.completedAt && release.reviewStatus;
+				if (!approved(previous, approval) || (!released && !takeover)) throw new Error("其他任务仍占用人工验收目录，不得自动覆盖");
+				if (!released) takeoverPrevious = { deliveryId: previous.id, taskId: previous.taskId, authorizedAt: new Date().toISOString() };
 			}
 			const verificationFile = path.join(path.dirname(zip), "verification.json");
 			const evidenceFile = path.join(path.dirname(zip), "package-evidence.json");
@@ -305,7 +308,7 @@ export function createInstaller({ root, install, legacySource, fault = async () 
 					await copyFile(report, path.join(directory, "reports", `${kind}.json`));
 				}
 			}
-			const record = { id, kind: "delivery", taskId: taskInfo.id, taskPath: task, worktree: project, sourceCommit: source.commit, sourceFingerprint: source.fingerprint, version: manifest.version, zipSha256: zipHash, fileHashes: hashes, installedAt: new Date().toISOString(), previous };
+			const record = { id, kind: "delivery", taskId: taskInfo.id, taskPath: task, worktree: project, sourceCommit: source.commit, sourceFingerprint: source.fingerprint, version: manifest.version, zipSha256: zipHash, fileHashes: hashes, installedAt: new Date().toISOString(), previous, ...(takeoverPrevious ? { takeoverPrevious } : {}) };
 			await writeJson(path.join(directory, "delivery.json"), record);
 			// 保存后再次核验来源，防止收集交接工件期间源码被其他进程改动。
 			await validateVerification(project, verification, true);
