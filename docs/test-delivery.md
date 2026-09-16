@@ -8,14 +8,25 @@
 
 Codex 的计划交付至少包含 `prd.md`、所需 `design.md`、`implement.md`、`test-plan.md`、有效的 `implement.jsonl/check.jsonl` 和 `handoff.md`。handoff 写清源码基线、计划及原型批准情况、实际或拟用分支/worktree、执行命令、验收标准、已完成项、阻塞和下一负责人。不把待确认项写成通过。
 
+## 规划完成后自动生成接手消息
+
+Codex 每次完成或修订规划时，必须在任务 `handoff.md` 的“复制给 Pi Agent”章节保存接手消息，并在最终回复的同名位置附上完全相同的 `text` 代码块。收到新的需求或批准后同步更新。不得只提供链接，也不等待用户另问。
+
+以下模板用于生成，实际输出必须填入已核实值，删除不适用项，不保留占位符。计划/原型批准状态按真实用户证据填写；没有原型要求时写“不适用”。涉及原型时提供实际绝对路径、SHA-256 和 review 入口。缺少必要批准时，执行句必须改成“请先只读核对交接；等待〔具体缺失的批准〕后再开始实施”，不得擅自代用户声明已批准。已有批准不重复询问。
+
 可直接交给 Pi 的消息模板：
 
 ```text
 请接手 Echo Notes 的 Trellis 任务：<任务绝对路径>。
+交接入口：<handoff.md 绝对路径>。
+本次范围：<已确认变更与重要边界>。
+计划批准：<实际状态及证据>。原型批准：<实际状态及证据，或不适用>。
+原型：<需要时填写绝对路径、SHA-256、review.md 入口>。
 先读取项目 AGENTS.md、echo-notes-development Skill 和本任务 handoff、prd、design、implement、test-plan 及 JSONL 引用。
-你负责第 2、3 阶段：按已确认计划在持久 worktree 实施，保存本地功能分支提交，完成自动化测试、升版本、打包，并部署到 Develop-obsidian 的专用测试插件目录。
+你负责第 2、3 阶段：在核实计划及必要原型已获批准后，按计划在 /Users/anbang/.local/share/echo-notes/worktrees/ 下的持久 worktree 实施，保存本地功能分支提交，同步未占用的新版本，运行 npm run package 完成完整验证与打包。
+通过 npm run test-install -- deploy 部署到 /Users/anbang/笔记/Develop-obsidian/.obsidian/plugins/echo-notes，只替换 main.js、manifest.json、styles.css，保留配置；核实安装占用并遵守工具的锁、备份与恢复要求。
 保留已确认需求和必要原型批准门槛。交付包、源码提交、验证证据与安装产物必须一致。
-完成后提供人工重新加载插件的验证入口、步骤和预期结果，等待人工批准；不得提前合并主分支、推送、Tag、Release 或提交官方审核。
+完成后提供版本、源码提交、ZIP 绝对路径及 SHA-256、安装文件哈希、验证报告、未验证项和功能验收步骤。告诉我在 Develop-obsidian 点击“重新加载第三方插件”验证，等待人工批准；不得提前合并主分支、推送、Tag、Release 或提交官方审核。
 接手后记录实际执行者、worktree 和开始状态；发现计划缺口反馈给 Codex，普通实现问题自行继续修复。
 ```
 

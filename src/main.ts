@@ -5355,7 +5355,7 @@ function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination):
 		case "memory-center":
 			return "Echo Memory → 记忆中心";
 		case "transcription-recording":
-			return "录音转写 → 能力增强 → 快捷录音";
+			return "录音转写 → 能力增强 → 快捷键配置";
 	}
 }
 

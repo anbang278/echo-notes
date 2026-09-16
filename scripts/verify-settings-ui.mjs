@@ -1789,12 +1789,10 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 		const cleanup = definition.render({ settingEl }, { listEl: groupEl });
 		const hostEl = settingEl.querySelector(":scope > .echo-notes-settings-definition-host");
 		const introEl = hostEl?.querySelector(".echo-notes-settings-intro");
-		const guideEl = hostEl?.querySelector(".echo-notes-settings-intro-guide");
 		const workflowEl = hostEl?.querySelector(".echo-notes-settings-workflow");
 		const initialPanelEl = hostEl?.querySelector(".echo-notes-settings-panel:not([hidden])");
 		const hostRect = hostEl?.getBoundingClientRect();
 		const introRect = introEl?.getBoundingClientRect();
-		const guideRect = guideEl?.getBoundingClientRect();
 		const workflowRect = workflowEl?.getBoundingClientRect();
 		const initialPanelRect = initialPanelEl?.getBoundingClientRect();
 		const rowStyle = getComputedStyle(settingEl);
@@ -1819,11 +1817,9 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 			rowBoxShadow: rowStyle.boxShadow,
 			verticalFlow: Boolean(
 				introRect &&
-				guideRect &&
 				workflowRect &&
 				initialPanelRect &&
-				introRect.bottom <= guideRect.top + 1 &&
-				guideRect.bottom <= workflowRect.top + 1 &&
+				introRect.bottom <= workflowRect.top + 1 &&
 				workflowRect.bottom <= initialPanelRect.top + 1
 			),
 			panelFillsHost: Boolean(
@@ -1913,7 +1909,7 @@ async function verifyDeclarativeSettingsCompatibility(page) {
 	assert(result.initial.rowBackgroundImage === "none", `声明式框架行不应有背景图片，实际为 ${result.initial.rowBackgroundImage}`);
 	assert(result.initial.rowBorderRadius === "0px", `声明式框架行不应有圆角，实际为 ${result.initial.rowBorderRadius}`);
 	assert(result.initial.rowBoxShadow === "none", `声明式框架行不应有阴影，实际为 ${result.initial.rowBoxShadow}`);
-	assert(result.initial.verticalFlow, "声明式入口的引导区、指引、工作流和面板应纵向排列");
+	assert(result.initial.verticalFlow, "声明式入口的引导区、工作流和面板应纵向排列");
 	assert(result.initial.panelFillsHost, "声明式入口的活动面板应填满内容宿主宽度");
 	assert(result.analysisSelectedBeforeRefresh, "声明式入口应支持阶段切换");
 	assert(result.outputSelectedBeforeRefresh, "声明式入口应支持分类切换");
@@ -2090,22 +2086,18 @@ async function verifyIntroduction(page) {
 			legacyGettingStartedActionCount: document.querySelectorAll(".echo-notes-settings-intro-action").length,
 			spotlightLayerCount: document.querySelectorAll(".echo-notes-settings-spotlight-layer").length,
 			headingRelation: intro?.getAttribute("aria-labelledby") === heading?.id,
-			correctOrder:
-				intro?.nextElementSibling === guide && guide?.nextElementSibling === workflow
+			correctOrder: guide
+				? intro?.nextElementSibling === guide && guide.nextElementSibling === workflow
+				: intro?.nextElementSibling === workflow
 		};
 	});
 
 	assert(result.count === 1, `引导区数量应为 1，实际为 ${result.count}`);
-	assert(result.guideCount === 1, `操作指引数量应为 1，实际为 ${result.guideCount}`);
 	const compactIntro = result.title === "Echo Notes 设置";
+	assert(result.guideCount === (compactIntro ? 0 : 1), `操作指引数量不正确，实际为 ${result.guideCount}`);
 	assert(compactIntro || result.title === EXPECTED_TITLE, "引导区标题不匹配");
 	assert(result.copy === EXPECTED_INTRO, "引导区理念文案不匹配");
-	assert(
-		compactIntro
-			? result.guide === "提示：可使用方向键切换配置阶段。"
-			: result.guide === EXPECTED_GUIDE,
-		"引导区指引文案不匹配"
-	);
+	assert(compactIntro ? result.guide === undefined : result.guide === EXPECTED_GUIDE, "引导区指引文案不匹配");
 	assert(result.linkText === EXPECTED_README_LINK_TEXT, "README 链接文案不匹配");
 	assert(result.linkInConcept, "README 链接必须位于理念说明末尾");
 	assert(result.href === README_URL, "README 链接地址不匹配");
@@ -2130,7 +2122,7 @@ async function verifyIntroduction(page) {
 	assert(result.legacyGettingStartedActionCount === 0, "设置页仍存在占空间的旧新人指引卡片");
 	assert(result.spotlightLayerCount === 0, "普通打开设置页不应自动启动 Spotlight");
 	assert(result.headingRelation, "引导区 aria-labelledby 关系无效");
-	assert(result.correctOrder, "操作指引必须位于理念分割线与工作流步骤轴之间");
+	assert(result.correctOrder, "引导内容与工作流步骤轴顺序不正确");
 }
 
 function getActivePanel(page) {
@@ -3257,76 +3249,48 @@ async function verifyTabs(page) {
 	assert(await serviceContext.locator('.echo-notes-transcription-context-provider').count() === 1, "当前服务卡缺少服务商主信息");
 	assert(await serviceContext.locator('.echo-notes-transcription-context-model').count() === 1, "当前服务卡缺少模型主信息");
 	assert(await serviceContext.locator('.echo-notes-transcription-context-mode').count() === 1, "当前服务卡缺少转写模式标签");
-	const capabilityTags = serviceContext.locator('.echo-notes-transcription-context-chip');
+	assert(await serviceContext.getByRole("button", { name: "切换服务", exact: true }).count() === 1, "当前服务信息栏缺少切换服务入口");
+	assert(await serviceContext.locator('.echo-notes-transcription-context-chip, .echo-notes-transcription-context-details').count() === 0,
+		"当前服务信息栏不应继续展示能力 Tag 或技术详情");
+	const capabilityTabs = activePanel.locator('.echo-notes-settings-capability-tab');
 	assert(
-		JSON.stringify(await capabilityTags.allTextContents()) === JSON.stringify([
-			"说话人分离",
-			"时间戳",
-			"热词增强",
-			"上下文增强"
-		]),
-		"阿里 filetrans 的模型支持 Tag 不正确"
+		JSON.stringify(await capabilityTabs.locator('.echo-notes-settings-capability-tab-title > span:first-child').allTextContents()) ===
+			JSON.stringify(["快捷键配置", "融合转写", "说话人分离", "术语增强", "上下文增强"]),
+		"能力增强未按固定五卡顺序组织"
 	);
+	assert(await activePanel.locator('.echo-notes-settings-capability-panel:not([hidden])').count() === 1, "能力增强应只显示一个活动配置面板");
+	assert(await capabilityTabs.first().getAttribute("aria-selected") === "true", "首次进入能力增强应默认选择快捷键配置");
+	await capabilityTabs.first().press("ArrowRight");
+	await page.waitForFunction(() => document.querySelector('[data-capability-tab="fusion"]')?.getAttribute("aria-selected") === "true");
+	assert(await activePanel.locator('[data-capability-tab="fusion"]').getAttribute("aria-selected") === "true", "右方向键未切换到融合转写");
+	const fusionPanel = activePanel.locator('.echo-notes-settings-capability-panel:not([hidden])');
+	assert(await fusionPanel.getByText("当前版本暂不可用", { exact: false }).count() === 1, "融合面板缺少暂不可用说明");
+	assert(await fusionPanel.locator('input, select, textarea, .checkbox-container').count() === 0, "融合面板不得包含开关或可编辑参数");
+	assert(await fusionPanel.getByText("不保证结果一定更准确", { exact: false }).count() === 1, "融合面板缺少准确性边界");
+	await activePanel.locator('[data-capability-tab="speaker"]').click();
 	assert(
-		await capabilityTags.evaluateAll((tags) => tags.every((tag) => (
-			![...tag.classList].some((className) => className.startsWith("is-")) &&
-			tag.getAttribute("role") !== "button" &&
-			Boolean(tag.getAttribute("aria-label")?.includes("当前模型支持"))
-		))),
-		"模型支持 Tag 混入开关状态或缺少可访问名称"
-	);
-	assert(await serviceContext.locator('.echo-notes-transcription-context-details').count() === 1, "当前服务卡缺少技术详情折叠区");
-	const capabilityCards = activePanel.locator('.echo-notes-transcription-capability-card');
-	assert(
-		JSON.stringify(await capabilityCards.locator('.echo-notes-transcription-capability-card-title').allTextContents()) ===
-			JSON.stringify(["说话人分离", "术语增强", "上下文增强", "快捷录音"]),
-		"能力增强未按四张能力卡片组织"
-	);
-	assert(
-		await activePanel.locator('.echo-notes-transcription-capability-fact').count() === 0,
-		"时间戳不应在能力 Tag 之外重复渲染"
-	);
-	assert(
-		await (await getActiveSetting(page, "说话人分离"))
-			.locator(".checkbox-container")
+		await (await getActiveSetting(page, "说话人分离")).locator(".checkbox-container")
 			.evaluate((element) => element.classList.contains("is-enabled")),
 		"阿里 filetrans 说话人分离应默认开启"
 	);
-	assert(
-		(await getSettingTextValue(page, "说话人数")) === "",
-		"阿里 filetrans 说话人数应默认自动判断"
-	);
-	const hotwordEnhancementSetting = await getActiveSetting(page, "术语增强");
-	const contextEnhancementSetting = await getActiveSetting(page, "上下文增强");
+	assert((await getSettingTextValue(page, "说话人数")) === "", "阿里 filetrans 说话人数应默认自动判断");
+	assert(await activePanel.getByText("效果预览（示例）", { exact: true }).count() === 1, "说话人面板缺少示例标识");
 	const memoryInitialized = await page.evaluate(
 		(pluginId) => window.app.plugins.plugins[pluginId].settings.memoryInitialized,
 		PLUGIN_ID
 	);
+	await activePanel.locator('[data-capability-tab="hotwords"]').click();
+	const hotwordEnhancementSetting = await getActiveSetting(page, "术语增强");
 	assert(
-		await hotwordEnhancementSetting
-			.locator(".checkbox-container")
+		await hotwordEnhancementSetting.locator(".checkbox-container")
 			.evaluate((element) => element.classList.contains("is-disabled")) === !memoryInitialized,
-		"热词增强开关的 Memory 初始化限制不正确"
+		"术语增强开关的 Memory 初始化限制不正确"
 	);
-	assert(
-		!await hotwordEnhancementSetting
-			.locator(".checkbox-container")
-			.evaluate((element) => element.classList.contains("is-enabled")),
-		"阿里 filetrans 的热词增强应默认关闭"
-	);
-	assert(
-		!await contextEnhancementSetting.locator(".checkbox-container")
-			.evaluate((element) => element.classList.contains("is-enabled")),
-		"阿里 filetrans 的上下文增强应默认关闭"
-	);
-	assert(
-		(await activePanel.getByRole("button", { name: "打开记忆中心", exact: true }).count()) === 2,
-		"Memory 未初始化时应分别提供术语和上下文恢复入口"
-	);
-	assert(
-		(await activePanel.getByText("已开启", { exact: true }).count()) === 0,
-		"普通开关状态不应重复显示“已开启”标签"
-	);
+	assert(await (await getActiveSetting(page, "人工术语")).isVisible(), "术语关闭时应保留配置布局");
+	assert(await (await getActiveSetting(page, "人工术语")).getByRole("button").isDisabled(), "术语关闭时配置入口应禁用");
+	await activePanel.locator('[data-capability-tab="context"]').click();
+	assert(await (await getActiveSetting(page, "预览实际内容")).isVisible(), "上下文关闭时应保留配置布局");
+	assert(await (await getActiveSetting(page, "预览实际内容")).getByRole("button").isDisabled(), "上下文关闭时预览入口应禁用");
 	await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
 		plugin.settings.memoryInitialized = true;
@@ -3336,45 +3300,30 @@ async function verifyTabs(page) {
 		plugin.settingTab.showDestination("transcription-recording");
 	}, PLUGIN_ID);
 	await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
-	assert(
-		(await activePanel.getByText("人工术语", { exact: true }).count()) === 0 &&
-		(await activePanel.getByText("预览实际内容", { exact: true }).count()) === 0,
-		"父能力关闭时仍显示后续配置"
-	);
+	await activePanel.locator('[data-capability-tab="speaker"]').click();
 	const speakerCountSetting = await getActiveSetting(page, "说话人数");
 	const speakerCountInput = speakerCountSetting.locator('input[type="text"]');
 	await speakerCountInput.fill("3");
 	await speakerCountInput.blur();
 	await speakerCountSetting.getByText("已保存", { exact: true }).waitFor({ state: "visible" });
 	await setSettingToggle(page, "说话人分离", false);
+	assert(await (await getActiveSetting(page, "说话人数")).locator("input").isDisabled(), "关闭说话人分离后人数输入应禁用但保留");
 	assert(
-		(await activePanel.getByText("说话人数", { exact: true }).count()) === 0 &&
-		(await activePanel.getByText("说话人标签样式", { exact: true }).count()) === 0,
-		"关闭说话人分离后仍显示从属配置"
-	);
-	assert(
-		await page.evaluate(
-			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.aliyunFiletrans.speakerCount,
-			PLUGIN_ID
-		) === 3,
+		await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.aliyunFiletrans.speakerCount, PLUGIN_ID) === 3,
 		"关闭说话人分离时不应清除已保存的说话人数"
 	);
 	await setSettingToggle(page, "说话人分离", true);
 	assert((await getSettingTextValue(page, "说话人数")) === "3", "重新开启后未恢复说话人数");
+	await activePanel.locator('[data-capability-tab="hotwords"]').click();
 	await setSettingToggle(page, "术语增强", true);
-	assert(await (await getActiveSetting(page, "人工术语")).isVisible(), "开启术语增强后未显示人工配置入口");
-	assert(await (await getActiveSetting(page, "AI 术语候选")).isVisible(), "开启术语增强后未显示候选审核入口");
+	assert(!(await (await getActiveSetting(page, "人工术语")).getByRole("button").isDisabled()), "开启术语增强后配置入口仍禁用");
 	await setSettingToggle(page, "术语增强", false);
-	assert((await activePanel.getByText("人工术语", { exact: true }).count()) === 0, "关闭术语增强后未隐藏人工配置入口");
+	assert(await (await getActiveSetting(page, "人工术语")).getByRole("button").isDisabled(), "关闭术语增强后配置入口未禁用");
+	await activePanel.locator('[data-capability-tab="context"]').click();
 	await setSettingToggle(page, "上下文增强", true);
-	assert(await (await getActiveSetting(page, "预览实际内容")).isVisible(), "开启上下文增强后未显示预览入口");
+	assert(!(await (await getActiveSetting(page, "预览实际内容")).getByRole("button").isDisabled()), "开启上下文增强后预览入口仍禁用");
 	await setSettingToggle(page, "上下文增强", false);
-	assert((await activePanel.getByText("预览实际内容", { exact: true }).count()) === 0, "关闭上下文增强后未隐藏预览入口");
-	for (const [capabilityName, expanded] of [["说话人分离", true], ["术语增强", false], ["上下文增强", false]]) {
-		const toggle = (await getActiveSetting(page, capabilityName)).locator(".checkbox-container");
-		assert(Boolean(await toggle.getAttribute("aria-controls")), `${capabilityName} 开关缺少 aria-controls`);
-		assert((await toggle.getAttribute("aria-expanded")) === String(expanded), `${capabilityName} 的 aria-expanded 不正确`);
-	}
+	assert(await (await getActiveSetting(page, "预览实际内容")).getByRole("button").isDisabled(), "关闭上下文增强后预览入口未禁用");
 	await page.evaluate(async ({ pluginId, memoryInitialized }) => {
 		const plugin = window.app.plugins.plugins[pluginId];
 		plugin.settings.memoryInitialized = memoryInitialized;
@@ -3389,20 +3338,17 @@ async function verifyTabs(page) {
 	await serviceTab.click();
 	await selectSettingOption(page, "服务商", "siliconflow");
 	await advancedTab.click();
-	assert(
-		JSON.stringify(await serviceContext.locator('.echo-notes-transcription-context-chip').allTextContents()) === JSON.stringify(["长音频分段"]),
-		"SiliconFlow 只应展示长音频分段能力 Tag"
-	);
-	assert(
-		await activePanel.locator('.echo-notes-transcription-capability-empty').count() === 3,
-		"SiliconFlow 不支持的能力组应显示三个紧凑空状态"
-	);
-	assert(
-		await activePanel.locator('.echo-notes-transcription-capability-card .checkbox-container').count() === 0 &&
-		await activePanel.locator('.echo-notes-transcription-capability-status.is-unsupported').count() === 3,
-		"不支持的能力仍被渲染成可操作开关或缺少状态说明"
-	);
-	await activePanel.getByRole("button", { name: "前往转写服务", exact: true }).first().click();
+	assert(await serviceContext.locator('.echo-notes-transcription-context-chip').count() === 0,
+		"SiliconFlow 服务信息栏不应展示旧能力 Tag");
+	for (const capabilityId of ["speaker", "hotwords", "context"]) {
+		await activePanel.locator(`[data-capability-tab="${capabilityId}"]`).click();
+		assert(await activePanel.locator('.echo-notes-settings-capability-panel:not([hidden]) .echo-notes-transcription-capability-empty').count() === 1,
+			`${capabilityId} 不支持状态缺少恢复说明`);
+		assert(await activePanel.locator('.echo-notes-settings-capability-panel:not([hidden]) .checkbox-container').count() === 0 &&
+			await activePanel.locator('.echo-notes-settings-capability-panel:not([hidden]) .echo-notes-transcription-capability-status.is-unsupported').count() === 1,
+			`${capabilityId} 不支持状态仍含开关或缺少状态`);
+	}
+	await activePanel.getByRole("button", { name: "前往转写服务", exact: true }).click();
 	await page.waitForFunction(() => (
 		document.activeElement?.closest('[data-echo-notes-guide-target="transcription-provider"]') !== null
 	));
@@ -3588,6 +3534,7 @@ async function verifyTabs(page) {
 	const fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
 	assert(await fixedTranscriptionModel.isDisabled(), "MOSI 固定模型应不可编辑");
 	await advancedTab.click();
+	await activePanel.locator('[data-capability-tab="speaker"]').click();
 	await setSettingToggle(page, "说话人分离", false);
 	assert(
 		(await serviceContext.locator('.echo-notes-transcription-context-model').textContent()) === "moss-transcribe",
@@ -3633,26 +3580,20 @@ async function verifyTabs(page) {
 	assert((await activeServiceSection.getByText("快捷录音", { exact: true }).count()) === 0, "快捷录音不应显示在转写服务");
 	assert(await serviceTab.getAttribute("aria-selected") === "true", "离线模式重绘后应保留转写服务分类");
 	await advancedTab.click();
+	await activePanel.locator('[data-capability-tab="shortcuts"]').click();
 	const activeAdvancedSection = activePanel.locator('.echo-notes-settings-section-panel:not([hidden])');
-	const recordingSection = activeAdvancedSection.locator('[data-capability-card="quick-recording"]');
-	await recordingSection.getByText("快捷录音", { exact: true }).waitFor({ state: "visible" });
+	const recordingSection = activeAdvancedSection.locator('.echo-notes-settings-capability-panel:not([hidden])');
+	await recordingSection.getByText("快捷键配置", { exact: true }).waitFor({ state: "visible" });
 	assert(
-		await recordingSection.getAttribute("aria-label") === "快捷录音" &&
-		(await recordingSection.getByText("与服务商和模型能力无关", { exact: false }).count()) === 1,
-		"高级功能末尾的快捷录音卡缺少标准结构或非模型能力说明"
+		(await recordingSection.getByText("核心录音机", { exact: false }).count()) >= 1 &&
+		(await recordingSection.getByText("不控制 Echo Notes 实时采集", { exact: false }).count()) === 1,
+		"快捷键配置面板缺少核心录音机和实时模式边界说明"
 	);
 	assert(
-		await recordingSection.locator('.checkbox-container, input[type="text"]').count() === 0 &&
+		await recordingSection.locator('input[type="text"]').count() === 0 &&
 		await recordingSection.getByRole("button", { name: "保存", exact: true }).count() === 0 &&
 		await recordingSection.locator('.echo-notes-quick-recording-hotkey-capture').count() === 3,
-		"快捷录音仍包含开关、文本框、保存按钮，或缺少三项热键记录控件"
-	);
-	assert(
-		await recordingSection.evaluate((section, cardsSelector) => {
-			const cards = [...document.querySelectorAll(cardsSelector)];
-			return cards.at(-1) === section;
-		}, '.echo-notes-settings-section-panel:not([hidden]) .echo-notes-transcription-capability-card'),
-		"快捷录音未作为最后一张高级能力卡片"
+		"快捷键配置包含文本参数或保存按钮，或缺少三项热键记录控件"
 	);
 	const recorderAutoEnable = await page.evaluate(async (pluginId) => {
 		const plugin = window.app.plugins.plugins[pluginId];
@@ -3685,7 +3626,7 @@ async function verifyTabs(page) {
 		plugin.canWriteObsidianShortcutBindings = () => false;
 		plugin.settingTab.showDestination("transcription-recording");
 	}, PLUGIN_ID);
-	const failedRecordingCard = getActivePanel(page).locator('[data-capability-card="quick-recording"]');
+	const failedRecordingCard = getActivePanel(page).locator('.echo-notes-settings-capability-panel:not([hidden])');
 	await failedRecordingCard.getByText("自动开启失败", { exact: true }).waitFor({ state: "visible" });
 	assert(
 		await failedRecordingCard.locator('.echo-notes-quick-recording-hotkey-capture:disabled').count() === 3 &&
@@ -5638,10 +5579,11 @@ async function inspectLayout(page, providerSettingName) {
 			documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
 			introBeforeWorkflow: Boolean(
 				intro &&
-				guide &&
 				workflow &&
-				intro.getBoundingClientRect().bottom <= guide.getBoundingClientRect().top &&
-				guide.getBoundingClientRect().bottom <= workflow.getBoundingClientRect().top
+				(guide
+					? intro.getBoundingClientRect().bottom <= guide.getBoundingClientRect().top &&
+						guide.getBoundingClientRect().bottom <= workflow.getBoundingClientRect().top
+					: intro.getBoundingClientRect().bottom <= workflow.getBoundingClientRect().top)
 			),
 			stepFits,
 			providerFound: Boolean(providerItem),
@@ -5819,6 +5761,8 @@ async function captureAdvancedCapabilityViewports(page) {
 		return snapshot;
 	}, PLUGIN_ID);
 
+	const capabilityIds = ["shortcuts", "fusion", "speaker", "hotwords", "context"];
+	const expectedLabels = ["快捷键配置", "融合转写", "说话人分离", "术语增强", "上下文增强"];
 	const results = [];
 	try {
 		for (const viewport of VIEWPORTS) {
@@ -5826,89 +5770,59 @@ async function captureAdvancedCapabilityViewports(page) {
 				await setViewportMode(page, viewport, theme);
 				await page.locator('[data-settings-stage="transcription"]').click();
 				await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
-				await page.evaluate(() => {
-					const content = document.querySelector(".vertical-tab-content");
-					if (content) content.scrollTop = 0;
-				});
-				await page.mouse.move(1, 1);
-
-				const metrics = await page.evaluate(() => {
-					const content = document.querySelector(".vertical-tab-content");
-					const panel = document.querySelector(".echo-notes-settings-panel:not([hidden])");
-					const section = panel?.querySelector(".echo-notes-settings-section-panel:not([hidden])");
-					const summary = section?.querySelector(".echo-notes-transcription-context");
-					const model = summary?.querySelector(".echo-notes-transcription-context-model");
-					const tags = [...(summary?.querySelectorAll(".echo-notes-transcription-context-chip") ?? [])];
-					const actions = [...(section?.querySelectorAll(".echo-notes-transcription-capability-action") ?? [])];
-					const hotkeyControls = [...(section?.querySelectorAll(".echo-notes-quick-recording-hotkey-capture, .echo-notes-quick-recording-hotkey-clear") ?? [])];
-					const sectionRect = section?.getBoundingClientRect();
-					return {
-						innerWidth: window.innerWidth,
-						contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
-						panelOverflow: panel ? panel.scrollWidth - panel.clientWidth : Number.POSITIVE_INFINITY,
-						documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-						summaryFits: Boolean(summary && summary.scrollWidth <= summary.clientWidth + 1),
-						modelFits: Boolean(model && model.scrollWidth <= model.clientWidth + 1),
-						tagsFit: tags.every((tag) => {
-							const rect = tag.getBoundingClientRect();
-							return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
-						}),
-						tagLabels: tags.map((tag) => tag.textContent?.trim()),
-						cardLabels: [...(section?.querySelectorAll(".echo-notes-transcription-capability-card-title") ?? [])]
-							.map((label) => label.textContent?.trim()),
-						actionCount: actions.length,
-						minimumActionHeight: actions.length > 0
-							? Math.min(...actions.map((action) => action.getBoundingClientRect().height))
-							: 0,
-						actionsFit: actions.every((action) => {
-							const rect = action.getBoundingClientRect();
-							return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
-						}),
-						hotkeyControlsFit: hotkeyControls.every((control) => {
-							const rect = control.getBoundingClientRect();
-							return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
-						}),
-						minimumHotkeyControlHeight: hotkeyControls.length > 0
-							? Math.min(...hotkeyControls.map((control) => control.getBoundingClientRect().height))
-							: 0
-					};
-				});
-				const context = `advanced-capabilities/${viewport.name}/${theme}`;
-				assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
-				assert(metrics.contentOverflow <= 1, `${context} 设置内容出现横向溢出`);
-				assert(metrics.panelOverflow <= 1, `${context} 插件面板出现横向溢出`);
-				assert(metrics.documentOverflow <= 1, `${context} 文档出现横向溢出`);
-				assert(metrics.summaryFits && metrics.modelFits && metrics.tagsFit, `${context} 服务摘要或能力 Tag 溢出`);
-				assert(
-					JSON.stringify(metrics.tagLabels) === JSON.stringify([
-						"说话人分离",
-						"时间戳",
-						"热词增强",
-						"上下文增强"
-					]),
-					`${context} 模型支持 Tag 不正确`
-				);
-				assert(
-					JSON.stringify(metrics.cardLabels) === JSON.stringify(["说话人分离", "术语增强", "上下文增强", "快捷录音"]),
-					`${context} 能力卡片结构不正确`
-				);
-				assert(metrics.actionCount >= 2 && metrics.actionsFit, `${context} 恢复操作缺失或溢出`);
-				assert(metrics.hotkeyControlsFit, `${context} 快捷录音控件溢出`);
-				if (viewport.mobileShell) {
-					assert(metrics.minimumActionHeight >= 44, `${context} 恢复操作小于 44px`);
-					assert(metrics.minimumHotkeyControlHeight >= 44, `${context} 快捷录音控件小于 44px`);
+				for (const capabilityId of capabilityIds) {
+					await getActivePanel(page).locator(`[data-capability-tab="${capabilityId}"]`).click();
+					await page.evaluate(() => {
+						const content = document.querySelector(".vertical-tab-content");
+						if (content) content.scrollTop = 0;
+					});
+					await page.mouse.move(1, 1);
+					const metrics = await page.evaluate(() => {
+						const content = document.querySelector(".vertical-tab-content");
+						const panel = document.querySelector(".echo-notes-settings-panel:not([hidden])");
+						const section = panel?.querySelector(".echo-notes-settings-section-panel:not([hidden])");
+						const summary = section?.querySelector(".echo-notes-transcription-context");
+						const tabs = [...(section?.querySelectorAll(".echo-notes-settings-capability-tab") ?? [])];
+						const visiblePanels = [...(section?.querySelectorAll(".echo-notes-settings-capability-panel:not([hidden])") ?? [])];
+						const targets = [...(visiblePanels[0]?.querySelectorAll("button, input, select") ?? [])];
+						const sectionRect = section?.getBoundingClientRect();
+						return {
+							innerWidth: window.innerWidth,
+							contentOverflow: content ? content.scrollWidth - content.clientWidth : Number.POSITIVE_INFINITY,
+							panelOverflow: panel ? panel.scrollWidth - panel.clientWidth : Number.POSITIVE_INFINITY,
+							documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+							summaryFits: Boolean(summary && summary.scrollWidth <= summary.clientWidth + 1),
+							tabLabels: tabs.map((tab) => tab.querySelector(".echo-notes-settings-capability-tab-title > span:first-child")?.textContent?.trim()),
+							selectedCount: tabs.filter((tab) => tab.getAttribute("aria-selected") === "true").length,
+							visiblePanelCount: visiblePanels.length,
+							tabsFit: tabs.every((tab) => {
+								const rect = tab.getBoundingClientRect();
+								return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
+							}),
+							targetsFit: targets.filter((target) => target.getBoundingClientRect().width > 0 && target.getBoundingClientRect().height > 0).every((target) => {
+								const rect = target.getBoundingClientRect();
+								return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
+							}),
+							minimumButtonHeight: targets.filter((target) => target instanceof HTMLButtonElement).length
+								? Math.min(...targets.filter((target) => target instanceof HTMLButtonElement).map((target) => target.getBoundingClientRect().height))
+								: 0
+						};
+					});
+					const context = `advanced-capabilities/${capabilityId}/${viewport.name}/${theme}`;
+					assert(metrics.innerWidth === viewport.width, `${context} 的 viewport 宽度不匹配`);
+					assert(metrics.contentOverflow <= 1 && metrics.panelOverflow <= 1 && metrics.documentOverflow <= 1, `${context} 出现横向溢出`);
+					assert(metrics.summaryFits && metrics.tabsFit && metrics.targetsFit, `${context} 服务栏、能力卡或控件溢出：${JSON.stringify(metrics)}`);
+					assert(JSON.stringify(metrics.tabLabels) === JSON.stringify(expectedLabels), `${context} 五卡顺序不正确`);
+					assert(metrics.selectedCount === 1 && metrics.visiblePanelCount === 1, `${context} 活动能力或面板数量不正确`);
+					if (viewport.mobileShell && metrics.minimumButtonHeight > 0) {
+						assert(metrics.minimumButtonHeight >= 44, `${context} 可见按钮小于 44px`);
+					}
+					const fileName = `settings-capabilities-${capabilityId}-${viewport.name}-${theme}.png`;
+					const screenshotPath = path.join(OUTPUT_DIR, fileName);
+					await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
+					assert((await stat(screenshotPath)).size > 10_000, `${fileName} 截图可能为空白`);
+					results.push({ capabilityId, viewport: viewport.name, theme, fileName, metrics });
 				}
-
-				const fileName = `settings-advanced-capabilities-${viewport.name}-${theme}.png`;
-				const screenshotPath = path.join(OUTPUT_DIR, fileName);
-				await page.locator(".modal.mod-settings").screenshot({ path: screenshotPath });
-				const screenshotStat = await stat(screenshotPath);
-				assert(screenshotStat.size > 10_000, `${fileName} 截图可能为空白`);
-				results.push({ viewport: viewport.name, theme, fileName, metrics });
-				const quickRecordingFileName = `settings-quick-recording-${viewport.name}-${theme}.png`;
-				const quickRecordingPath = path.join(OUTPUT_DIR, quickRecordingFileName);
-				await getActivePanel(page).locator('[data-capability-card="quick-recording"]').screenshot({ path: quickRecordingPath });
-				assert((await stat(quickRecordingPath)).size > 4_000, `${quickRecordingFileName} 截图可能为空白`);
 			}
 		}
 	} finally {

@@ -119,6 +119,8 @@ type SettingsSectionDefinition<T extends string> = {
 
 type TranscriptionCapabilityState = "enabled" | "disabled" | "fixed" | "blocked" | "unsupported";
 
+type TranscriptionCapabilityId = "shortcuts" | "fusion" | "speaker" | "hotwords" | "context";
+
 type TranscriptionCapabilityView = {
 	id: "speaker" | "timestamp" | "hotwords" | "context" | "chunking" | "streaming";
 	label: string;
@@ -168,6 +170,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private settingsContainerEl: HTMLElement | null = null;
 	private activeSettingsStage: SettingsStage = "transcription";
 	private activeTranscriptionSettingsSection: TranscriptionSettingsSection = "service";
+	private activeTranscriptionCapability: TranscriptionCapabilityId = "shortcuts";
 	private activeAnalysisSettingsSection: AnalysisSettingsSection = "model";
 	private activeMemorySettingsSection: MemorySettingsSection = "model";
 	private activeAnalysisTemplateCategory: AnalysisTemplateCategoryId = "general";
@@ -264,6 +267,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			case "transcription-recording":
 				this.activeSettingsStage = "transcription";
 				this.activeTranscriptionSettingsSection = "advanced";
+				this.activeTranscriptionCapability = "shortcuts";
 				break;
 		}
 		if (options.guide === "provider-api-key" &&
@@ -407,12 +411,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		gettingStartedIconEl.setAttribute("aria-hidden", "true");
 		setIcon(gettingStartedIconEl, "compass");
 		gettingStartedButtonEl.addEventListener("click", () => void this.plugin.openGettingStarted());
-		containerEl.createEl("p", {
-			cls: "echo-notes-settings-intro-guide",
-			text: newcomer
-				? "操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。"
-				: "提示：可使用方向键切换配置阶段。"
-		});
+		if (newcomer) {
+			containerEl.createEl("p", {
+				cls: "echo-notes-settings-intro-guide",
+				text: "操作指引：请按下方工作流选择阶段，再进入对应分类完成必要配置。"
+			});
+		}
 	}
 
 	private renderSettingsWorkflow(containerEl: HTMLElement, renderId: number): HTMLElement {
@@ -1263,323 +1267,341 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const config = this.getSelectedTranscriptionConfig();
 		const mode = this.getSelectedTranscriptionMode();
 		const capability = getTranscriptionProviderCapability(config.provider, mode, config.model);
-		const isRealtime = mode === "realtime";
-		const isMosi = !isRealtime && config.provider === "mosi";
-		const isAgentPlan = config.provider === "volcengine-agentplan";
 		const capabilityViews = this.getTranscriptionCapabilityViews(config, capability);
+		const renderId = this.settingsRenderSequence;
 
-		this.renderTranscriptionServiceContext(containerEl, config, mode, capabilityViews);
+		this.renderTranscriptionServiceContext(containerEl, config, mode);
 
-		const speakerCard = this.renderTranscriptionCapabilityCard(
-			containerEl,
-			"speaker",
-			"说话人分离",
-			"区分不同发言人，并控制转写稿中的说话人标记。"
-		);
-		const speakerView = capabilityViews.find((item) => item.id === "speaker")!;
-		let speakerOutputEnabled = false;
+		const headingEl = containerEl.createDiv({ cls: "echo-notes-settings-capabilities-heading" });
+		const headingCopyEl = headingEl.createDiv();
+		new Setting(headingCopyEl)
+			.setName("能力增强")
+			.setClass("echo-notes-settings-capabilities-title")
+			.setHeading();
+		headingCopyEl.createEl("p", { text: "选择一项能力查看和调整配置；选择卡片不会启用能力或保存设置。" });
+		headingEl.createSpan({ cls: "echo-notes-settings-capabilities-count", text: "5 项能力" });
 
-		if (capability.supportsSpeakerDiarization) {
-			if (isMosi) {
-				speakerOutputEnabled = this.plugin.settings.mosiSpeakerDiarizationEnabled;
-				speakerCard.headerSetting.addToggle((toggle) => {
-					this.bindTranscriptionCapabilityDisclosure(toggle, speakerCard.bodyEl, speakerOutputEnabled);
-					return toggle.setValue(speakerOutputEnabled).onChange(async (value) => {
-							this.plugin.settings.mosiSpeakerDiarizationEnabled = value;
-							this.plugin.settings.offlineTranscription.model = getMosiTranscriptionModel(value);
-							await this.plugin.saveSettings();
-							this.refreshSettings();
-						});
-				});
-			} else if (isAgentPlan) {
-				speakerOutputEnabled = true;
-				this.renderTranscriptionCapabilityStatus(speakerCard.headerSetting, speakerView);
-			} else if (config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL) {
-				const filetrans = config.aliyunFiletrans!;
-				speakerOutputEnabled = filetrans.diarizationEnabled;
-				speakerCard.headerSetting.addToggle((toggle) => {
-					this.bindTranscriptionCapabilityDisclosure(toggle, speakerCard.bodyEl, speakerOutputEnabled);
-					return toggle.setValue(speakerOutputEnabled).onChange(async (value) => {
-							const currentFiletrans = this.plugin.settings.offlineTranscription.aliyunFiletrans;
-							if (!currentFiletrans) {
-								return;
-							}
-							currentFiletrans.diarizationEnabled = value;
-							await this.plugin.saveSettings();
-							this.refreshSettings();
-						});
-				});
-				if (filetrans.diarizationEnabled) {
-					const speakerCountSetting = new Setting(speakerCard.bodyEl)
-						.setName("说话人数")
-						.setDesc("留空由百炼自动判断；可填写 2～100 作为参考人数。");
-						speakerCountSetting.addText((text) => {
-						text.setPlaceholder("自动").setValue(filetrans.speakerCount?.toString() ?? "");
-						this.bindDeferredTextSave(speakerCountSetting, "aliyun-filetrans-speaker-count", text.inputEl, async (value) => {
-							const currentFiletrans = this.plugin.settings.offlineTranscription.aliyunFiletrans;
-							if (!currentFiletrans) {
-								return;
-							}
-							const trimmed = value.trim();
-							if (trimmed) currentFiletrans.speakerCount = Number(trimmed);
-							else delete currentFiletrans.speakerCount;
-							await this.plugin.saveSettings();
-						}, (value) => {
-							if (!value.trim()) return undefined;
-							const parsed = Number(value);
-							return Number.isInteger(parsed) && parsed >= 2 && parsed <= 100 ? undefined : "请输入 2～100 的整数，或留空自动判断。";
-						});
-						return text;
-					});
+		const definitions: ReadonlyArray<{ id: TranscriptionCapabilityId; label: string; description: string; state: string }> = [
+			{
+				id: "shortcuts",
+				label: "快捷键配置",
+				description: "核心录音机与批量转写快捷键",
+				state: this.getShortcutCapabilityState()
+			},
+			{
+				id: "fusion",
+				label: "融合转写",
+				description: "双路转写与 AI 对照融合方案",
+				state: "实验中"
+			},
+			{
+				id: "speaker",
+				label: "说话人分离",
+				description: "区分发言人并设置标签样式",
+				state: this.getCapabilityStateLabel(capabilityViews.find((item) => item.id === "speaker"))
+			},
+			{
+				id: "hotwords",
+				label: "术语增强",
+				description: "提升专有名词与项目名识别",
+				state: this.getCapabilityStateLabel(capabilityViews.find((item) => item.id === "hotwords"))
+			},
+			{
+				id: "context",
+				label: "上下文增强",
+				description: "发送已批准的上下文提示",
+				state: this.getCapabilityStateLabel(capabilityViews.find((item) => item.id === "context"))
+			}
+		];
+
+		const tabsEl = containerEl.createDiv({ cls: "echo-notes-settings-capability-tabs" });
+		tabsEl.setAttribute("role", "tablist");
+		tabsEl.setAttribute("aria-label", "转写能力增强");
+		const activate = (id: TranscriptionCapabilityId, moveFocus = true): void => {
+			if (id === this.activeTranscriptionCapability) return;
+			const commitActivation = (): void => {
+				this.stopActiveHotkeyCapture?.();
+				this.activeTranscriptionCapability = id;
+				this.refreshSettings();
+				if (moveFocus) {
+					window.requestAnimationFrame(() => this.settingsContainerEl
+						?.querySelector<HTMLButtonElement>(`[data-capability-tab="${id}"]`)?.focus());
 				}
+			};
+			const activeInput = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
+			if (!activeInput) {
+				commitActivation();
+				return;
 			}
-		} else {
-			this.renderTranscriptionCapabilityStatus(
-				speakerCard.headerSetting,
-				{ state: "unsupported", stateLabel: "当前模型不支持" }
-			);
-			this.renderTranscriptionCapabilityEmptyState(
-				speakerCard.bodyEl,
-				"切换到支持说话人分离的服务或模型后，可在这里配置。",
-				"前往转写服务",
-				() => this.navigateToTranscriptionService()
-			);
-		}
+			activeInput.blur();
+			window.setTimeout(() => {
+				if (activeInput.isConnected && activeInput.closest(".echo-notes-settings-capability-panel")
+					?.querySelector(".echo-notes-inline-validation.is-failed")) {
+					activeInput.focus();
+					return;
+				}
+				commitActivation();
+			}, 100);
+		};
+		definitions.forEach((definition, index) => {
+			const selected = definition.id === this.activeTranscriptionCapability;
+			const buttonEl = tabsEl.createEl("button", {
+				cls: `echo-notes-settings-capability-tab${selected ? " is-active" : ""}`,
+				attr: {
+					type: "button",
+					role: "tab",
+					"aria-selected": String(selected),
+					"aria-controls": `echo-notes-settings-capability-panel-${renderId}-${definition.id}`,
+					tabindex: selected ? "0" : "-1",
+					"data-capability-tab": definition.id
+				}
+			});
+			buttonEl.id = `echo-notes-settings-capability-tab-${renderId}-${definition.id}`;
+			const titleEl = buttonEl.createDiv({ cls: "echo-notes-settings-capability-tab-title" });
+			titleEl.createSpan({ text: definition.label });
+			titleEl.createSpan({ cls: "echo-notes-settings-capability-tab-state", text: definition.state });
+			buttonEl.createDiv({ cls: "echo-notes-settings-capability-tab-description", text: definition.description });
+			buttonEl.addEventListener("click", () => activate(definition.id));
+			buttonEl.addEventListener("keydown", (event) => {
+				let target: number;
+				switch (event.key) {
+					case "ArrowLeft": target = (index - 1 + definitions.length) % definitions.length; break;
+					case "ArrowRight": target = (index + 1) % definitions.length; break;
+					case "Home": target = 0; break;
+					case "End": target = definitions.length - 1; break;
+					default: return;
+				}
+				event.preventDefault();
+				activate(definitions[target].id);
+			});
+		});
 
-		if (speakerOutputEnabled) {
-			const speakerLabelSetting = new Setting(speakerCard.bodyEl)
-				.setName("说话人标签样式")
-				.setDesc("选择仅显示说话人编号，或同时附带时间范围。");
-			speakerLabelSetting.addDropdown((dropdown) => dropdown
-				.addOption("speaker", "仅说话人")
-				.addOption("speaker-with-time", "说话人＋时间")
-				.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle)
-				.onChange(async (value) => {
-					this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
+		for (const definition of definitions) {
+			const selected = definition.id === this.activeTranscriptionCapability;
+			const panelEl = containerEl.createEl("section", {
+				cls: "echo-notes-settings-capability-panel",
+				attr: {
+					id: `echo-notes-settings-capability-panel-${renderId}-${definition.id}`,
+					role: "tabpanel",
+					"aria-labelledby": `echo-notes-settings-capability-tab-${renderId}-${definition.id}`
+				}
+			});
+			panelEl.hidden = !selected;
+			if (!selected) continue;
+			switch (definition.id) {
+				case "shortcuts": this.renderQuickRecordingPanel(panelEl); break;
+				case "fusion": this.renderFusionTranscriptionPanel(panelEl); break;
+				case "speaker": this.renderSpeakerCapabilityPanel(panelEl, config, capability); break;
+				case "hotwords": this.renderHotwordCapabilityPanel(panelEl, config, capability); break;
+				case "context": this.renderContextCapabilityPanel(panelEl, config, capability); break;
+			}
+		}
+	}
+
+	private getShortcutCapabilityState(): string {
+		const configured = [
+			this.plugin.getOfficialAudioRecorderStartHotkey(),
+			this.plugin.getOfficialAudioRecorderStopHotkey(),
+			this.plugin.settings.transcribeAllAudioHotkey
+		].filter(Boolean).length;
+		if (this.plugin.isOfficialAudioRecorderEnabled() !== true) return "需开启录音机";
+		return configured > 0 ? `已配置 ${configured}/3` : "待配置";
+	}
+
+	private getCapabilityStateLabel(view?: TranscriptionCapabilityView): string {
+		if (!view?.supported) return "当前服务不支持";
+		if (view.stateLabel) return view.stateLabel;
+		switch (view.state) {
+			case "enabled": return "已开启";
+			case "fixed": return "始终开启";
+			case "blocked": return "需初始化";
+			default: return "未开启";
+		}
+	}
+
+	private renderCapabilityPanelHeading(containerEl: HTMLElement, title: string, description: string): Setting {
+		const setting = new Setting(containerEl).setName(title).setDesc(description);
+		setting.setClass("echo-notes-settings-capability-panel-heading");
+		return setting;
+	}
+
+	private renderFusionTranscriptionPanel(containerEl: HTMLElement): void {
+		this.renderCapabilityPanelHeading(containerEl, "融合转写（实验中）", "方案仍在验证，当前版本暂不可用。这里不会保存参数、启用模型或发起外部请求。");
+		const calloutEl = containerEl.createDiv({ cls: "echo-notes-settings-fusion-callout", attr: { role: "note" } });
+		calloutEl.createEl("strong", { text: "拟议方案" });
+		const listEl = calloutEl.createEl("ul");
+		for (const item of ["由两路转写服务分别生成结果", "使用 AI 对照差异并生成融合稿", "完整保留两份原始转写，便于回溯核对"]) {
+			listEl.createEl("li", { text: item });
+		}
+		calloutEl.createEl("p", { text: "融合只提供更多对照证据，不保证结果一定更准确；正式开放前仍需完成隐私、费用与失败恢复验证。" });
+	}
+
+	private renderSpeakerCapabilityPanel(
+		containerEl: HTMLElement,
+		config: TranscriptionConfig,
+		capability: ReturnType<typeof getTranscriptionProviderCapability>
+	): void {
+		const mode = this.getSelectedTranscriptionMode();
+		const isMosi = mode !== "realtime" && config.provider === "mosi";
+		const isAgentPlan = config.provider === "volcengine-agentplan";
+		const view = this.getTranscriptionCapabilityViews(config, capability).find((item) => item.id === "speaker")!;
+		const heading = this.renderCapabilityPanelHeading(containerEl, "说话人分离", "区分不同发言人，并控制转写稿中的说话人标记。");
+		let enabled = false;
+		if (!capability.supportsSpeakerDiarization) {
+			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
+			this.renderTranscriptionCapabilityEmptyState(containerEl, "切换到支持说话人分离的服务或模型后，可在这里配置。", "前往转写服务", () => this.navigateToTranscriptionService());
+			return;
+		}
+		if (isMosi) {
+			enabled = this.plugin.settings.mosiSpeakerDiarizationEnabled;
+			heading.addToggle((toggle) => toggle.setValue(enabled).onChange(async (value) => {
+				this.plugin.settings.mosiSpeakerDiarizationEnabled = value;
+				this.plugin.settings.offlineTranscription.model = getMosiTranscriptionModel(value);
+				await this.plugin.saveSettings();
+				this.refreshSettings();
+			}));
+		} else if (isAgentPlan) {
+			enabled = true;
+			this.renderTranscriptionCapabilityStatus(heading, view);
+		} else if (config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL) {
+			const filetrans = config.aliyunFiletrans!;
+			enabled = filetrans.diarizationEnabled;
+			heading.addToggle((toggle) => toggle.setValue(enabled).onChange(async (value) => {
+				const current = this.plugin.settings.offlineTranscription.aliyunFiletrans;
+				if (!current) return;
+				current.diarizationEnabled = value;
+				await this.plugin.saveSettings();
+				this.refreshSettings();
+			}));
+			const countSetting = new Setting(containerEl).setName("说话人数").setDesc("留空由百炼自动判断；可填写 2～100 作为参考人数。");
+			countSetting.addText((text) => {
+				text.setPlaceholder("自动").setValue(filetrans.speakerCount?.toString() ?? "").setDisabled(!enabled);
+				this.bindDeferredTextSave(countSetting, "aliyun-filetrans-speaker-count", text.inputEl, async (value) => {
+					const current = this.plugin.settings.offlineTranscription.aliyunFiletrans;
+					if (!current) return;
+					if (value) current.speakerCount = Number(value); else delete current.speakerCount;
 					await this.plugin.saveSettings();
-				}));
-		}
-		speakerCard.bodyEl.hidden = capability.supportsSpeakerDiarization && !speakerOutputEnabled;
-		speakerCard.cardEl.dataset.expanded = String(!speakerCard.bodyEl.hidden);
-
-		const termCard = this.renderTranscriptionCapabilityCard(
-			containerEl,
-			"hotwords",
-			"术语增强",
-			"提高专有名词、人名和项目名的识别稳定性。"
-		);
-		const hotwordView = capabilityViews.find((item) => item.id === "hotwords")!;
-
-		if (capability.supportsNativeHotwords && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL) {
-			const filetrans = config.aliyunFiletrans!;
-			const canConfigure = this.plugin.settings.memoryInitialized;
-			termCard.headerSetting.addToggle((toggle) => {
-				this.bindTranscriptionCapabilityDisclosure(
-					toggle,
-					termCard.bodyEl,
-					canConfigure && filetrans.hotwordEnhancementEnabled
-				);
-				return toggle
-					.setValue(filetrans.hotwordEnhancementEnabled)
-					.setDisabled(!canConfigure)
-					.onChange(async (value) => {
-						const currentFiletrans = this.plugin.settings.offlineTranscription.aliyunFiletrans;
-						if (!currentFiletrans) {
-							return;
-						}
-						currentFiletrans.hotwordEnhancementEnabled = value;
-						await this.plugin.saveSettings();
-						this.refreshSettings();
-					});
+				}, (value) => !value.trim() || (Number.isInteger(Number(value)) && Number(value) >= 2 && Number(value) <= 100)
+					? undefined : "请输入 2～100 的整数，或留空自动判断。");
+				return text;
 			});
-			if (!canConfigure) {
-				this.renderTranscriptionCapabilityStatus(termCard.headerSetting, hotwordView);
-				this.renderMemoryInitializationCallout(termCard.bodyEl);
-			} else if (filetrans.hotwordEnhancementEnabled) {
-				const manualTerms = new Setting(termCard.bodyEl)
-					.setName("人工术语")
-					.setDesc("正在读取 Markdown 配置…")
-					.addButton((button) => button
-						.setButtonText("打开配置文件")
-						.onClick(() => void this.plugin.openTranscriptionEnhancementManualFile()));
-				const candidates = new Setting(termCard.bodyEl)
-					.setName("AI 术语候选")
-					.setDesc("正在读取待审核数量…")
-					.addButton((button) => button
-						.setButtonText("审核候选")
-						.onClick(() => void this.plugin.openTranscriptionEnhancementManager()));
-				void this.plugin.getTranscriptionEnhancementSummary().then((summary) => {
-					if (!manualTerms.settingEl.isConnected) return;
-					manualTerms.setDesc(`已配置 ${summary.manualTermCount} 个人工术语；仅作用域匹配项会进入请求。`);
-					candidates.setDesc(`${summary.pendingCandidateCount} 个待审核；已批准候选直接生效并保留来源与历史。`);
-				}).catch((error) => {
-					if (!manualTerms.settingEl.isConnected) return;
-					manualTerms.setDesc(`配置错误：${getSanitizedErrorMessage(error)}`);
-					candidates.setDesc("配置无效时本次将完全跳过术语增强。");
-				});
-			}
-			termCard.bodyEl.hidden = canConfigure && !filetrans.hotwordEnhancementEnabled;
-		} else {
-			this.renderTranscriptionCapabilityStatus(
-				termCard.headerSetting,
-				{ state: "unsupported", stateLabel: "当前模型不支持" }
-			);
-			this.renderTranscriptionCapabilityEmptyState(
-				termCard.bodyEl,
-				"当前模型不提供原生热词接口。切换服务或模型后可用。",
-				"前往转写服务",
-				() => this.navigateToTranscriptionService()
-			);
 		}
-		termCard.cardEl.dataset.expanded = String(!termCard.bodyEl.hidden);
+		const labelSetting = new Setting(containerEl).setName("说话人标签样式").setDesc("选择仅显示说话人编号，或同时附带时间范围。");
+		labelSetting.addDropdown((dropdown) => dropdown.addOption("speaker", "仅说话人").addOption("speaker-with-time", "说话人＋时间")
+			.setValue(this.plugin.settings.agentPlanSpeakerLabelStyle).setDisabled(!enabled).onChange(async (value) => {
+				this.plugin.settings.agentPlanSpeakerLabelStyle = value as AgentPlanSpeakerLabelStyle;
+				await this.plugin.saveSettings();
+			}));
+		const previewEl = containerEl.createDiv({ cls: "echo-notes-settings-speaker-preview", attr: { role: "note" } });
+		previewEl.createDiv({ cls: "echo-notes-settings-speaker-preview-label", text: "效果预览（示例）" });
+		previewEl.createEl("p", { text: enabled
+			? (this.plugin.settings.agentPlanSpeakerLabelStyle === "speaker-with-time" ? "说话人 1 · 00:00–00:08  我们先确认今天的目标。" : "说话人 1  我们先确认今天的目标。")
+			: "开启说话人分离后，这里会展示标签格式示例。" });
+	}
 
-		const contextCard = this.renderTranscriptionCapabilityCard(
-			containerEl,
-			"context",
-			"上下文增强",
-			"用已批准的固定 Prompt 和记忆内容补充转写上下文。"
-		);
-		const contextView = capabilityViews.find((item) => item.id === "context")!;
+	private renderHotwordCapabilityPanel(
+		containerEl: HTMLElement,
+		config: TranscriptionConfig,
+		capability: ReturnType<typeof getTranscriptionProviderCapability>
+	): void {
+		const heading = this.renderCapabilityPanelHeading(containerEl, "术语增强", "提高专有名词、人名和项目名的识别稳定性。仅发送作用域匹配且已批准的内容。");
+		if (!(capability.supportsNativeHotwords && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL)) {
+			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
+			this.renderTranscriptionCapabilityEmptyState(containerEl, "当前模型不提供原生热词接口。切换服务或模型后可用。", "前往转写服务", () => this.navigateToTranscriptionService());
+			return;
+		}
+		const filetrans = config.aliyunFiletrans!;
+		const initialized = this.plugin.settings.memoryInitialized;
+		heading.addToggle((toggle) => toggle.setValue(filetrans.hotwordEnhancementEnabled).setDisabled(!initialized).onChange(async (value) => {
+			const current = this.plugin.settings.offlineTranscription.aliyunFiletrans;
+			if (!current) return;
+			current.hotwordEnhancementEnabled = value;
+			await this.plugin.saveSettings();
+			this.refreshSettings();
+		}));
+		if (!initialized) this.renderMemoryInitializationCallout(containerEl);
+		const enabled = initialized && filetrans.hotwordEnhancementEnabled;
+		const manual = new Setting(containerEl).setName("人工术语").setDesc("正在读取 Markdown 配置…")
+			.addButton((button) => button.setButtonText("打开配置文件").setDisabled(!enabled).onClick(() => void this.plugin.openTranscriptionEnhancementManualFile()));
+		const candidates = new Setting(containerEl).setName("AI 术语候选").setDesc("正在读取待审核数量…")
+			.addButton((button) => button.setButtonText("审核候选").setDisabled(!enabled).onClick(() => void this.plugin.openTranscriptionEnhancementManager()));
+		void this.plugin.getTranscriptionEnhancementSummary().then((summary) => {
+			if (!manual.settingEl.isConnected) return;
+			manual.setDesc(`已配置 ${summary.manualTermCount} 个人工术语；仅作用域匹配项会进入请求。`);
+			candidates.setDesc(`${summary.pendingCandidateCount} 个待审核；已批准候选直接生效并保留来源与历史。`);
+		}).catch((error) => {
+			if (!manual.settingEl.isConnected) return;
+			manual.setDesc(`配置错误：${getSanitizedErrorMessage(error)}`);
+			candidates.setDesc("配置无效时本次将完全跳过术语增强。");
+		});
+		this.renderTranscriptionExampleReset(containerEl);
+	}
 
-		if (capability.supportsContextEnhancement && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL) {
-			const filetrans = config.aliyunFiletrans!;
-			const canConfigure = this.plugin.settings.memoryInitialized;
-			contextCard.headerSetting.addToggle((toggle) => {
-				this.bindTranscriptionCapabilityDisclosure(
-					toggle,
-					contextCard.bodyEl,
-					canConfigure && filetrans.contextEnhancementEnabled
-				);
-				return toggle
-					.setValue(filetrans.contextEnhancementEnabled)
-					.setDisabled(!canConfigure)
-					.onChange(async (value) => {
-						const currentFiletrans = this.plugin.settings.offlineTranscription.aliyunFiletrans;
-						if (!currentFiletrans) {
-							return;
-						}
-						currentFiletrans.contextEnhancementEnabled = value;
-						await this.plugin.saveSettings();
-						this.refreshSettings();
-					});
+	private renderContextCapabilityPanel(
+		containerEl: HTMLElement,
+		config: TranscriptionConfig,
+		capability: ReturnType<typeof getTranscriptionProviderCapability>
+	): void {
+		const heading = this.renderCapabilityPanelHeading(containerEl, "上下文增强", "使用已批准的固定 Prompt 和记忆内容；发起转写时会把生效内容发送给当前服务商，共用 400 字预算。");
+		if (!(capability.supportsContextEnhancement && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL)) {
+			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
+			this.renderTranscriptionCapabilityEmptyState(containerEl, "当前模型不提供上下文增强接口。切换服务或模型后可用。", "前往转写服务", () => this.navigateToTranscriptionService());
+			return;
+		}
+		const filetrans = config.aliyunFiletrans!;
+		const initialized = this.plugin.settings.memoryInitialized;
+		heading.addToggle((toggle) => toggle.setValue(filetrans.contextEnhancementEnabled).setDisabled(!initialized).onChange(async (value) => {
+			const current = this.plugin.settings.offlineTranscription.aliyunFiletrans;
+			if (!current) return;
+			current.contextEnhancementEnabled = value;
+			await this.plugin.saveSettings();
+			this.refreshSettings();
+		}));
+		if (!initialized) this.renderMemoryInitializationCallout(containerEl);
+		const enabled = initialized && filetrans.contextEnhancementEnabled;
+		const manual = new Setting(containerEl).setName("人工 prompt 与作用域").setDesc("正在读取 Markdown 配置…")
+			.addButton((button) => button.setButtonText("打开配置文件").setDisabled(!enabled).onClick(() => void this.plugin.openTranscriptionEnhancementManualFile()));
+		new Setting(containerEl).setName("预览实际内容").setDesc("优先使用当前活动 Markdown 笔记的作用域；无活动笔记时仅全局。")
+			.addButton((button) => button.setButtonText("预览生效内容").setDisabled(!enabled).onClick(() => void this.plugin.openTranscriptionEnhancementPreview()));
+		void this.plugin.getTranscriptionEnhancementSummary().then((summary) => {
+			if (manual.settingEl.isConnected) manual.setDesc(`已配置 ${summary.manualPromptCount} 条固定 Prompt；与已批准记忆共用 400 字预算。`);
+		}).catch((error) => {
+			if (manual.settingEl.isConnected) manual.setDesc(`配置错误：${getSanitizedErrorMessage(error)}`);
+		});
+		this.renderTranscriptionExampleReset(containerEl);
+	}
+
+	private renderTranscriptionExampleReset(containerEl: HTMLElement): void {
+		if (!this.plugin.settings.memoryInitialized) return;
+		new Setting(containerEl).setName("教学示例").setDesc("清空当前人工术语、固定 prompt 和 AI 候选，重新生成不会生效的教学示例。操作前会在 99 系统目录保存完整备份。")
+			.addButton((button) => {
+				button.setButtonText("重置并生成示例").onClick(() => void this.plugin.resetTranscriptionEnhancementExamples());
+				button.buttonEl.addClass("mod-warning");
+				return button;
 			});
-			if (!canConfigure) {
-				this.renderTranscriptionCapabilityStatus(contextCard.headerSetting, contextView);
-				this.renderMemoryInitializationCallout(contextCard.bodyEl);
-			} else if (filetrans.contextEnhancementEnabled) {
-				const manualContext = new Setting(contextCard.bodyEl)
-					.setName("人工 prompt 与作用域")
-					.setDesc("正在读取 Markdown 配置…")
-					.addButton((button) => button
-						.setButtonText("打开配置文件")
-						.onClick(() => void this.plugin.openTranscriptionEnhancementManualFile()));
-				new Setting(contextCard.bodyEl)
-					.setName("预览实际内容")
-					.setDesc("优先使用当前活动 Markdown 笔记的作用域；无活动笔记时仅全局。")
-					.addButton((button) => button
-						.setButtonText("预览生效内容")
-						.onClick(() => void this.plugin.openTranscriptionEnhancementPreview()));
-				void this.plugin.getTranscriptionEnhancementSummary().then((summary) => {
-					if (manualContext.settingEl.isConnected) {
-						manualContext.setDesc(`已配置 ${summary.manualPromptCount} 条固定 Prompt；与已批准记忆共用 400 字预算。`);
-					}
-				}).catch((error) => {
-					if (manualContext.settingEl.isConnected) manualContext.setDesc(`配置错误：${getSanitizedErrorMessage(error)}`);
-				});
-			}
-			contextCard.bodyEl.hidden = canConfigure && !filetrans.contextEnhancementEnabled;
-		} else {
-			this.renderTranscriptionCapabilityStatus(
-				contextCard.headerSetting,
-				{ state: "unsupported", stateLabel: "当前模型不支持" }
-			);
-			this.renderTranscriptionCapabilityEmptyState(
-				contextCard.bodyEl,
-				"当前模型不提供上下文增强接口。切换服务或模型后可用。",
-				"前往转写服务",
-				() => this.navigateToTranscriptionService()
-			);
-		}
-		contextCard.cardEl.dataset.expanded = String(!contextCard.bodyEl.hidden);
-
-		if (this.plugin.settings.memoryInitialized) {
-			new Setting(containerEl)
-				.setName("教学示例")
-				.setDesc("清空当前人工术语、固定 prompt 和 AI 候选，重新生成不会生效的教学示例。操作前会在 99 系统目录保存完整备份。")
-				.addButton((button) => {
-					button
-						.setButtonText("重置并生成示例")
-						.onClick(() => void this.plugin.resetTranscriptionEnhancementExamples());
-					button.buttonEl.addClass("mod-warning");
-					return button;
-				});
-		}
-
-		if (!isRealtime) {
-			this.renderQuickRecordingCard(containerEl);
-		}
 	}
 
 	private renderTranscriptionServiceContext(
 		containerEl: HTMLElement,
 		config: TranscriptionConfig,
-		mode: "realtime" | "offline",
-		capabilityViews: readonly TranscriptionCapabilityView[]
+		mode: "realtime" | "offline"
 	): void {
-		const capability = getTranscriptionProviderCapability(config.provider, mode, config.model);
 		const contextEl = containerEl.createEl("section", {
 			cls: "echo-notes-transcription-context",
 			attr: { "aria-label": "当前转写服务" }
 		});
 		contextEl.createDiv({ cls: "echo-notes-transcription-context-title", text: "当前转写服务" });
 		const identityEl = contextEl.createDiv({ cls: "echo-notes-transcription-context-identity" });
-		identityEl.createDiv({
+		const serviceEl = identityEl.createDiv({ cls: "echo-notes-transcription-context-service" });
+		serviceEl.createDiv({
 			cls: "echo-notes-transcription-context-provider",
-			text: this.getProviderLabel(config.provider).replace(/^【[^】]+】\s*/, "")
+			text: this.getProviderLabel(config.provider).replace(/^【[^】]+】\\s*/, "")
 		});
-		identityEl.createSpan({
-			cls: "echo-notes-transcription-context-mode",
-			text: mode === "realtime" ? "实时转写" : "离线转写"
-		});
-		contextEl.createEl("code", { cls: "echo-notes-transcription-context-model", text: config.model });
-
-		const supportedViews = capabilityViews.filter((item) => item.supported);
-		const capabilityEl = contextEl.createDiv({ cls: "echo-notes-transcription-context-capabilities" });
-		capabilityEl.createDiv({ cls: "echo-notes-transcription-context-capability-label", text: "模型支持" });
-		const chipsEl = capabilityEl.createDiv({ cls: "echo-notes-transcription-context-chips" });
-		for (const item of supportedViews) {
-			chipsEl.createSpan({
-				cls: "echo-notes-transcription-context-chip",
-				text: item.label,
-				attr: {
-					"data-capability-id": item.id,
-					title: `${item.label}：当前模型支持`,
-					"aria-label": `${item.label}，当前模型支持`
-				}
-			});
-		}
-		if (supportedViews.length === 0) {
-			chipsEl.createSpan({ cls: "echo-notes-transcription-context-empty", text: "当前模型没有可配置的高级能力" });
-		}
-
-		const detailsEl = contextEl.createEl("details", { cls: "echo-notes-transcription-context-details" });
-		detailsEl.createEl("summary", { text: "技术详情" });
-		const detailsBodyEl = detailsEl.createDiv({ cls: "echo-notes-transcription-context-details-body" });
-		this.renderTranscriptionContextDetail(detailsBodyEl, "上传", getUploadModeLabel(capability.uploadMode));
-		this.renderTranscriptionContextDetail(detailsBodyEl, "接口", getEndpointShapeLabel(capability.endpointShape));
-		for (const summary of getProviderCapabilitySummary(capability).filter((item) =>
-			item.startsWith("单次") || item.startsWith("长音频")
-		)) {
-			const [label, value] = summary.split("：", 2);
-			this.renderTranscriptionContextDetail(detailsBodyEl, label, value ?? summary);
-		}
-		this.renderTranscriptionContextDetail(detailsBodyEl, "推荐模型", capability.recommendedModels.join("、"));
-		if (capability.notes.length > 0) {
-			const notesEl = detailsBodyEl.createEl("ul", { cls: "echo-notes-transcription-context-notes" });
-			for (const note of capability.notes) {
-				notesEl.createEl("li", { text: note });
-			}
-		}
+		serviceEl.createSpan({ cls: "echo-notes-transcription-context-mode", text: mode === "realtime" ? "实时转写" : "离线转写" });
+		serviceEl.createEl("code", { cls: "echo-notes-transcription-context-model", text: config.model });
+		const switchEl = identityEl.createEl("button", { text: "切换服务", attr: { type: "button" } });
+		switchEl.addClass("echo-notes-transcription-context-switch");
+		switchEl.addEventListener("click", () => this.navigateToTranscriptionService());
 	}
 
 	private renderTranscriptionContextDetail(containerEl: HTMLElement, label: string, value: string): void {
@@ -1757,28 +1779,26 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		return PROVIDER_LABELS[provider as keyof typeof PROVIDER_LABELS] ?? provider;
 	}
 
-	private renderQuickRecordingCard(containerEl: HTMLElement): void {
+	private renderQuickRecordingPanel(containerEl: HTMLElement): void {
 		const recorderEnabled = this.plugin.isOfficialAudioRecorderEnabled();
-		const card = this.renderTranscriptionCapabilityCard(
+		const heading = this.renderCapabilityPanelHeading(
 			containerEl,
-			"quick-recording",
-			"快捷录音",
-			"使用 Obsidian 核心录音机在当前笔记中创建音频，与服务商和模型能力无关。"
+			"快捷键配置",
+			"配置 Obsidian 核心录音机与 Echo Notes 批量转写快捷键。实时模式下这些快捷键仍控制核心录音机，不控制 Echo Notes 实时采集。"
 		);
-		card.cardEl.addClass("echo-notes-quick-recording-card");
-		this.renderTranscriptionCapabilityStatus(card.headerSetting, recorderEnabled === true
+		this.renderTranscriptionCapabilityStatus(heading, recorderEnabled === true
 			? { state: "fixed", stateLabel: "始终开启" }
 			: { state: "blocked", stateLabel: recorderEnabled === false ? "正在自动开启" : "需要手动开启" });
-		const statusEl = card.headerSetting.descEl.querySelector<HTMLElement>(".echo-notes-transcription-capability-status");
+		const statusEl = heading.descEl.querySelector<HTMLElement>(".echo-notes-transcription-capability-status");
 		const renderRecorderRecovery = (label: string): void => {
-			if (card.bodyEl.querySelector(".echo-notes-quick-recording-recovery")) {
+			if (containerEl.querySelector(".echo-notes-quick-recording-recovery")) {
 				return;
 			}
-			const recoveryEl = card.bodyEl.createDiv({
+			const recoveryEl = containerEl.createDiv({
 				cls: "echo-notes-transcription-capability-prerequisite echo-notes-quick-recording-recovery",
 				attr: { role: "note" }
 			});
-			card.bodyEl.prepend(recoveryEl);
+			containerEl.prepend(recoveryEl);
 			recoveryEl.createDiv({
 				cls: "echo-notes-transcription-capability-prerequisite-copy",
 				text: `${label}。请在 Obsidian 核心插件中开启“录音机”。`
@@ -1792,7 +1812,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		};
 
 		this.renderHotkeyCaptureSetting(
-			card.bodyEl,
+			containerEl,
 			"开始录音",
 			"在当前笔记中启动 Obsidian 核心录音机。",
 			"audio-recorder:start",
@@ -1800,7 +1820,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			(hotkey) => this.plugin.setOfficialAudioRecorderStartHotkey(hotkey)
 		);
 		this.renderHotkeyCaptureSetting(
-			card.bodyEl,
+			containerEl,
 			"停止录音",
 			"停止录音并将音频插入当前笔记。",
 			"audio-recorder:stop",
@@ -1808,7 +1828,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			(hotkey) => this.plugin.setOfficialAudioRecorderStopHotkey(hotkey)
 		);
 		this.renderHotkeyCaptureSetting(
-			card.bodyEl,
+			containerEl,
 			"转写当前笔记全部音频",
 			"触发 Echo Notes 批量转写当前笔记中的音频。",
 			`${this.plugin.manifest.id}:transcribe-all-audio-files-in-current-note`,
@@ -1817,18 +1837,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		);
 		if (!this.plugin.canWriteObsidianShortcutBindings()) {
 			this.renderTranscriptionCapabilityEmptyState(
-				card.bodyEl,
+				containerEl,
 				"当前 Obsidian 版本无法由 Echo Notes 写入快捷键，请在系统快捷键设置中配置。",
 				"打开快捷键设置",
 				() => void this.plugin.openObsidianSettings("hotkeys")
 			);
 		}
-		card.bodyEl.hidden = false;
-		card.cardEl.dataset.expanded = "true";
-
 		if (recorderEnabled !== true) {
 			void this.plugin.ensureOfficialAudioRecorderEnabled().then((result) => {
-				if (!card.cardEl.isConnected || !statusEl) {
+				if (!containerEl.isConnected || !statusEl) {
 					return;
 				}
 				statusEl.removeClass("is-blocked");
