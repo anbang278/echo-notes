@@ -335,6 +335,72 @@ async function startMemoryProviderMock() {
 	};
 }
 
+async function startSiliconFlowTranscriptionMock() {
+	const calls = [];
+	let holdNext = false;
+	let nextResponse = { status: 200, body: { text: "Speaker 1: 本地 Mock 转写正文。", segments: [{ speaker: "A", text: "不应额外解析" }] } };
+	const queuedResponses = [];
+	let heldResponse = null;
+	const server = createHttpServer(async (request, response) => {
+		try {
+			assert(request.method === "POST" && request.url === "/v1/audio/transcriptions", "SiliconFlow Mock 收到非转写请求");
+			assert(request.headers.authorization === "Bearer isolated-mock-key", "Mock 请求没有使用本次任务的测试密钥快照");
+			const chunks = [];
+			for await (const chunk of request) chunks.push(chunk);
+			const form = await new Request("http://127.0.0.1/", {
+				method: "POST",
+				headers: { "content-type": request.headers["content-type"] },
+				body: Buffer.concat(chunks)
+			}).formData();
+			const model = form.get("model");
+			const file = form.get("file");
+			assert(typeof model === "string" && file?.size > 44, "multipart 必须包含纯 model 与有效 file");
+			assert([...form.keys()].every((key) => key === "model" || key === "file"), "请求添加了未经确认的转写参数");
+			calls.push({ model, audioBytes: file.size });
+			const responseSpec = queuedResponses.shift() ?? nextResponse;
+			const send = () => {
+				response.writeHead(responseSpec.status, {
+					"content-type": "application/json",
+					"x-siliconcloud-trace-id": `local-mock-${calls.length}`
+				});
+				response.end(JSON.stringify(responseSpec.body));
+			};
+			if (holdNext) {
+				holdNext = false;
+				heldResponse = send;
+			} else {
+				send();
+			}
+		} catch (error) {
+			response.writeHead(500, { "content-type": "application/json" });
+			response.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : String(error) } }));
+		}
+	});
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	assert(address && typeof address === "object", "无法启动 SiliconFlow Mock 服务");
+	return {
+		baseUrl: `http://127.0.0.1:${address.port}`,
+		calls,
+		hold: () => { holdNext = true; },
+		release: () => { heldResponse?.(); heldResponse = null; },
+		respondWith: (status, body) => { nextResponse = { status, body }; },
+		queueResponses: (...responses) => { queuedResponses.push(...responses); },
+		waitForCalls: async (count) => {
+			const deadline = Date.now() + 10_000;
+			while (calls.length < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+			assert(calls.length >= count, `SiliconFlow Mock 等待 ${count} 次调用超时`);
+		},
+		close: async () => {
+			heldResponse?.();
+			if (server.listening) await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+		}
+	};
+}
+
 async function createIsolatedProfile(obsidianAsar) {
 	const profileDir = await mkdtemp(path.join(os.tmpdir(), "echo-notes-settings-ui-"));
 	const validationVault = path.join(profileDir, "vault");
@@ -452,6 +518,17 @@ async function reloadPlugin(page) {
 		result.manifest && result.loaded && result.enabled,
 		`Echo Notes 重载后未处于启用状态：${JSON.stringify(result)}`
 	);
+}
+
+async function restartPlugin(page) {
+	await page.evaluate(async (pluginId) => {
+		const obsidianApp = window.app;
+		if (obsidianApp.plugins.plugins[pluginId]) {
+			await obsidianApp.plugins.disablePlugin(pluginId);
+		}
+		await obsidianApp.plugins.enablePluginAndSave(pluginId);
+	}, PLUGIN_ID);
+	await reloadPlugin(page);
 }
 
 async function openSettings(page) {
@@ -2375,6 +2452,695 @@ async function verifyTabRelationships(page) {
 	assert(result.invalidTablists.length === 0, `Tablist 选中状态无效：${result.invalidTablists.join(" | ")}`);
 }
 
+async function verifySiliconFlowMockChain(page, mock) {
+	const models = [
+		"Qwen/Qwen3-ASR-1.7B",
+		"XingChenAGI/XingChenASR-Diarize-V3.0",
+		"XingChenAGI/XingChenASR-V3.2-Ultra",
+		"XingChenAGI/XingChenGSR-V1.0",
+		"FunAudioLLM/SenseVoiceSmall"
+	];
+	await page.evaluate(({ pluginId, baseUrl }) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesMockSettings = JSON.parse(JSON.stringify(plugin.settings));
+		window.__echoNotesMockTasks = plugin.taskCenter.getTasks();
+		window.__echoNotesMockGetApiKey = plugin.getApiKey;
+		window.__echoNotesMockConfirmUpload = plugin.confirmTranscriptionUpload;
+		window.__echoNotesMockFiles = [];
+		plugin.settings.autoTranscribeOnAudioCreated = false;
+		plugin.settings.autoTranscribeOnAudioLink = false;
+		plugin.settings.skipExistingTranscript = false;
+		plugin.settings.confirmBeforeTranscription = true;
+		plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = true;
+		plugin.settings.offlineTranscription.provider = "siliconflow";
+		plugin.settings.offlineTranscription.baseUrl = baseUrl;
+		plugin.getApiKey = () => "isolated-mock-key";
+		plugin.confirmTranscriptionUpload = async (_file, settings) => {
+			if (settings.offlineTranscription.provider !== "siliconflow" || settings.offlineTranscription.baseUrl !== baseUrl) {
+				throw new Error("上传确认未使用转写任务配置快照");
+			}
+			return true;
+		};
+	}, { pluginId: PLUGIN_ID, baseUrl: mock.baseUrl });
+	try {
+		const createFileAndStart = async (model, index, start = true, durationSeconds = 1) => page.evaluate(
+			({ pluginId, modelId, fileIndex, shouldStart, audioDurationSeconds }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = modelId;
+			const sampleRate = audioDurationSeconds > 1 ? 48000 : 8000;
+			const samples = sampleRate * audioDurationSeconds;
+			const buffer = new ArrayBuffer(44 + samples * 2);
+			const view = new DataView(buffer);
+			const ascii = (offset, text) => [...text].forEach((letter, pos) => view.setUint8(offset + pos, letter.charCodeAt(0)));
+			ascii(0, "RIFF"); view.setUint32(4, buffer.byteLength - 8, true); ascii(8, "WAVE");
+			ascii(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+			view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true);
+			view.setUint32(28, sampleRate * 2, true); view.setUint16(32, 2, true);
+			view.setUint16(34, 16, true); ascii(36, "data"); view.setUint32(40, samples * 2, true);
+			return window.app.vault.createBinary(`SiliconFlow 本地 Mock ${fileIndex}.wav`, buffer).then((file) => {
+				window.__echoNotesMockFiles.push(file);
+				if (shouldStart) window.__echoNotesMockPending = plugin.processAudioToTranscript(file, undefined);
+				return file.path;
+			});
+		}, { pluginId: PLUGIN_ID, modelId: model, fileIndex: index, shouldStart: start, audioDurationSeconds: durationSeconds });
+		const resultFor = async (path) => page.evaluate(async ({ pluginId, audioPath }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			const result = await window.__echoNotesMockPending;
+			const task = plugin.taskCenter.getTasks().find((item) => item.targetPath === audioPath);
+			return {
+				task: task && { status: task.status, provider: task.provider, model: task.model, traceId: task.traceId, error: task.error },
+				transcriptPath: result?.transcriptFile?.path ?? null,
+				text: result?.transcriptFile ? await window.app.vault.read(result.transcriptFile) : null
+			};
+		}, { pluginId: PLUGIN_ID, audioPath: path });
+		mock.hold();
+		let audioPath = await createFileAndStart(models[0], 1);
+		await mock.waitForCalls(1);
+		const waiting = await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			const file = window.__echoNotesMockFiles[0];
+			window.__echoNotesMockFollower = plugin.processAudioToTranscript(file, undefined);
+			const transcript = plugin.transcriptService.getTranscriptFile(file);
+			const task = plugin.taskCenter.getTasks().find((entry) => entry.targetPath === file.path);
+			return { status: task?.status, model: task?.model, text: transcript ? await window.app.vault.read(transcript) : null };
+		}, PLUGIN_ID);
+		assert(waiting.status === "running" && waiting.model === models[0] &&
+			waiting.text?.includes(`model: "${models[0]}"`) && waiting.text.includes("%% echo-notes-checkpoint:start"),
+			"请求等待期间 running 任务、配置技术信息与检查点须使用启动模型");
+		assert(mock.calls.length === 1, "同音频在途第二次调用不能重复上传");
+		await page.evaluate((pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = "XingChenAGI/XingChenASR-Diarize-V3.0";
+			plugin.getApiKey = () => "later-task-key";
+		}, PLUGIN_ID);
+		mock.release();
+		let outcome = await resultFor(audioPath);
+		const followerPath = await page.evaluate(async () => (await window.__echoNotesMockFollower)?.transcriptFile?.path);
+		assert(followerPath === outcome.transcriptPath && mock.calls.length === 1,
+			"同音频并发等待者须共享一次上传和同一转写稿");
+		assert(outcome.task?.status === "success" && outcome.task.model === models[0] &&
+			outcome.text?.includes(`model: "${models[0]}"`) && outcome.text.includes("Speaker 1: 本地 Mock 转写正文。"),
+			"运行中修改设置不能改变 Qwen 任务的模型、输出正文和状态");
+		assert(!outcome.text.includes("不应额外解析") && !outcome.text.includes("%% echo-notes-checkpoint:start"),
+			"额外响应结构不得进入插件正文，成功后应清理检查点");
+		await page.evaluate((pluginId) => { window.app.plugins.plugins[pluginId].getApiKey = () => "isolated-mock-key"; }, PLUGIN_ID);
+		for (let index = 1; index < models.length; index++) {
+			audioPath = await createFileAndStart(models[index], index + 1);
+			outcome = await resultFor(audioPath);
+			assert(outcome.task?.status === "success" && outcome.task.provider === "siliconflow" &&
+				outcome.task.model === models[index] && outcome.text?.includes(`model: "${models[index]}"`),
+				`本地 Mock 模型 ${models[index]} 的请求与结果不一致`);
+		}
+		assert(mock.calls.length === models.length && mock.calls.every((call, index) => call.model === models[index]),
+			"五个模型的本地 multipart 请求必须按顺序使用纯 ID，不能包含展示标签");
+
+		const longAudioCallCount = mock.calls.length;
+		audioPath = await createFileAndStart(models[3], 9, true, 661);
+		outcome = await resultFor(audioPath);
+		const longAudioCalls = mock.calls.slice(longAudioCallCount);
+		assert(longAudioCalls.length === 2 && longAudioCalls.every((call) => call.model === models[3]),
+			"超过 10 分钟的 WAV 应切为两个请求，且所有分段使用同一任务模型");
+		assert(outcome.task?.status === "success" && outcome.task.model === models[3] &&
+			outcome.text?.includes(`model: "${models[3]}"`) && !outcome.text.includes("%% echo-notes-checkpoint:start"),
+			"长音频最终任务、稿件技术信息与检查点清理必须使用同一模型");
+
+		const oldFilePath = await createFileAndStart(models[4], 7);
+		outcome = await resultFor(oldFilePath);
+		assert(outcome.task?.status === "success" && outcome.task.model === models[4], "批次预置旧稿创建失败");
+		const missingFilePath = await createFileAndStart(models[4], 8, false);
+		const priorCalls = mock.calls.length;
+		await page.evaluate(async ({ pluginId, paths }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+			plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
+			plugin.settings.skipExistingTranscript = true;
+			const content = paths.map((filePath) => `![[${filePath}]]`).join("\n");
+			window.__echoNotesMockBatchNote = await window.app.vault.create("SiliconFlow 本地 Mock 批次.md", content);
+			window.__echoNotesMockBatchPending = plugin.handleTranscribeAllAudioInCurrentNote(
+				{ getValue: () => content }, { file: window.__echoNotesMockBatchNote }
+			);
+		}, { pluginId: PLUGIN_ID, paths: ["SiliconFlow 本地 Mock 5.wav", "SiliconFlow 本地 Mock 7.wav", missingFilePath] });
+		await page.locator(".echo-notes-siliconflow-upgrade-modal").waitFor();
+		await page.locator(".echo-notes-siliconflow-upgrade-modal").getByRole("button", { name: "保存并继续" }).click();
+		await Promise.race([
+			page.evaluate(() => window.__echoNotesMockBatchPending),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("三文件最终模型重检未完成")), 15_000))
+		]);
+		assert(mock.calls.length === priorCalls + 3 && mock.calls.slice(priorCalls).every((call) => call.model === models[0]),
+			"选择 Qwen 后三文件批次必须重新转写旧 SenseVoice 稿与缺稿");
+		const batchState = await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			return Promise.all([5, 7, 8].map(async (index) => {
+				const audio = window.app.vault.getAbstractFileByPath(`SiliconFlow 本地 Mock ${index}.wav`);
+				const task = plugin.taskCenter.getTasks().find((item) => item.targetPath === audio.path);
+				const transcript = plugin.transcriptService.getTranscriptFile(audio);
+				return {
+					model: task?.model, status: task?.status, transcriptPath: transcript?.path,
+					text: transcript ? await window.app.vault.read(transcript) : null
+				};
+			}));
+		}, PLUGIN_ID);
+		assert(batchState.every((entry) => entry.model === models[0] && entry.status === "success" &&
+			entry.text?.includes(`model: "${models[0]}"`)),
+			"批次任务中心与最终稿必须统一使用 Qwen");
+
+		const failedBatchPaths = [
+			await createFileAndStart(models[1], 11, false),
+			await createFileAndStart(models[1], 12, false)
+		];
+		const failedBatchCallCount = mock.calls.length;
+		mock.queueResponses(
+			{ status: 200, body: { text: "批量中成功的本地 Mock 转写正文。" } },
+			{ status: 200, body: { segments: [{ text: "不能假装是转写正文" }] } }
+		);
+		await page.evaluate(async ({ pluginId, paths, batchModel }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = batchModel;
+			plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = true;
+			plugin.settings.skipExistingTranscript = false;
+			const content = paths.map((filePath) => `![[${filePath}]]`).join("\n");
+			window.__echoNotesMockFailedBatchNote = await window.app.vault.create("SiliconFlow 本地 Mock 部分失败批次.md", content);
+			window.__echoNotesMockFailedBatchPending = plugin.handleTranscribeAllAudioInCurrentNote(
+				{ getValue: () => content }, { file: window.__echoNotesMockFailedBatchNote }
+			);
+		}, { pluginId: PLUGIN_ID, paths: failedBatchPaths, batchModel: models[1] });
+		await Promise.race([
+			page.evaluate(() => window.__echoNotesMockFailedBatchPending),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("部分失败批次未完成")), 15000))
+		]);
+		const failedBatchState = await page.evaluate(({ pluginId, paths }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			return paths.map((audioPath) => {
+				const task = plugin.taskCenter.getTasks().find((item) => item.targetPath === audioPath);
+				return { path: audioPath, status: task?.status, model: task?.model, error: task?.error };
+			});
+		}, { pluginId: PLUGIN_ID, paths: failedBatchPaths });
+		const failedBatchTask = failedBatchState.find((entry) => entry.status === "failed");
+		assert(mock.calls.length === failedBatchCallCount + 2 &&
+			mock.calls.slice(failedBatchCallCount).every((call) => call.model === models[1]) &&
+			failedBatchState.filter((entry) => entry.status === "success").length === 1 &&
+			failedBatchTask?.error?.includes("缺少 text 字段"),
+			"批量中的成功项应完成，缺少 text 的单项应明确失败且不得回退重传");
+
+		mock.respondWith(200, { text: "批量失败项重试后的本地 Mock 转写正文。" });
+		const retryCallCount = mock.calls.length;
+		await page.evaluate(async ({ pluginId, failedAudioPath, retryModel }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = retryModel;
+			await plugin.retryTranscriptionTask(failedAudioPath, undefined, undefined);
+		}, { pluginId: PLUGIN_ID, failedAudioPath: failedBatchTask.path, retryModel: models[2] });
+		const retryState = await page.evaluate(async ({ pluginId, retriedAudioPath }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			const audio = window.app.vault.getAbstractFileByPath(retriedAudioPath);
+			const task = plugin.taskCenter.getTasks().find((item) => item.targetPath === retriedAudioPath);
+			const transcript = plugin.transcriptService.getTranscriptFile(audio);
+			return {
+				status: task?.status,
+				model: task?.model,
+				text: transcript ? await window.app.vault.read(transcript) : null
+			};
+		}, { pluginId: PLUGIN_ID, retriedAudioPath: failedBatchTask.path });
+		assert(mock.calls.length === retryCallCount + 1 && mock.calls.at(-1)?.model === models[2] &&
+			retryState.status === "success" && retryState.model === models[2] && retryState.text?.includes(`model: "${models[2]}"`),
+			"批量失败项手动重试必须使用重试时的新配置，并统一更新任务与最终稿模型");
+
+		mock.respondWith(200, { segments: [{ text: "升级后失败不能作为正文" }] });
+		await page.evaluate((pluginId) => {
+			window.app.plugins.plugins[pluginId].settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
+		}, PLUGIN_ID);
+		const upgradedFailureCallCount = mock.calls.length;
+		audioPath = await createFileAndStart(models[4], 10);
+		await page.locator(".echo-notes-siliconflow-upgrade-modal").waitFor();
+		await page.locator(".echo-notes-siliconflow-upgrade-modal").getByRole("button", { name: "保存并继续" }).click();
+		outcome = await resultFor(audioPath);
+		assert(mock.calls.length === upgradedFailureCallCount + 1 && mock.calls.at(-1)?.model === models[0] &&
+			outcome.task?.status === "failed" && outcome.task.model === models[0] &&
+			outcome.text?.includes(`model: "${models[0]}"`) && outcome.task.error?.includes("缺少 text 字段"),
+			"升级后请求失败时，失败任务与稿件仍必须记录最终保存的模型");
+		mock.respondWith(200, { text: "Speaker 1: 本地 Mock 转写正文。", segments: [{ speaker: "A", text: "不应额外解析" }] });
+		const settledState = await page.evaluate((pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			return {
+				processingAudio: plugin.processingAudio.size,
+				upgradePending: plugin.siliconFlowUpgradePending !== null,
+				upgradeModal: plugin.siliconFlowUpgradeModal !== null
+			};
+		}, PLUGIN_ID);
+		assert(settledState.processingAudio === 0 && !settledState.upgradePending && !settledState.upgradeModal,
+			`专项结束后不应残留在途任务或共享提醒：${JSON.stringify(settledState)}`);
+		return {
+			models,
+			batchRechecked: batchState.length,
+			partialBatchFailed: 1,
+			longAudioSegments: longAudioCalls.length,
+			missingTextFailed: true,
+			retryUsedLatestModel: true,
+			upgradedFailureKeptFinalModel: true,
+			settledState
+		};
+	} finally {
+		mock.release();
+		await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.getApiKey = window.__echoNotesMockGetApiKey;
+			plugin.confirmTranscriptionUpload = window.__echoNotesMockConfirmUpload;
+			plugin.taskCenter.restoreTasks(window.__echoNotesMockTasks);
+			Object.assign(plugin.settings, window.__echoNotesMockSettings);
+			await plugin.saveSettings();
+			for (const file of window.__echoNotesMockFiles) {
+				const transcript = plugin.transcriptService.getTranscriptFile(file);
+				if (transcript) await window.app.vault.delete(transcript);
+				await window.app.vault.delete(file);
+			}
+			if (window.__echoNotesMockBatchNote) await window.app.vault.delete(window.__echoNotesMockBatchNote);
+			if (window.__echoNotesMockFailedBatchNote) await window.app.vault.delete(window.__echoNotesMockFailedBatchNote);
+		}, PLUGIN_ID);
+	}
+}
+
+async function verifySiliconFlowUpgradeModal(page) {
+	const selector = ".echo-notes-siliconflow-upgrade-modal";
+	const open = () => page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesUpgradeResult = plugin.resolveSiliconFlowUpgrade().then((decision) => {
+			window.__echoNotesUpgradeDecision = decision;
+		});
+	}, PLUGIN_ID);
+	const result = () => page.evaluate(async () => {
+		await window.__echoNotesUpgradeResult;
+		return window.__echoNotesUpgradeDecision;
+	});
+
+	await open();
+	await page.locator(selector).waitFor();
+	assert(await page.locator(selector).getByText("FunAudioLLM/SenseVoiceSmall", { exact: true }).count() === 1,
+		"模型提醒缺少当前 SenseVoiceSmall 完整 ID");
+	assert(await page.locator(selector).locator('input[type="radio"]').count() === 4,
+		"模型提醒应提供四个升级候选");
+	await page.locator(selector).screenshot({ path: path.join(OUTPUT_DIR, "siliconflow-upgrade-modal-desktop.png") });
+	const originalViewport = page.viewportSize();
+	await page.setViewportSize({ width: 375, height: 812 });
+	try {
+		const overflow = await page.locator(selector).evaluate((element) => element.scrollWidth > element.clientWidth + 1);
+		assert(!overflow, "375px 模型提醒的长 ID 不应水平溢出");
+		await page.locator(selector).screenshot({ path: path.join(OUTPUT_DIR, "siliconflow-upgrade-modal-375.png") });
+	} finally {
+		if (originalViewport) await page.setViewportSize(originalViewport);
+	}
+	await page.evaluate(() => {
+		const content = document.querySelector(".echo-notes-siliconflow-upgrade-modal");
+		const container = content?.closest(".modal-container");
+		const close = container?.querySelector(".echo-notes-siliconflow-upgrade-dialog .modal-header-button.mod-raised");
+		if (!close) throw new Error("未找到升级提醒 X");
+		const bounds = close.getBoundingClientRect();
+		if (bounds.width < 44 || bounds.height < 44) throw new Error(`升级提醒 X 触控目标不足 44px：${bounds.width}x${bounds.height}`);
+		close.click();
+	});
+	assert((await result())?.kind === "close", "X 应等价于本次关闭");
+
+	await open();
+	await page.locator(selector).waitFor();
+	await page.evaluate(() => {
+		const modal = document.querySelector(".echo-notes-siliconflow-upgrade-modal");
+		const backdrop = modal?.closest(".modal-container")?.querySelector(".modal-bg");
+		if (!backdrop) throw new Error("未找到升级提醒遮罩");
+		backdrop.click();
+	});
+	assert(await page.locator(selector).count() === 1, "遮罩点击不应关闭升级提醒");
+	await page.keyboard.press("Escape");
+	assert((await result())?.kind === "close", "Esc 应等价于本次关闭");
+
+	await open();
+	await page.locator(selector).waitFor();
+	await page.locator(selector).locator('input[value="XingChenAGI/XingChenGSR-V1.0"]').check();
+	await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+	assert((await result())?.kind === "close", "本次关闭不应修改配置");
+	assert(
+		await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model, PLUGIN_ID) ===
+			"FunAudioLLM/SenseVoiceSmall",
+		"选择候选后本次关闭不应保存草稿模型"
+	);
+
+	for (const modelId of [
+		"XingChenAGI/XingChenASR-Diarize-V3.0",
+		"XingChenAGI/XingChenASR-V3.2-Ultra",
+		"XingChenAGI/XingChenGSR-V1.0"
+	]) {
+		await open();
+		await page.locator(selector).waitFor();
+		await page.locator(selector).locator(`input[value="${modelId}"]`).check();
+		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		const decision = await result();
+		assert(decision?.kind === "switch" && decision.modelId === modelId,
+			`升级提醒未返回所选模型：${modelId}`);
+		assert(
+			await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model, PLUGIN_ID) === modelId,
+			`升级提醒未保存纯模型 ID：${modelId}`
+		);
+		await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+			await plugin.saveSettings();
+		}, PLUGIN_ID);
+	}
+
+	await open();
+	await page.locator(selector).waitFor();
+	await page.locator(selector).getByRole("button", { name: "不再提醒" }).click();
+	assert((await result())?.kind === "dont-remind", "不再提醒应在保存成功后结算");
+	assert(
+		await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.siliconflowSenseVoiceUpgradeNoticeDismissed, PLUGIN_ID) === true,
+		"不再提醒没有持久化严格布尔 true"
+	);
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
+		await plugin.saveSettings();
+	}, PLUGIN_ID);
+
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesOriginalSave = plugin.saveSettings;
+		window.__echoNotesSaveCallCount = 0;
+		plugin.saveSettings = () => {
+			window.__echoNotesSaveCallCount += 1;
+			return new Promise((resolve, reject) => {
+				window.__echoNotesResolveSave = resolve;
+				window.__echoNotesRejectSave = reject;
+			});
+		};
+	}, PLUGIN_ID);
+	try {
+		await open();
+		await page.locator(selector).waitFor();
+		await page.locator(selector).getByRole("button", { name: "不再提醒" }).click();
+		await page.locator(selector).getByText("正在保存…").waitFor();
+		assert(await page.locator(selector).locator("button, input").evaluateAll((elements) => elements.every((element) => element.disabled)),
+			"保存中必须禁用全部候选和操作按钮");
+		await page.locator(selector).getByRole("button", { name: "保存并继续" }).dispatchEvent("click");
+		await page.locator(selector).getByRole("button", { name: "不再提醒" }).dispatchEvent("click");
+		assert(await page.evaluate(() => window.__echoNotesSaveCallCount) === 1, "保存中重复操作不得触发第二次设置保存");
+		await page.keyboard.press("Escape");
+		assert(await page.locator(selector).count() === 1, "保存中 Esc 不应关闭 Modal");
+		await page.evaluate(() => window.__echoNotesRejectSave(new Error("隔离保存失败")));
+		await page.locator(selector).getByText(/保存失败/).waitFor();
+		await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+		assert((await result())?.kind === "close", "保存失败后仍应允许本次关闭");
+	} finally {
+		await page.evaluate((pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.saveSettings = window.__echoNotesOriginalSave;
+			delete window.__echoNotesOriginalSave;
+			delete window.__echoNotesResolveSave;
+			delete window.__echoNotesRejectSave;
+			delete window.__echoNotesSaveCallCount;
+		}, PLUGIN_ID);
+	}
+
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesConcurrent = Promise.all([
+			plugin.resolveSiliconFlowUpgrade(),
+			plugin.resolveSiliconFlowUpgrade()
+		]);
+	}, PLUGIN_ID);
+	await page.locator(selector).waitFor();
+	assert(await page.locator(selector).count() === 1, "并发任务应共享一个提醒 Modal");
+	await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+	const concurrent = await page.evaluate(() => window.__echoNotesConcurrent);
+	assert(concurrent.length === 2 && concurrent.every((decision) => decision?.kind === "close"), "并发等待者应收到同一决策");
+
+	await open();
+	await page.locator(selector).waitFor();
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesPreviousModel = plugin.settings.offlineTranscription.model;
+		plugin.settings.offlineTranscription.model = "外部修改的模型/ID";
+	}, PLUGIN_ID);
+	try {
+		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(selector).getByText(/转写配置已变化/).waitFor();
+		assert(await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model, PLUGIN_ID) ===
+			"外部修改的模型/ID", "旧草稿不能覆盖弹窗等待期间的新配置");
+		await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+		assert((await result())?.kind === "close", "配置变化后仍应允许关闭旧弹窗");
+	} finally {
+		await page.evaluate((pluginId) => {
+			window.app.plugins.plugins[pluginId].settings.offlineTranscription.model = window.__echoNotesPreviousModel;
+		}, PLUGIN_ID);
+	}
+
+	await open();
+	await page.locator(selector).waitFor();
+	await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesPreviousBaseUrl = plugin.settings.offlineTranscription.baseUrl;
+		plugin.settings.offlineTranscription.baseUrl = "http://127.0.0.1:12345";
+	}, PLUGIN_ID);
+	try {
+		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(selector).getByText(/转写配置已变化/).waitFor();
+		await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+		assert((await result())?.kind === "close", "Base URL 变化后不能提交旧弹窗的模型选择");
+	} finally {
+		await page.evaluate((pluginId) => {
+			window.app.plugins.plugins[pluginId].settings.offlineTranscription.baseUrl = window.__echoNotesPreviousBaseUrl;
+		}, PLUGIN_ID);
+	}
+
+	await open();
+	await page.locator(selector).waitFor();
+	await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].siliconFlowUpgradeModal.abort(), PLUGIN_ID);
+	assert((await result()) === null && await page.locator(selector).count() === 0,
+		"程序性销毁提醒必须结算 aborted，不能当作用户本次关闭");
+
+	const gateFilePath = "硅基流动模型提醒隔离.wav";
+	await page.evaluate(async ({ pluginId, filePath }) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesGateSettings = JSON.parse(JSON.stringify(plugin.settings));
+		window.__echoNotesConfirmUpload = plugin.confirmTranscriptionUpload;
+		plugin.settings.autoTranscribeOnAudioCreated = false;
+		plugin.settings.autoTranscribeOnAudioLink = false;
+		plugin.settings.skipExistingTranscript = false;
+		plugin.settings.confirmBeforeTranscription = true;
+		plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
+		plugin.settings.offlineTranscription.provider = "siliconflow";
+		plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+		plugin.confirmTranscriptionUpload = async () => false;
+		const bytes = new Uint8Array(44);
+		bytes.set([82, 73, 70, 70], 0);
+		bytes.set([87, 65, 86, 69], 8);
+		const file = await window.app.vault.createBinary(filePath, bytes.buffer);
+		window.__echoNotesGateFile = file;
+		window.__echoNotesGateResult = plugin.processAudioToTranscript(file, undefined);
+	}, { pluginId: PLUGIN_ID, filePath: gateFilePath });
+	try {
+		await page.locator(selector).waitFor();
+		const before = await page.evaluate(({ pluginId, filePath }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			return {
+				tasks: plugin.taskCenter.getTasks().filter((task) => task.targetPath === filePath && task.status === "running").length,
+				transcript: Boolean(plugin.transcriptService.getTranscriptFile(window.__echoNotesGateFile))
+			};
+		}, { pluginId: PLUGIN_ID, filePath: gateFilePath });
+		assert(before.tasks === 0 && !before.transcript, "gate 等待期间不应创建 running 任务或转写稿");
+		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		const after = await page.evaluate(async (pluginId) => {
+			const result = await window.__echoNotesGateResult;
+			return {
+				result,
+				model: window.app.plugins.plugins[pluginId].settings.offlineTranscription.model
+			};
+		}, PLUGIN_ID);
+		assert(after.result === null && after.model === "Qwen/Qwen3-ASR-1.7B", "选 Qwen 并取消上传后不能继续转写，模型应保存纯 ID");
+	} finally {
+		await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.confirmTranscriptionUpload = window.__echoNotesConfirmUpload;
+			Object.assign(plugin.settings, window.__echoNotesGateSettings);
+			await plugin.saveSettings();
+			await window.app.vault.delete(window.__echoNotesGateFile);
+		}, PLUGIN_ID);
+	}
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesSingleCloseSettings = JSON.parse(JSON.stringify(plugin.settings));
+		window.__echoNotesSingleCloseUpload = plugin.confirmTranscriptionUpload;
+		plugin.settings.autoTranscribeOnAudioCreated = false;
+		plugin.settings.skipExistingTranscript = false;
+		plugin.settings.confirmBeforeTranscription = true;
+		plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
+		plugin.settings.offlineTranscription.provider = "siliconflow";
+		plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+		plugin.confirmTranscriptionUpload = async () => false;
+		const bytes = new Uint8Array(44);
+		bytes.set([82, 73, 70, 70], 0);
+		bytes.set([87, 65, 86, 69], 8);
+		window.__echoNotesSingleCloseFile = await window.app.vault.createBinary("模型提醒单文件关闭隔离.wav", bytes.buffer);
+		window.__echoNotesSingleCloseResult = plugin.processAudioToTranscript(window.__echoNotesSingleCloseFile, undefined);
+	}, PLUGIN_ID);
+	try {
+		await page.locator(selector).waitFor();
+		await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+		await Promise.race([
+			page.evaluate(() => window.__echoNotesSingleCloseResult),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("单文件本次关闭后再次弹出模型提醒")), 10000))
+		]);
+		assert(await page.locator(selector).count() === 0, "单文件本次关闭不应在本次动作中重复弹窗");
+		assert(await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model, PLUGIN_ID) ===
+			"FunAudioLLM/SenseVoiceSmall", "单文件本次关闭不应变更旧模型");
+	} finally {
+		await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.siliconFlowUpgradeModal?.abort();
+			plugin.confirmTranscriptionUpload = window.__echoNotesSingleCloseUpload;
+			Object.assign(plugin.settings, window.__echoNotesSingleCloseSettings);
+			await plugin.saveSettings();
+			await window.app.vault.delete(window.__echoNotesSingleCloseFile);
+		}, PLUGIN_ID);
+	}
+
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesBatchSettings = JSON.parse(JSON.stringify(plugin.settings));
+		window.__echoNotesBatchUpload = plugin.confirmTranscriptionUpload;
+		plugin.settings.autoTranscribeOnAudioCreated = false;
+		plugin.settings.autoTranscribeOnAudioLink = false;
+		plugin.settings.skipExistingTranscript = false;
+		plugin.settings.confirmBeforeTranscription = true;
+		plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
+		plugin.settings.offlineTranscription.provider = "siliconflow";
+		plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+		plugin.confirmTranscriptionUpload = async () => false;
+		const bytes = new Uint8Array(44);
+		bytes.set([82, 73, 70, 70], 0);
+		bytes.set([87, 65, 86, 69], 8);
+		const paths = [1, 2, 3].map((index) => `模型提醒批次隔离-${index}.wav`);
+		window.__echoNotesBatchFiles = [];
+		for (const path of paths) window.__echoNotesBatchFiles.push(await window.app.vault.createBinary(path, bytes.buffer));
+		const content = paths.map((path) => `![[${path}]]`).join("\n");
+		const note = await window.app.vault.create("模型提醒批次隔离.md", content);
+		window.__echoNotesBatchNote = note;
+		window.__echoNotesBatchResult = plugin.handleTranscribeAllAudioInCurrentNote({ getValue: () => content }, { file: note });
+	}, PLUGIN_ID);
+	try {
+		await page.locator(selector).waitFor();
+		assert(await page.locator(selector).count() === 1, "三文件批次应只弹一个模型提醒");
+		await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
+		await Promise.race([
+			page.evaluate(() => window.__echoNotesBatchResult),
+			new Promise((_, reject) => setTimeout(() => reject(new Error("批次本次关闭后仍有未结算的模型提醒")), 10000))
+		]);
+		assert(await page.locator(selector).count() === 0, "本次关闭后批内不应重复弹窗");
+	} finally {
+		await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.siliconFlowUpgradeModal?.abort();
+			plugin.confirmTranscriptionUpload = window.__echoNotesBatchUpload;
+			Object.assign(plugin.settings, window.__echoNotesBatchSettings);
+			await plugin.saveSettings();
+			for (const file of window.__echoNotesBatchFiles) await window.app.vault.delete(file);
+			await window.app.vault.delete(window.__echoNotesBatchNote);
+		}, PLUGIN_ID);
+	}
+}
+
+async function verifySiliconFlowUpgradeUnload(page) {
+	const selector = ".echo-notes-siliconflow-upgrade-modal";
+	const modelBeforeUnload = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		window.__echoNotesUnloadOriginalSave = plugin.saveSettings;
+		window.__echoNotesUnloadPendingSave = new Promise((resolve) => {
+			window.__echoNotesUnloadResolveSave = resolve;
+		});
+		plugin.saveSettings = () => window.__echoNotesUnloadPendingSave;
+		window.__echoNotesUnloadDecisionPromise = plugin.resolveSiliconFlowUpgrade();
+		return plugin.settings.offlineTranscription.model;
+	}, PLUGIN_ID);
+	await page.locator(selector).waitFor();
+	await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+	await page.locator(selector).getByText("正在保存…").waitFor();
+	await page.evaluate(async (pluginId) => {
+		await window.app.plugins.disablePlugin(pluginId);
+	}, PLUGIN_ID);
+	const unloadDecision = await Promise.race([
+		page.evaluate(() => window.__echoNotesUnloadDecisionPromise),
+		new Promise((_, reject) => setTimeout(() => reject(new Error("插件卸载后模型提醒仍未结算")), 10000))
+	]);
+	assert(unloadDecision === null && await page.locator(selector).count() === 0,
+		"保存等待期间卸载插件应关闭提醒并以 null 结算");
+	await page.evaluate(() => window.__echoNotesUnloadResolveSave());
+	await page.evaluate(async (pluginId) => {
+		await window.app.plugins.enablePluginAndSave(pluginId);
+	}, PLUGIN_ID);
+	await reloadPlugin(page);
+	assert(await page.evaluate((pluginId) => (
+		window.app.plugins.plugins[pluginId].settings.offlineTranscription.model
+	), PLUGIN_ID) === modelBeforeUnload, "卸载期间未完成的保存不能污染重载后的持久化模型");
+	await page.evaluate(() => {
+		delete window.__echoNotesUnloadOriginalSave;
+		delete window.__echoNotesUnloadPendingSave;
+		delete window.__echoNotesUnloadResolveSave;
+		delete window.__echoNotesUnloadDecisionPromise;
+	});
+}
+
+async function verifySiliconFlowModelPersistence(page) {
+	const original = await page.evaluate((pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		return {
+			offlineTranscription: JSON.parse(JSON.stringify(plugin.settings.offlineTranscription)),
+			reminderDismissed: plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed
+		};
+	}, PLUGIN_ID);
+	const modelIds = [
+		"Qwen/Qwen3-ASR-1.7B",
+		"XingChenAGI/XingChenASR-Diarize-V3.0",
+		"XingChenAGI/XingChenASR-V3.2-Ultra",
+		"XingChenAGI/XingChenGSR-V1.0",
+		"FunAudioLLM/SenseVoiceSmall",
+		"TeleAI/TeleSpeechASR",
+		"custom/future-asr"
+	];
+	try {
+		for (const modelId of modelIds) {
+			await page.evaluate(async ({ pluginId, modelId: selectedModelId }) => {
+				const plugin = window.app.plugins.plugins[pluginId];
+				plugin.settings.offlineTranscription.provider = "siliconflow";
+				plugin.settings.offlineTranscription.model = selectedModelId;
+				await plugin.saveSettings();
+			}, { pluginId: PLUGIN_ID, modelId });
+			await restartPlugin(page);
+			const persisted = await page.evaluate((pluginId) => {
+				const settings = window.app.plugins.plugins[pluginId].settings.offlineTranscription;
+				return { provider: settings.provider, model: settings.model };
+			}, PLUGIN_ID);
+			assert(persisted.provider === "siliconflow" && persisted.model === modelId,
+				`SiliconFlow 模型跨插件重载后未原样保留：${JSON.stringify({ modelId, persisted })}`);
+		}
+		await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.provider = "siliconflow";
+			plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+			plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = true;
+			await plugin.saveSettings();
+		}, PLUGIN_ID);
+		await restartPlugin(page);
+		assert(await page.evaluate((pluginId) => (
+			window.app.plugins.plugins[pluginId].settings.siliconflowSenseVoiceUpgradeNoticeDismissed
+		), PLUGIN_ID) === true, "不再提醒偏好跨插件重启后未保留");
+	} finally {
+		await page.evaluate(async ({ pluginId, snapshot }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription = snapshot.offlineTranscription;
+			plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = snapshot.reminderDismissed;
+			await plugin.saveSettings();
+		}, { pluginId: PLUGIN_ID, snapshot: original });
+		await restartPlugin(page);
+	}
+}
+
 async function verifyTabs(page) {
 	const transcriptionTab = page.locator('[data-settings-stage="transcription"]');
 	const analysisTab = page.locator('[data-settings-stage="analysis"]');
@@ -2626,7 +3392,14 @@ async function verifyTabs(page) {
 	);
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "转写模型")) ===
-			JSON.stringify(["FunAudioLLM/SenseVoiceSmall", "TeleAI/TeleSpeechASR", "__custom__"]),
+			JSON.stringify([
+				"Qwen/Qwen3-ASR-1.7B",
+				"XingChenAGI/XingChenASR-Diarize-V3.0",
+				"XingChenAGI/XingChenASR-V3.2-Ultra",
+				"XingChenAGI/XingChenGSR-V1.0",
+				"FunAudioLLM/SenseVoiceSmall",
+				"__custom__"
+			]),
 		"SiliconFlow 转写模型选项不完整"
 	);
 	for (const advancedSettingName of ["Base URL", "默认转写语言", "自定义语言代码"]) {
@@ -2638,6 +3411,49 @@ async function verifyTabs(page) {
 		(await activePanel.getByText("自定义转写模型", { exact: true }).count()) === 0,
 		"使用官方模型时不应显示自定义模型输入框"
 	);
+	const presetModels = [
+		{
+			id: "Qwen/Qwen3-ASR-1.7B",
+			description: "支持多语言与中文方言识别，兼顾准确性与效率。",
+			note: "实际耗时受音频长度、网络与服务负载影响。"
+		},
+		{
+			id: "XingChenAGI/XingChenASR-Diarize-V3.0",
+			description: "面向复杂会议的语音转写，侧重区分不同话者。",
+			note: "当前插件使用服务返回的文本；结构化说话人展示尚未接入。"
+		},
+		{
+			id: "XingChenAGI/XingChenASR-V3.2-Ultra",
+			description: "面向中英与方言混合语音，增强方言识别。",
+			note: "具体覆盖与效果以服务商说明和实际音频测试为准。"
+		},
+		{
+			id: "XingChenAGI/XingChenGSR-V1.0",
+			description: "结合上下文进行语义增强，改善转写内容。",
+			note: "关键人名、数字和专有名词建议对照原始录音复核。"
+		},
+		{
+			id: "FunAudioLLM/SenseVoiceSmall",
+			description: "通用多语言语音识别，适合日常录音与常见中英文内容。",
+			note: "保留现有默认值；发起转写时可选择更换，不会强制替换。"
+		}
+	];
+	for (const model of presetModels) {
+		await selectSettingOption(page, "转写模型", model.id);
+		const savedModel = await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
+			PLUGIN_ID
+		);
+		assert(savedModel === model.id, `转写模型未保存纯 ID：${model.id}`);
+		const activeModelSetting = await getActiveSetting(page, "转写模型");
+		const modelSelect = activeModelSetting.locator('select:not([aria-hidden="true"])');
+		const displayedModel = await modelSelect.inputValue();
+		assert(displayedModel === savedModel, `转写模型无法在设置页回显：${JSON.stringify({ displayedModel, savedModel })}`);
+		const descriptionId = await modelSelect.getAttribute("aria-describedby");
+		const descriptionText = descriptionId ? await page.locator(`#${descriptionId}`).textContent() : null;
+		assert(descriptionText?.includes(model.description) && descriptionText.includes(model.note),
+			`转写模型说明或 ARIA 关联不正确：${model.id}`);
+	}
 	const officialTranscriptionModel = await page.evaluate(
 		(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
 		PLUGIN_ID
@@ -2673,11 +3489,53 @@ async function verifyTabs(page) {
 		)) === "custom/test-asr",
 		"合法自定义模型未保存"
 	);
+	await customModelInput.fill("custom/delayed-overwrite");
+	await selectSettingOption(page, "转写模型", "Qwen/Qwen3-ASR-1.7B");
+	await page.waitForTimeout(800);
+	assert(
+		(await page.evaluate(
+			(pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model,
+			PLUGIN_ID
+		)) === "Qwen/Qwen3-ASR-1.7B",
+		"已离开页面的自定义模型延迟保存覆盖了较新的预设选择"
+	);
 	await selectSettingOption(page, "转写模型", "FunAudioLLM/SenseVoiceSmall");
 	assert(
 		(await activePanel.getByText("自定义转写模型", { exact: true }).count()) === 0,
 		"切回官方模型后应隐藏自定义模型输入框"
 	);
+	for (const [modelId, expectedDescription] of [
+		["TeleAI/TeleSpeechASR", "当前为旧版保留的模型 ID"],
+		["custom/future-asr", "当前使用自定义模型"]
+	]) {
+		await page.evaluate(async ({ pluginId, selectedModelId }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription.model = selectedModelId;
+			await plugin.saveSettings();
+			plugin.settingTab.showDestination("transcription-service");
+		}, { pluginId: PLUGIN_ID, selectedModelId: modelId });
+		const savedCustomSetting = await getActiveSetting(page, "转写模型");
+		assert(await savedCustomSetting.locator('select:not([aria-hidden="true"])').inputValue() === "__custom__",
+			`已保存的兼容模型未按自定义模式展示：${modelId}`);
+		assert(await (await getActiveSetting(page, "自定义转写模型")).locator('input[type="text"]').inputValue() === modelId,
+			`已保存的兼容模型 ID 未原样回显：${modelId}`);
+		assert((await savedCustomSetting.textContent())?.includes(expectedDescription),
+			`已保存的兼容模型缺少正确说明：${modelId}`);
+	}
+	await selectSettingOption(page, "转写模型", "FunAudioLLM/SenseVoiceSmall");
+	await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = true;
+		await plugin.saveSettings();
+		plugin.settingTab.showDestination("transcription-service");
+	}, PLUGIN_ID);
+	const upgradeReminderSetting = await getActiveSetting(page, "模型升级提醒");
+	await upgradeReminderSetting.getByRole("button", { name: "恢复提醒", exact: true }).click();
+	await page.waitForFunction((pluginId) => (
+		window.app.plugins.plugins[pluginId].settings.siliconflowSenseVoiceUpgradeNoticeDismissed === false
+	), PLUGIN_ID);
+	assert(await activePanel.getByText("模型升级提醒", { exact: true }).count() === 0,
+		"恢复提醒后设置行应随偏好清除而隐藏");
 
 	await selectSettingOption(page, "服务商", "mosi");
 	const fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
@@ -5169,6 +6027,7 @@ let obsidianProcess;
 let getObsidianOutput = () => "";
 let browser;
 let memoryProviderMock;
+let siliconFlowTranscriptionMock;
 const verificationStartedAt = Date.now();
 
 try {
@@ -5181,6 +6040,7 @@ try {
 
 	await prepareOutputDirectory();
 	memoryProviderMock = await startMemoryProviderMock();
+	siliconFlowTranscriptionMock = await startSiliconFlowTranscriptionMock();
 	const isolated = await createIsolatedProfile(obsidianAsar);
 	isolatedProfile = isolated.profileDir;
 	const port = await reservePort();
@@ -5247,6 +6107,7 @@ try {
 	await verifySettingsSurface(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
+	await verifySiliconFlowUpgradeModal(page);
 	const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
 		pluginId: PLUGIN_ID, getActiveSetting, selectSettingOption, getActivePanel,
 		setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR
@@ -5270,6 +6131,9 @@ try {
 	const memoryRelationLayouts = await verifyMemoryRelations(page);
 	const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
 	const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
+	const siliconFlowMockChain = await verifySiliconFlowMockChain(page, siliconFlowTranscriptionMock);
+	await verifySiliconFlowModelPersistence(page);
+	await verifySiliconFlowUpgradeUnload(page);
 	assert(pageErrors.length === 0, `设置页出现运行时错误：${pageErrors.join(" | ")}`);
 
 	const summary = {
@@ -5318,6 +6182,7 @@ try {
 		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
 		recordingStorageLayouts,
 		recordingStorageIntegration,
+		siliconFlowMockChain,
 		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
 		realtimeStatusLayout,
@@ -5357,5 +6222,6 @@ try {
 	}
 	await stopChild(obsidianProcess);
 	await memoryProviderMock?.close().catch(() => undefined);
+	await siliconFlowTranscriptionMock?.close().catch(() => undefined);
 	await removeIsolatedProfile(isolatedProfile);
 }

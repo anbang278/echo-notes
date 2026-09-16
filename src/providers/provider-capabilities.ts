@@ -1,5 +1,6 @@
 import { isProviderId, type TranscriptionMode, type TranscriptionProviderId } from "../settings/settings";
 import { ALIYUN_FILETRANS_MODEL } from "../settings/settings";
+import { SILICONFLOW_TRANSCRIPTION_MODELS } from "./siliconflow-model-catalog";
 
 export type ProviderUploadMode =
 	| "multipart"
@@ -95,7 +96,7 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		supportsStreaming: false,
 		uploadMode: "multipart",
 		endpointShape: "custom",
-		recommendedModels: ["FunAudioLLM/SenseVoiceSmall", "TeleAI/TeleSpeechASR"],
+		recommendedModels: [...SILICONFLOW_TRANSCRIPTION_MODELS],
 		transcriptionPolicy: {
 			targetSegmentSeconds: 10 * 60,
 			minSegmentSeconds: 60,

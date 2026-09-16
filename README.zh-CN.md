@@ -100,7 +100,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 离线转写 Provider：
 
 - 阿里百炼（Alibaba Bailian）：新安装默认异步模型 `qwen-audio-3.0-asr-flash-filetrans`；现有用户继续保留原模型，可在下拉框切换到 `qwen3-asr-flash`
-- 【免费】硅基流动（SiliconFlow）：官方模型可选 `FunAudioLLM/SenseVoiceSmall`、`TeleAI/TeleSpeechASR`，也可填写自定义模型 ID
+- 【免费】硅基流动（SiliconFlow）：内置模型依次为 `Qwen/Qwen3-ASR-1.7B`、`XingChenAGI/XingChenASR-Diarize-V3.0`、`XingChenAGI/XingChenASR-V3.2-Ultra`、`XingChenAGI/XingChenGSR-V1.0`、`FunAudioLLM/SenseVoiceSmall`，也可填写自定义模型 ID
 - MOSI（可选说话人分离）：可在普通转写 `moss-transcribe` 与多说话人转写 `moss-transcribe-diarize` 之间切换
 - Ollama：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
 - LM Studio：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
@@ -108,6 +108,8 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 AgentPlan 实时转写的官方 `bigmodel_async` Base URL 和模型保持只读。MOSI 的官方 Base URL 也保持只读，模型由“说话人分离”开关自动派生：开启时使用 `moss-transcribe-diarize`，关闭时使用 `moss-transcribe`。其他离线 Provider 的默认值仍可修改。设置页会根据当前模式展示相应语言、麦克风或离线 Provider 配置，以及接口形态、大小限制、分段、时间戳和说话人分离能力。
 
 设置页“转写服务”仍提供“检查转写配置”操作，会本地检查 API Key 是否存在、Base URL 格式、示例地址、非本地 HTTP 风险、模型提示、接口形态和已知能力限制。该检查不会上传音频，也不会真实调用服务商接口。
+
+当硅基流动仍使用默认模型 `FunAudioLLM/SenseVoiceSmall` 时，每个符合条件的离线转写动作会在创建 running 任务、空转写稿、上传或 Provider 请求前显示一次模型选择提醒；同一批次或并发等待者共享这一次提醒。提醒提供上面四个新模型 ID；本次关闭会保持旧模型，不会强制迁移，下次符合条件的动作仍会提醒。用户可以保存所选模型或“不再提醒”。提醒等待期间若外部修改了 Provider、Base URL 或模型，旧选择不会覆盖新配置，需重新发起转写。历史 `TeleAI/TeleSpeechASR` 值仍作为自定义兼容模型保留，不会被强制替换，也不宣称已下线。
 
 AI 纪要分析按顺序支持硅基流动、**OpenCode Go**、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`；切换到 OpenCode Go 时默认使用 `deepseek-v4-flash`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。OpenCode Go 仅用于 AI 分析，固定使用官方 Base URL `https://opencode.ai/zen/go/v1`，模型选择器采用当前对接文档快照：Grok 4.5、GLM-5.2/5.1、GPT 5.6 Luna、Kimi K3/K2.7 Code/K2.6、MiMo-V2.5/Pro、MiniMax M3/M2.7、Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus、DeepSeek V4 Pro/Flash、Hy3。插件会按模型自动路由到文档规定的 Chat Completions、Responses 或 Messages 接口。可用模型、订阅额度和数据留存政策可能变化，发送内容前请查阅 [OpenCode Go 对接文档](https://opencode.ai/docs/zh-cn/go)。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
 
@@ -179,7 +181,7 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 | 火山引擎 AgentPlan 实时 `doubao-seed-asr-2.0` | 麦克风 PCM 鉴权优化双流 WebSocket | `/api/v3/plan/sauc/bigmodel_async` | 仅桌面端、本地文件系统 Vault | 不分段，单实时会话 | 中文或 auto | utterance 级支持 | 支持 |
 | 阿里百炼 `qwen-audio-3.0-asr-flash-filetrans` | 百炼临时 OSS | `/api/v1/services/audio/asr/transcription` + Task API | 临时上传 1 GB；模型最长 12 小时 | 不分段，整段异步任务 | 支持 | 句子与词级支持 | 默认开启 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
-| 硅基流动 `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
+| 硅基流动 `Qwen/Qwen3-ASR-1.7B` / `XingChenAGI/XingChenASR-Diarize-V3.0` / `XingChenAGI/XingChenASR-V3.2-Ultra` / `XingChenAGI/XingChenGSR-V1.0` / `FunAudioLLM/SenseVoiceSmall` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
 | MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | 仅分离模式支持 segment 级时间 | 可选 |
 | Ollama 和 LM Studio | multipart | `/audio/transcriptions` | 音频文件 25 MB | 暂不支持 | 支持 | 暂不支持 | 暂不支持 |
 
@@ -217,7 +219,7 @@ AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签�
 | --- | --- | --- | --- |
 | 火山引擎 AgentPlan（实时） | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com` | `qwen-audio-3.0-asr-flash-filetrans` | `zh` |
-| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
+| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | 默认 `FunAudioLLM/SenseVoiceSmall`；另有四个内置模型与自定义 ID | `auto` |
 | MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | 默认 `moss-transcribe-diarize`；关闭后 `moss-transcribe` | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
 | LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |

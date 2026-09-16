@@ -5242,3 +5242,110 @@ button.echo-notes-memory-tool:hover {
 		--echo-notes-settings-field-height: max(44px, var(--input-height, 30px));
 	}
 }
+
+.echo-notes-siliconflow-upgrade-dialog .modal-header-button.mod-raised {
+	min-width: 44px;
+	min-height: 44px;
+}
+
+.echo-notes-siliconflow-upgrade-modal {
+	max-width: 720px;
+}
+
+.echo-notes-siliconflow-upgrade-modal > p {
+	margin: 12px 0 18px;
+	color: var(--text-muted);
+}
+
+.echo-notes-siliconflow-current-model {
+	padding: 10px 0 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	line-height: 1.45;
+}
+
+.echo-notes-siliconflow-current-model-label {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-siliconflow-current-model strong {
+	display: block;
+	margin: 4px 0;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-siliconflow-model-options {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 10px;
+}
+
+.echo-notes-siliconflow-model-option {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	min-height: 124px;
+	padding: 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+	cursor: pointer;
+}
+
+.echo-notes-siliconflow-model-option.is-selected {
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.echo-notes-siliconflow-model-option input {
+	margin-top: 3px;
+	flex: 0 0 auto;
+}
+
+.echo-notes-siliconflow-model-option-copy {
+	min-width: 0;
+	line-height: 1.45;
+}
+
+.echo-notes-siliconflow-model-option-copy strong {
+	display: block;
+	margin-bottom: 6px;
+	color: var(--text-normal);
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-siliconflow-model-option-note {
+	margin-top: 6px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-siliconflow-upgrade-modal .setting-item {
+	margin-top: 18px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.echo-notes-siliconflow-upgrade-modal .setting-item-control {
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.echo-notes-siliconflow-upgrade-modal button {
+	min-height: 44px;
+}
+
+@media (width <= 680px) {
+	.echo-notes-siliconflow-model-options {
+		grid-template-columns: 1fr;
+	}
+
+	.echo-notes-siliconflow-model-option {
+		min-height: 100px;
+	}
+
+	.echo-notes-siliconflow-upgrade-modal .setting-item-control,
+	.echo-notes-siliconflow-upgrade-modal button {
+		width: 100%;
+	}
+}

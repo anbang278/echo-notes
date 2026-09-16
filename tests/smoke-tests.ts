@@ -388,6 +388,10 @@ import {
 	restoreDefaultAnalysisTemplate
 } from "../src/settings/settings";
 import {
+	normalizeSiliconFlowUpgradeNoticeDismissed,
+	shouldPromptSiliconFlowUpgrade
+} from "../src/providers/siliconflow-model-upgrade-policy";
+import {
 	renderFailedTranscriptTemplate,
 	renderProgressTranscriptTemplate,
 	renderTranscriptTemplate,
@@ -3902,7 +3906,32 @@ assert.equal(TRANSCRIPTION_LANGUAGE_LABELS.zh, "中文（zh）");
 assert.equal(DEFAULT_SETTINGS.analysisProvider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.analysisBaseUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1");
 assert.equal(DEFAULT_SETTINGS.analysisModel, "deepseek-v4-pro");
+assert.equal(normalizeSiliconFlowUpgradeNoticeDismissed(true), true);
+assert.equal(normalizeSiliconFlowUpgradeNoticeDismissed("true"), false);
+const upgradePromptInput = {
+	usage: "offline" as const,
+	provider: "siliconflow",
+	model: " FunAudioLLM/SenseVoiceSmall ",
+	needsUpload: true,
+	uploadPolicyAllowsAttempt: true,
+	reminderDismissed: false,
+	isRemoteResume: false
+};
+assert.equal(shouldPromptSiliconFlowUpgrade(upgradePromptInput), true);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, usage: "realtime" }), false);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, provider: "aliyun-bailian" }), false);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, model: "Qwen/Qwen3-ASR-1.7B" }), false);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, needsUpload: false }), false);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, uploadPolicyAllowsAttempt: false }), false);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, reminderDismissed: true }), false);
+assert.equal(shouldPromptSiliconFlowUpgrade({ ...upgradePromptInput, isRemoteResume: true }), false);
+
+assert.equal(normalizeEchoNotesSettings({ siliconflowSenseVoiceUpgradeNoticeDismissed: true }).siliconflowSenseVoiceUpgradeNoticeDismissed, true);
+for (const value of [undefined, null, "true", 1, false]) {
+	assert.equal(normalizeEchoNotesSettings({ siliconflowSenseVoiceUpgradeNoticeDismissed: value }).siliconflowSenseVoiceUpgradeNoticeDismissed, false);
+}
 assert.equal(DEFAULT_SETTINGS.redactTranscriptBeforeAnalysis, false);
+
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisBaseUrl, "https://api.deepseek.com/v1");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisModel, "deepseek-v4-pro");
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.siliconflow.analysisBaseUrl, "https://api.siliconflow.cn/v1");
@@ -3926,12 +3955,18 @@ assert.equal(getTranscriptionProviderCapability("siliconflow").maxAudioDurationS
 assert.equal(getTranscriptionProviderCapability("siliconflow").supportsChunking, true);
 assert.equal(getTranscriptionProviderCapability("siliconflow").supportsLanguage, false);
 assert.deepEqual(getTranscriptionProviderCapability("siliconflow").recommendedModels, [
-	"FunAudioLLM/SenseVoiceSmall",
-	"TeleAI/TeleSpeechASR"
+	"Qwen/Qwen3-ASR-1.7B",
+	"XingChenAGI/XingChenASR-Diarize-V3.0",
+	"XingChenAGI/XingChenASR-V3.2-Ultra",
+	"XingChenAGI/XingChenGSR-V1.0",
+	"FunAudioLLM/SenseVoiceSmall"
 ]);
 assert.deepEqual([...SILICONFLOW_TRANSCRIPTION_MODELS], [
-	"FunAudioLLM/SenseVoiceSmall",
-	"TeleAI/TeleSpeechASR"
+	"Qwen/Qwen3-ASR-1.7B",
+	"XingChenAGI/XingChenASR-Diarize-V3.0",
+	"XingChenAGI/XingChenASR-V3.2-Ultra",
+	"XingChenAGI/XingChenGSR-V1.0",
+	"FunAudioLLM/SenseVoiceSmall"
 ]);
 assert.equal(getTranscriptionProviderCapability("ollama").maxAudioBytes, 25 * 1024 * 1024);
 assert.equal(getTranscriptionProviderCapability("lm-studio").supportsLanguage, true);

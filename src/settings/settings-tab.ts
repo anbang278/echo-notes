@@ -12,6 +12,13 @@ import {
 	type SettingDefinitionItem
 } from "obsidian";
 import type EchoNotesPlugin from "../main";
+import {
+	SILICONFLOW_CUSTOM_MODEL_DESCRIPTION,
+	SILICONFLOW_LEGACY_TELESPEECH_MODEL_ID,
+	SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS,
+	SILICONFLOW_TRANSCRIPTION_MODELS,
+	getSiliconFlowModelOption
+} from "../providers/siliconflow-model-catalog";
 import { validateRecordingStorage } from "../audio/recording-storage-path";
 import {
 	getProviderCapabilitySummary,
@@ -48,7 +55,6 @@ import {
 	OFFLINE_TRANSCRIPTION_PROVIDER_LABELS,
 	PROVIDER_DEFAULTS,
 	PROVIDER_LABELS,
-	SILICONFLOW_TRANSCRIPTION_MODELS,
 	TRANSCRIPTION_LANGUAGE_LABELS,
 	createCustomAnalysisTemplate,
 	formatHotkey,
@@ -1016,29 +1022,57 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		} else if (!isRealtime && config.provider === "siliconflow") {
 			const isOfficialModel = SILICONFLOW_TRANSCRIPTION_MODELS.some((model) => model === config.model);
 			const isChoosingCustomModel = !isOfficialModel || this.customTranscriptionModelProvider === config.provider;
-			new Setting(containerEl)
+			const selectedModelOption = getSiliconFlowModelOption(config.model);
+			const modelDescription = selectedModelOption?.description ??
+				(config.model === SILICONFLOW_LEGACY_TELESPEECH_MODEL_ID
+					? "当前为旧版保留的模型 ID，已按自定义模型继续保留；可用性以服务商实际服务为准。"
+					: SILICONFLOW_CUSTOM_MODEL_DESCRIPTION);
+			const modelNote = selectedModelOption?.note ?? `当前生效模型：${config.model}`;
+			const modelSetting = new Setting(containerEl)
 				.setName("转写模型")
-				.setDesc("可选择硅基流动官方转写模型，或在下方填写未来新增的自定义模型 ID。")
-				.addDropdown((dropdown) => {
-					for (const model of SILICONFLOW_TRANSCRIPTION_MODELS) {
-						dropdown.addOption(model, model);
-					}
-					dropdown.addOption("__custom__", "自定义模型");
-					return dropdown
-						.setValue(isChoosingCustomModel ? "__custom__" : config.model)
-						.onChange(async (value) => {
-							if (value === "__custom__") {
-								this.customTranscriptionModelProvider = "siliconflow";
-								this.refreshSettings();
-								return;
-							}
-							this.customTranscriptionModelProvider = null;
-							this.plugin.settings.offlineTranscription.model = value;
+				.setDesc("按录音场景选择模型，括号内为主要特点。离线转写处理已有音频，仍需联网调用硅基流动。");
+			const modelDescriptionEl = modelSetting.descEl.createDiv({
+				cls: "echo-notes-siliconflow-model-description",
+				attr: { role: "note" }
+			});
+			modelDescriptionEl.createDiv({ text: modelDescription });
+			modelDescriptionEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: modelNote });
+			modelDescriptionEl.id = `echo-notes-siliconflow-model-description-${this.settingsRenderSequence}`;
+			modelSetting.addDropdown((dropdown) => {
+				for (const option of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS) {
+					dropdown.addOption(option.id, option.label);
+				}
+				dropdown.addOption("__custom__", "自定义模型");
+				dropdown.selectEl.dataset.siliconflowModelSelect = "true";
+				dropdown.selectEl.setAttribute("aria-describedby", modelDescriptionEl.id);
+				return dropdown
+					.setValue(isChoosingCustomModel ? "__custom__" : config.model)
+					.onChange(async (value) => {
+						if (value === "__custom__") {
+							this.customTranscriptionModelProvider = "siliconflow";
+							this.refreshSettings();
+							return;
+						}
+						this.customTranscriptionModelProvider = null;
+						this.clearDeferredSaveTimers();
+						this.plugin.settings.offlineTranscription.model = value;
+						await this.plugin.saveSettings();
+						this.refreshSettings();
+					});
+			});
+
+			if (this.plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed) {
+				new Setting(containerEl)
+					.setName("模型升级提醒")
+					.setDesc("已关闭此提醒；下一次使用当前默认模型时不会自动提示。")
+					.addButton((button) => button
+						.setButtonText("恢复提醒")
+						.onClick(async () => {
+							this.plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
 							await this.plugin.saveSettings();
 							this.refreshSettings();
-						});
-				});
-
+						}));
+			}
 			if (isChoosingCustomModel) {
 				const customModelSetting = new Setting(containerEl)
 					.setName("自定义转写模型")
@@ -1049,6 +1083,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						.setValue(isOfficialModel ? "" : config.model);
 					this.bindDeferredTextSave(customModelSetting, "transcription-custom-model", text.inputEl, async (value) => {
 						this.customTranscriptionModelProvider = "siliconflow";
+						if (!text.inputEl.isConnected) return;
 						this.plugin.settings.offlineTranscription.model = value;
 						await this.plugin.saveSettings();
 					}, (value) => value ? undefined : "模型 ID 不能为空。");
@@ -3082,6 +3117,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				window.clearTimeout(existing);
 			}
 			this.deferredSaveTimers.delete(key);
+			if (!inputEl.isConnected) return;
 			const value = inputEl.value.trim();
 			if (!renderValidation(value)) {
 				return;
@@ -3115,7 +3151,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			renderValidation(inputEl.value);
 			schedule(650);
 		});
-		inputEl.addEventListener("blur", () => schedule(80));
+		inputEl.addEventListener("blur", () => {
+			if (inputEl.isConnected) schedule(80);
+		});
 	}
 
 	private clearDeferredSaveTimers(): void {

@@ -469,3 +469,29 @@ Echo Notes 已形成“录音/语音 → 可恢复转写 → 可恢复分析 →
 - 转写、分析和两次 Memory 任务均为 `success`，Provider 与模型匹配且均有 Trace ID；候选包与审核 sidecar 各 2 份，关系和上下文包真实落盘。
 - 成功流程无遗留分析或 Memory 检查点，转写稿与上下文包未发现环境变量名、认证头或 API Key 痕迹。
 - 临时 Vault 与独立 Obsidian Profile 在验收结束后自动清理；未访问生产 Vault。
+
+## 2026-09-15：SiliconFlow 五模型配置与转写前引导（开发中）
+
+### 发现的问题
+
+SiliconFlow 离线转写仍只把 SenseVoiceSmall 和历史 TeleSpeech 列为官方选项，无法在设置页直接选择当前五模型，也没有在旧默认模型真正发起上传前提供可控升级决策。模型、能力文案、任务快照和旧自定义配置之间还需要统一边界。
+
+### 完成的改动
+
+- 新增统一模型目录，按顺序提供 `Qwen/Qwen3-ASR-1.7B`、`XingChenAGI/XingChenASR-Diarize-V3.0`、`XingChenAGI/XingChenASR-V3.2-Ultra`、`XingChenAGI/XingChenGSR-V1.0`、`FunAudioLLM/SenseVoiceSmall`；请求与设置保存均使用纯 ID，SenseVoiceSmall 保持默认。
+- 设置页复用统一目录，显示每个模型的定位和能力边界；历史 `TeleAI/TeleSpeechASR` 与未知非空 ID 保留为自定义兼容配置，不强制替换。
+- 为符合条件的 SenseVoiceSmall 离线上传增加转写前选择 Modal，覆盖本次关闭、不再提醒、保存并继续、Esc/X、遮罩、保存失败、外部配置冲突和插件卸载。
+- gate 位于可复用稿件判断之后、上传确认和 running 任务创建之前；单文件、批量和并发任务共享明确决策，批量在最终模型确定后重新检查稿件复用。
+- 每个离线任务复制 Provider、Base URL、模型和 API Key；上传确认、诊断、Provider、任务中心、转写技术信息及检查点使用同一任务快照。
+- 修复自定义模型延迟保存覆盖较新预设选择的竞态；修复模型提醒保存未完成时卸载会由运行状态 flush 持久化草稿模型的问题，在卸载写入前条件回滚未完成事务。
+
+### 已有验证
+
+- 最终 `npm run verify` 常规完整门禁 9/9 通过，包含 `npm test`、`npm run lint`、`npm run typecheck`、生产构建/运行时 bundle、隔离设置页、隔离编辑器菜单、两类 diff 检查和生产依赖审计；生产依赖为 0 vulnerabilities。
+- 获批 v5 原型通过六组主题/视口验证；隔离 Obsidian 1.13.7 设置页和编辑器菜单回归通过，运行时错误为 0。
+- `127.0.0.1` 本地 HTTP Mock 验证五个纯模型 ID 的 multipart 请求、普通 `text` 正文、缺少 `text` 的明确失败、同音频去重、任务快照、检查点、661 秒且超过 50 MB 的合成长音频两段请求、三文件按最终模型重检、批量部分失败后按新模型重试及升级后失败一致性。
+- 七个内置/兼容/未知模型 ID 与严格布尔提醒偏好均经过真实插件 disable/enable 后原样保留；保存 pending 时卸载以 `null` 结算且不污染重载配置；专项结束后在途任务与共享 gate 均清空。
+
+### 尚未完成
+
+M23 五个模型的真实 SiliconFlow HTTP、trace、响应形态和插件结果尚未执行，状态为 `BLOCKED`：当前缺少本次获准的线上密钥、隔离 SecretStorage 条件和非敏感音频素材。本地 Mock 不代表真实模型可用性或能力。版本升级、测试 ZIP、提交、合并、Tag、推送和任务现场清理均未执行。

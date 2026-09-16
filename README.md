@@ -103,7 +103,7 @@ Real-time transcription:
 Offline transcription providers:
 
 - 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
-- 【免费】硅基流动（SiliconFlow） with official choices `FunAudioLLM/SenseVoiceSmall` and `TeleAI/TeleSpeechASR`, plus custom model IDs
+- 【免费】硅基流动（SiliconFlow） with the five built-in model IDs `Qwen/Qwen3-ASR-1.7B`, `XingChenAGI/XingChenASR-Diarize-V3.0`, `XingChenAGI/XingChenASR-V3.2-Ultra`, `XingChenAGI/XingChenGSR-V1.0`, and `FunAudioLLM/SenseVoiceSmall`, plus custom model IDs
 - MOSI with selectable `moss-transcribe` plain transcription or `moss-transcribe-diarize` speaker diarization
 - Ollama through its local OpenAI-compatible `/audio/transcriptions` endpoint
 - LM Studio through its local OpenAI-compatible `/audio/transcriptions` endpoint
@@ -111,6 +111,8 @@ Offline transcription providers:
 AgentPlan real-time transcription keeps its official `bigmodel_async` Base URL and model read-only. MOSI locks its official Base URL and derives its read-only model from the **Speaker diarization** toggle: enabled uses `moss-transcribe-diarize`, while disabled uses `moss-transcribe`. Other offline-provider defaults remain editable. The settings tab switches language, microphone, and offline-provider fields with the selected mode and shows the relevant endpoint, size, chunking, timestamp, and diarization capabilities.
 
 The settings tab also includes a local "Check transcription configuration" action. It checks API key presence, Base URL format, example URLs, non-local HTTP risks, model hints, endpoint shape, and known capability limits. This check does not upload audio and does not call the provider.
+
+When SiliconFlow is still configured with the default `FunAudioLLM/SenseVoiceSmall`, each eligible offline transcription action shows one model selection prompt before any running task, empty transcript, upload, or provider request is created; files in the same batch or concurrent waiters share that prompt. It offers the four newer model IDs above, keeps the default model unchanged when dismissed, and can persist either a selected model or the reminder preference. The prompt does not change a later external Provider/Base URL/model edit, and the previous `TeleAI/TeleSpeechASR` value remains valid as a custom-compatible model ID; it is not forcibly migrated or described as retired.
 
 AI analysis supports SiliconFlow, **OpenCode Go**, Alibaba Bailian, DeepSeek, Volcengine AgentPlan, Ollama, LM Studio, and a custom OpenAI-compatible endpoint, in that order. The global default remains Alibaba Bailian `deepseek-v4-pro`; OpenCode Go defaults to `deepseek-v4-flash` when selected, and SiliconFlow defaults to `Qwen/Qwen3.5-4B`. OpenCode Go is available only for AI analysis, keeps its official `https://opencode.ai/zen/go/v1` Base URL read-only, and offers the current documented model snapshot: Grok 4.5, GLM-5.2/5.1, GPT 5.6 Luna, Kimi K3/K2.7 Code/K2.6, MiMo-V2.5/Pro, MiniMax M3/M2.7, Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus, DeepSeek V4 Pro/Flash, and Hy3. Echo Notes automatically routes these models through their documented Chat Completions, Responses, or Messages endpoint. Availability, subscription limits, and data-retention policies may change; check the [OpenCode Go documentation](https://opencode.ai/docs/zh-cn/go) before sending content. Selecting AgentPlan locks the Base URL to the plan-specific `https://ark.cn-beijing.volces.com/api/plan/v3` endpoint and provides a model picker for the currently documented text models, including Doubao Seed 2.0 Mini/Lite/Pro, Doubao Seed Evolving, DeepSeek V4, MiniMax M2.7/M3, GLM-5.2, and Kimi K2.6/K2.7 Code/K3. Kimi K3 requires Medium or higher, and preview models may be rate-limited during peak traffic. AgentPlan analysis remains isolated from AgentPlan ASR configuration and secrets by purpose.
 
@@ -194,7 +196,7 @@ Capability matrix:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Volcengine AgentPlan real-time `doubao-seed-asr-2.0` | microphone PCM over authenticated optimized bidirectional WebSocket | `/api/v3/plan/sauc/bigmodel_async` | desktop and local filesystem vault only | No; one live session | Chinese or auto | Yes, utterance level | Yes |
 | Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
-| SiliconFlow `FunAudioLLM/SenseVoiceSmall` / `TeleAI/TeleSpeechASR` / custom model | multipart | dedicated SiliconFlow endpoint | 50 MB and one hour per request | Yes; ~10-minute chunks with adaptive shrinking | No | No | No |
+| SiliconFlow `Qwen/Qwen3-ASR-1.7B` / `XingChenAGI/XingChenASR-Diarize-V3.0` / `XingChenAGI/XingChenASR-V3.2-Ultra` / `XingChenAGI/XingChenGSR-V1.0` / `FunAudioLLM/SenseVoiceSmall` / custom model | multipart | dedicated SiliconFlow endpoint | 50 MB and one hour per request | Yes; ~10-minute chunks with adaptive shrinking | No | No | No |
 | MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | Determined by MOSI | Yes; ~3-minute chunks with adaptive shrinking | No | Diarization mode only, segment level | Optional |
 | Ollama and LM Studio | multipart | `/audio/transcriptions` | 25 MB audio file | No | Yes | No | No |
 
@@ -232,7 +234,7 @@ Recommended defaults:
 | --- | --- | --- | --- |
 | Volcengine AgentPlan (real-time) | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
 | 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
-| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` | `auto` |
+| 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` (default); four additional built-in models and custom IDs are available | `auto` |
 | MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | `moss-transcribe-diarize` by default; `moss-transcribe` when disabled | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
 | LM Studio | `http://localhost:1234/v1` | `whisper-1` | `zh` |

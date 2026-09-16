@@ -1,4 +1,6 @@
 import type { Hotkey, Modifier } from "obsidian";
+import { SILICONFLOW_DEFAULT_TRANSCRIPTION_MODEL_ID } from "../providers/siliconflow-model-catalog";
+import { normalizeSiliconFlowUpgradeNoticeDismissed } from "../providers/siliconflow-model-upgrade-policy";
 import {
 	EMPTY_TASK_CENTER_STATE,
 	normalizeTaskCenterState,
@@ -264,6 +266,7 @@ export interface EchoNotesSettings {
 	analysisTemplates: AnalysisTemplateConfig[];
 	skipExistingTranscript: boolean;
 	confirmBeforeTranscription: boolean;
+	siliconflowSenseVoiceUpgradeNoticeDismissed: boolean;
 	autoTranscribeOnAudioLink: boolean;
 	autoTranscribeOnAudioCreated: boolean;
 	officialRecorderStartHotkey: EchoNotesHotkeySetting;
@@ -283,7 +286,7 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 	},
 	siliconflow: {
 		baseUrl: "https://api.siliconflow.cn",
-		model: "FunAudioLLM/SenseVoiceSmall",
+		model: SILICONFLOW_DEFAULT_TRANSCRIPTION_MODEL_ID,
 		language: "auto"
 	},
 	"aliyun-bailian": {
@@ -309,10 +312,7 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 	}
 };
 
-export const SILICONFLOW_TRANSCRIPTION_MODELS = [
-	"FunAudioLLM/SenseVoiceSmall",
-	"TeleAI/TeleSpeechASR"
-] as const;
+export { SILICONFLOW_TRANSCRIPTION_MODELS } from "../providers/siliconflow-model-catalog";
 
 export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
@@ -1054,6 +1054,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	analysisTemplates: createDefaultAnalysisTemplates(),
 	skipExistingTranscript: true,
 	confirmBeforeTranscription: false,
+	siliconflowSenseVoiceUpgradeNoticeDismissed: false,
 	autoTranscribeOnAudioLink: false,
 	autoTranscribeOnAudioCreated: false,
 	// Community plugins must not claim default hotkeys. Users can opt in from settings.
@@ -1401,6 +1402,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	);
 	settings.confirmBeforeTranscription =
 		typeof raw.confirmBeforeTranscription === "boolean" ? raw.confirmBeforeTranscription : DEFAULT_SETTINGS.confirmBeforeTranscription;
+	settings.siliconflowSenseVoiceUpgradeNoticeDismissed = normalizeSiliconFlowUpgradeNoticeDismissed(raw.siliconflowSenseVoiceUpgradeNoticeDismissed);
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
 	settings.defaultAnalysisTemplateId = normalizeDefaultAnalysisTemplateId(rawDefaultAnalysisTemplateId, settings.analysisTemplates);
 	settings.officialRecorderStartHotkey = normalizeHotkeySetting(

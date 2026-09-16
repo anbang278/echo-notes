@@ -157,6 +157,15 @@ import { parseMemoryCandidate } from "./memory/memory-output";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import {
+	SILICONFLOW_SENSEVOICE_MODEL_ID,
+	SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS,
+	SILICONFLOW_UPGRADE_RECOMMENDED_MODEL_ID
+} from "./providers/siliconflow-model-catalog";
+import {
+	shouldPromptSiliconFlowUpgrade,
+	type SiliconFlowUpgradeDecision
+} from "./providers/siliconflow-model-upgrade-policy";
+import {
 	cancelAliyunFiletransTask,
 	queryAliyunFiletransTask,
 	type AliyunHttpRequester
@@ -276,6 +285,7 @@ interface ProcessAudioOptions {
 	diagnosticChainId?: string;
 	diagnosticRetryOfSessionId?: string;
 	resumeRemoteTask?: RemoteTranscriptionTaskResume;
+	siliconFlowUpgradeDecision?: { value?: SiliconFlowUpgradeDecision; config?: EchoNotesSettings["offlineTranscription"] };
 }
 
 interface InternalPlugin {
@@ -381,6 +391,9 @@ export default class EchoNotesPlugin extends Plugin {
 	private taskCenter = new TaskCenterStore();
 	private editorService = new EditorService();
 	private processingAudio = new Map<string, Promise<ProcessAudioResult | null>>();
+	private siliconFlowUpgradePending: Promise<SiliconFlowUpgradeDecision | null> | null = null;
+	private siliconFlowUpgradeModal: SiliconFlowModelUpgradeModal | null = null;
+	private siliconFlowUpgradeRollback: (() => void) | null = null;
 	private activeTranscriptionControllers = new Map<string, AbortController>();
 	private processingAnalyses = new Set<string>();
 	private activeMemoryTasks = new Map<string, ActiveMemoryTask>();
@@ -478,6 +491,10 @@ export default class EchoNotesPlugin extends Plugin {
 	onunload(): void {
 		this.unloading = true;
 		this.realtimeUnloading = true;
+		this.siliconFlowUpgradeRollback?.();
+		this.siliconFlowUpgradeRollback = null;
+		this.siliconFlowUpgradeModal?.abort();
+		this.siliconFlowUpgradeModal = null;
 		this.realtimeStartingStream?.getTracks().forEach((track) => track.stop());
 		this.coreRecordingStorageAdapter?.dispose();
 		if (this.persistentStateTimer !== null) {
@@ -3137,9 +3154,58 @@ export default class EchoNotesPlugin extends Plugin {
 		let completed = 0;
 		const linkResults = new Map<SourceAudioAnchor, TranscriptLinkResult>();
 
+		const batchUpgradeDecision: { value?: SiliconFlowUpgradeDecision; config?: EchoNotesSettings["offlineTranscription"] } = {
+			config: {
+				...this.settings.offlineTranscription,
+				aliyunFiletrans: this.settings.offlineTranscription.aliyunFiletrans
+					? { ...this.settings.offlineTranscription.aliyunFiletrans }
+					: undefined
+			}
+		};
+		const batchConfig = batchUpgradeDecision.config!;
+		if (shouldPromptSiliconFlowUpgrade({
+			usage: "offline",
+			provider: batchConfig.provider,
+			model: batchConfig.model,
+			needsUpload: true,
+			uploadPolicyAllowsAttempt: true,
+			reminderDismissed: this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed,
+			isRemoteResume: false
+		})) {
+			let needsUpload = false;
+			for (const task of audioTasks) {
+				if (this.processingAudio.has(task.audioFile.path)) continue;
+				if (!this.settings.skipExistingTranscript || !this.transcriptService.getTranscriptFile(task.audioFile)) {
+					needsUpload = true;
+					break;
+				}
+				const reused = await this.transcriptService.getReusableTranscriptFile(
+					task.audioFile,
+					batchConfig.provider,
+					batchConfig.model
+				);
+				if (!reused) {
+					needsUpload = true;
+					break;
+				}
+			}
+			if (needsUpload) {
+				const decision = await this.resolveSiliconFlowUpgrade();
+				if (!decision || this.settings.offlineTranscription.provider !== batchConfig.provider ||
+					this.settings.offlineTranscription.baseUrl !== batchConfig.baseUrl ||
+					this.settings.offlineTranscription.model !== (decision.kind === "switch" ? decision.modelId : batchConfig.model)) {
+					if (decision) new Notice("转写配置已变化，请重新发起批量转写。");
+					return "processed";
+				}
+				batchUpgradeDecision.value = decision;
+				if (decision.kind === "switch") batchConfig.model = decision.modelId;
+			}
+		}
+
 		for (const task of [...audioTasks].reverse()) {
 			const result = await this.processAudioToTranscript(task.audioFile, sourceNote, {
 				audioLinkPath: task.audioMatch.linkPath,
+				siliconFlowUpgradeDecision: batchUpgradeDecision,
 				onTranscriptFileReady: async (transcriptFile) => {
 					const linkResult = await this.insertTranscriptLink(task.anchor, transcriptFile, false);
 					linkResults.set(task.anchor, linkResult);
@@ -3203,6 +3269,82 @@ export default class EchoNotesPlugin extends Plugin {
 		void this.startMemoryTask(transcriptFile, undefined, true);
 	}
 
+	private async resolveSiliconFlowUpgrade(): Promise<SiliconFlowUpgradeDecision | null> {
+		if (this.unloading) return null;
+		if (this.siliconFlowUpgradePending) return this.siliconFlowUpgradePending;
+		const pending = (async (): Promise<SiliconFlowUpgradeDecision | null> => {
+			const originalProvider = this.settings.offlineTranscription.provider;
+			const originalModel = this.settings.offlineTranscription.model;
+			const originalBaseUrl = this.settings.offlineTranscription.baseUrl;
+			const decision = await new Promise<SiliconFlowUpgradeDecision | null>((resolve) => {
+				const modal = new SiliconFlowModelUpgradeModal(this.app, resolve, async (selection) => {
+					if (this.unloading) throw new Error("插件已停用");
+					if (this.settings.offlineTranscription.provider !== originalProvider ||
+						this.settings.offlineTranscription.model !== originalModel ||
+						this.settings.offlineTranscription.baseUrl !== originalBaseUrl) {
+						throw new Error("转写配置已变化，请本次关闭并重新发起转写");
+					}
+					if (selection.kind === "switch") {
+						if (!SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.slice(0, 4).some((option) => option.id === selection.modelId)) {
+							throw new Error("未知的转写模型");
+						}
+						const previous = this.settings.offlineTranscription.model;
+						const rollback = (): void => {
+							if (this.settings.offlineTranscription.model === selection.modelId) {
+								this.settings.offlineTranscription.model = previous;
+							}
+						};
+						this.settings.offlineTranscription.model = selection.modelId;
+						this.siliconFlowUpgradeRollback = rollback;
+						try {
+							await this.saveSettingsOrThrow("模型升级设置保存失败");
+						} catch (error) {
+							rollback();
+							throw error;
+						} finally {
+							if (this.siliconFlowUpgradeRollback === rollback) this.siliconFlowUpgradeRollback = null;
+						}
+					} else if (selection.kind === "dont-remind") {
+						const previous = this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed;
+						const rollback = (): void => {
+							if (this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed === true) {
+								this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = previous;
+							}
+						};
+						this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = true;
+						this.siliconFlowUpgradeRollback = rollback;
+						try {
+							await this.saveSettingsOrThrow("提醒设置保存失败");
+						} catch (error) {
+							rollback();
+							throw error;
+						} finally {
+							if (this.siliconFlowUpgradeRollback === rollback) this.siliconFlowUpgradeRollback = null;
+						}
+					}
+				});
+				this.siliconFlowUpgradeModal = modal;
+				modal.open();
+			});
+			this.siliconFlowUpgradeModal = null;
+			return this.unloading ? null : decision;
+		})();
+		this.siliconFlowUpgradePending = pending;
+		try {
+			return await pending;
+		} finally {
+			if (this.siliconFlowUpgradePending === pending) this.siliconFlowUpgradePending = null;
+		}
+	}
+
+	private async saveSettingsOrThrow(context: string): Promise<void> {
+		try {
+			await this.saveSettings();
+		} catch (error) {
+			new Notice(`${context}：${getErrorMessage(error)}`);
+			throw error;
+		}
+	}
 	private async processAudioToTranscript(
 		audioFile: TFile,
 		sourceNote: TFile | undefined,
@@ -3234,7 +3376,13 @@ export default class EchoNotesPlugin extends Plugin {
 		sourceNote: TFile | undefined,
 		options: ProcessAudioOptions
 	): Promise<ProcessAudioResult | null> {
-		const transcriptionConfig = this.settings.offlineTranscription;
+		const sourceConfig = options.siliconFlowUpgradeDecision?.config ?? this.settings.offlineTranscription;
+		const transcriptionConfig = {
+			...sourceConfig,
+			aliyunFiletrans: sourceConfig.aliyunFiletrans
+				? { ...sourceConfig.aliyunFiletrans }
+				: undefined
+		};
 		const diagnostic = this.startDiagnosticSession(
 			"transcription",
 			options.diagnosticChainId,
@@ -3335,6 +3483,36 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 		}
 
+		if (shouldPromptSiliconFlowUpgrade({
+			usage: "offline",
+			provider: transcriptionConfig.provider,
+			model: transcriptionConfig.model,
+			needsUpload: true,
+			uploadPolicyAllowsAttempt: options.allowUploadConfirmation !== false || !this.settings.confirmBeforeTranscription,
+			reminderDismissed: this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed,
+			isRemoteResume: Boolean(options.resumeRemoteTask)
+		}) && options.siliconFlowUpgradeDecision?.value === undefined) {
+			const decision = await this.resolveSiliconFlowUpgrade();
+			if (!decision || this.settings.offlineTranscription.provider !== transcriptionConfig.provider ||
+				this.settings.offlineTranscription.baseUrl !== transcriptionConfig.baseUrl ||
+				this.settings.offlineTranscription.model !== (decision.kind === "switch" ? decision.modelId : transcriptionConfig.model)) {
+				if (decision) new Notice("转写配置已变化，请重新发起转写。");
+				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "siliconflow-upgrade-cancelled-or-save-failed" });
+				return null;
+			}
+			const upgradeContext = options.siliconFlowUpgradeDecision ?? { value: decision };
+			upgradeContext.value = decision;
+			if (options.siliconFlowUpgradeDecision?.config && decision.kind === "switch") {
+				options.siliconFlowUpgradeDecision.config.model = decision.modelId;
+			}
+			this.diagnostics.complete(diagnostic.id, "skipped", { reason: "siliconflow-upgrade-restarted" });
+			return this.performAudioToTranscript(audioFile, sourceNote, {
+				...options,
+				siliconFlowUpgradeDecision: upgradeContext
+			});
+		}
+
+		const apiKeySnapshot = this.getApiKey(transcriptionConfig.provider);
 		if (this.settings.confirmBeforeTranscription && !options.resumeRemoteTask) {
 			if (options.allowUploadConfirmation === false) {
 				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "upload-confirmation-required" });
@@ -3342,7 +3520,10 @@ export default class EchoNotesPlugin extends Plugin {
 				return null;
 			}
 
-			const confirmed = await this.confirmTranscriptionUpload(audioFile);
+			const confirmed = await this.confirmTranscriptionUpload(audioFile, {
+				...this.settings,
+				offlineTranscription: transcriptionConfig
+			});
 			if (!confirmed) {
 				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "user-cancelled-upload" });
 				new Notice(`已取消转写：${audioFile.name}`);
@@ -3450,7 +3631,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			const diagnostics = diagnoseTranscriptionProviderSettings(
 				transcriptionConfig,
-				this.getApiKey(transcriptionConfig.provider),
+				apiKeySnapshot,
 				{ isMobile: Platform.isMobile, usage: "offline" }
 			);
 			this.diagnostics.record(diagnostic.id, "configuration", "transcription-local-diagnostics", {
@@ -3464,7 +3645,7 @@ export default class EchoNotesPlugin extends Plugin {
 			const provider = createTranscriptionProvider(
 				this.app,
 				transcriptionConfig,
-				this.getApiKey(transcriptionConfig.provider)
+				apiKeySnapshot
 			);
 			completedSegments = await this.transcriptService.getResumableTranscriptionSegments(
 				audioFile,
@@ -5001,9 +5182,9 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
-	private async confirmTranscriptionUpload(audioFile: TFile): Promise<boolean> {
+	private async confirmTranscriptionUpload(audioFile: TFile, settings: EchoNotesSettings): Promise<boolean> {
 		return new Promise((resolve) => {
-			new TranscriptionUploadConfirmModal(this.app, this.settings, audioFile, resolve).open();
+			new TranscriptionUploadConfirmModal(this.app, settings, audioFile, resolve).open();
 		});
 	}
 
@@ -5172,6 +5353,128 @@ function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination):
 			return "Echo Memory → 记忆中心";
 		case "transcription-recording":
 			return "录音转写 → 能力增强 → 快捷录音";
+	}
+}
+
+class SiliconFlowModelUpgradeModal extends Modal {
+	private readonly onResolved: (decision: SiliconFlowUpgradeDecision | null) => void;
+	private readonly persist: (decision: SiliconFlowUpgradeDecision) => Promise<void>;
+	private resolved = false;
+	private saving = false;
+	private aborted = false;
+	private selectedModelId = SILICONFLOW_UPGRADE_RECOMMENDED_MODEL_ID;
+	private backdrop: Element | null = null;
+	private readonly ignoreBackdropClick = (event: Event): void => event.stopImmediatePropagation();
+
+	constructor(
+		app: App,
+		onResolved: (decision: SiliconFlowUpgradeDecision | null) => void,
+		persist: (decision: SiliconFlowUpgradeDecision) => Promise<void>
+	) {
+		super(app);
+		this.onResolved = onResolved;
+		this.persist = persist;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.addClass("echo-notes-siliconflow-upgrade-modal");
+		this.modalEl.addClass("echo-notes-siliconflow-upgrade-dialog");
+		this.backdrop = this.modalEl.closest(".modal-container")?.querySelector(".modal-bg") ?? null;
+		this.backdrop?.addEventListener("click", this.ignoreBackdropClick, true);
+		this.titleEl.setText("选择转写模型");
+		const baseline = SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.find((option) => option.id === SILICONFLOW_SENSEVOICE_MODEL_ID)!;
+		const baselineEl = contentEl.createDiv({ cls: "echo-notes-siliconflow-current-model" });
+		baselineEl.createDiv({ cls: "echo-notes-siliconflow-current-model-label", text: "当前模型" });
+		baselineEl.createEl("strong", { text: baseline.id });
+		baselineEl.createDiv({ text: baseline.description });
+		baselineEl.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: baseline.note });
+		contentEl.createEl("p", {
+			text: "选择一个模型后，本次转写会使用最终保存成功的模型。"
+		});
+
+		const group = contentEl.createDiv({ cls: "echo-notes-siliconflow-model-options", attr: { role: "radiogroup" } });
+		for (const option of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.slice(0, 4)) {
+			const label = group.createEl("label", { cls: "echo-notes-siliconflow-model-option" });
+			const input = label.createEl("input", {
+				type: "radio",
+				attr: { name: "echo-notes-siliconflow-upgrade-model", value: option.id }
+			});
+			input.checked = option.id === this.selectedModelId;
+			if (input.checked) label.addClass("is-selected");
+			input.addEventListener("change", () => {
+				if (!input.checked) return;
+				this.selectedModelId = input.value;
+				group.querySelectorAll(".echo-notes-siliconflow-model-option.is-selected").forEach((selected) => selected.classList.remove("is-selected"));
+				label.addClass("is-selected");
+			});
+			const copy = label.createDiv({ cls: "echo-notes-siliconflow-model-option-copy" });
+			copy.createEl("strong", { text: option.label });
+			copy.createDiv({ text: option.description });
+			copy.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: option.note });
+		}
+
+		const status = contentEl.createDiv({ cls: "echo-notes-inline-validation", attr: { role: "status", "aria-live": "polite" } });
+		const actions = new Setting(contentEl);
+		actions.addButton((button) => button.setButtonText("本次关闭").onClick(() => this.resolve({ kind: "close" })));
+		actions.addButton((button) => button.setButtonText("不再提醒").onClick(() => void this.saveAndResolve({ kind: "dont-remind" }, status)));
+		actions.addButton((button) => button.setButtonText("保存并继续").setCta().onClick(() => void this.saveAndResolve({
+			kind: "switch",
+			modelId: this.selectedModelId
+		}, status)));
+	}
+
+	close(): void {
+		if (this.saving && !this.aborted) return;
+		super.close();
+	}
+
+	abort(): void {
+		this.aborted = true;
+		this.close();
+	}
+
+	onClose(): void {
+		this.backdrop?.removeEventListener("click", this.ignoreBackdropClick, true);
+		this.backdrop = null;
+		this.contentEl.empty();
+		if (!this.resolved) {
+			this.resolved = true;
+			this.onResolved(this.aborted ? null : { kind: "close" });
+		}
+	}
+
+	private async saveAndResolve(decision: SiliconFlowUpgradeDecision, status: HTMLElement): Promise<void> {
+		if (this.resolved || this.saving) return;
+		this.saving = true;
+		this.contentEl.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((element) => {
+			element.disabled = true;
+		});
+		status.setText("正在保存…");
+		try {
+			await this.persist(decision);
+			if (!this.aborted) {
+				this.saving = false;
+				this.resolve(decision);
+			}
+		} catch (error) {
+			if (!this.aborted) {
+				status.setText(`保存失败：${getErrorMessage(error)}`);
+				this.contentEl.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input").forEach((element) => {
+					element.disabled = false;
+				});
+			}
+		} finally {
+			this.saving = false;
+		}
+	}
+
+	private resolve(decision: SiliconFlowUpgradeDecision): void {
+		if (this.resolved || this.saving && decision.kind === "close") return;
+		this.resolved = true;
+		this.onResolved(decision);
+		this.close();
 	}
 }
 
