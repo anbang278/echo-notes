@@ -5383,18 +5383,21 @@ class SiliconFlowModelUpgradeModal extends Modal {
 		this.modalEl.addClass("echo-notes-siliconflow-upgrade-dialog");
 		this.backdrop = this.modalEl.closest(".modal-container")?.querySelector(".modal-bg") ?? null;
 		this.backdrop?.addEventListener("click", this.ignoreBackdropClick, true);
-		this.titleEl.setText("选择转写模型");
+		this.titleEl.setText("硅基流动有新的转写模型可选");
+		this.titleEl.tabIndex = -1;
+		this.titleEl.focus();
 		const baseline = SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.find((option) => option.id === SILICONFLOW_SENSEVOICE_MODEL_ID)!;
 		const baselineEl = contentEl.createDiv({ cls: "echo-notes-siliconflow-current-model" });
-		baselineEl.createDiv({ cls: "echo-notes-siliconflow-current-model-label", text: "当前模型" });
+		baselineEl.createDiv({ cls: "echo-notes-siliconflow-current-model-label", text: "当前配置" });
 		baselineEl.createEl("strong", { text: baseline.id });
 		baselineEl.createDiv({ text: baseline.description });
 		baselineEl.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: baseline.note });
 		contentEl.createEl("p", {
-			text: "选择一个模型后，本次转写会使用最终保存成功的模型。"
+			text: "按录音特点选择模型，也可以继续使用当前配置。"
 		});
 
-		const group = contentEl.createDiv({ cls: "echo-notes-siliconflow-model-options", attr: { role: "radiogroup" } });
+		const savedModel = contentEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: `将保存为：${this.selectedModelId}` });
+		const group = contentEl.createDiv({ cls: "echo-notes-siliconflow-model-options", attr: { role: "radiogroup", "aria-label": "选择新模型" } });
 		for (const option of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.slice(0, 4)) {
 			const label = group.createEl("label", { cls: "echo-notes-siliconflow-model-option" });
 			const input = label.createEl("input", {
@@ -5406,6 +5409,7 @@ class SiliconFlowModelUpgradeModal extends Modal {
 			input.addEventListener("change", () => {
 				if (!input.checked) return;
 				this.selectedModelId = input.value;
+				savedModel.setText(`将保存为：${this.selectedModelId}`);
 				group.querySelectorAll(".echo-notes-siliconflow-model-option.is-selected").forEach((selected) => selected.classList.remove("is-selected"));
 				label.addClass("is-selected");
 			});
@@ -5415,11 +5419,14 @@ class SiliconFlowModelUpgradeModal extends Modal {
 			copy.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: option.note });
 		}
 
+		contentEl.appendChild(savedModel);
+		contentEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "直接更新模型配置，本批次与后续转写均使用新模型。" });
+		contentEl.createDiv({ cls: "echo-notes-siliconflow-model-note", text: "关闭后下次仍会提示；“不再提醒”仅关闭此提醒，两者均保留当前模型。" });
 		const status = contentEl.createDiv({ cls: "echo-notes-inline-validation", attr: { role: "status", "aria-live": "polite" } });
 		const actions = new Setting(contentEl);
-		actions.addButton((button) => button.setButtonText("本次关闭").onClick(() => this.resolve({ kind: "close" })));
-		actions.addButton((button) => button.setButtonText("不再提醒").onClick(() => void this.saveAndResolve({ kind: "dont-remind" }, status)));
-		actions.addButton((button) => button.setButtonText("保存并继续").setCta().onClick(() => void this.saveAndResolve({
+		actions.addButton((button) => button.setButtonText("本次关闭，继续转写").onClick(() => this.resolve({ kind: "close" })));
+		actions.addButton((button) => button.setButtonText("不再提醒，继续转写").onClick(() => void this.saveAndResolve({ kind: "dont-remind" }, status)));
+		actions.addButton((button) => button.setButtonText("一键更换并转写").setCta().onClick(() => void this.saveAndResolve({
 			kind: "switch",
 			modelId: this.selectedModelId
 		}, status)));

@@ -7,3 +7,5 @@ data.json
 dist/
 output/playwright/
 .local-test-data/
+
+output/verification/

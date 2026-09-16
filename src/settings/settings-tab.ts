@@ -163,6 +163,7 @@ const MEMORY_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<MemorySetting
 ];
 
 export class EchoNotesSettingTab extends PluginSettingTab {
+	private siliconFlowModelWriteGeneration = 0;
 	private plugin: EchoNotesPlugin;
 	private settingsContainerEl: HTMLElement | null = null;
 	private activeSettingsStage: SettingsStage = "transcription";
@@ -1054,9 +1055,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 							return;
 						}
 						this.customTranscriptionModelProvider = null;
-						this.clearDeferredSaveTimers();
-						this.plugin.settings.offlineTranscription.model = value;
-						await this.plugin.saveSettings();
+						const timer = this.deferredSaveTimers.get("transcription-custom-model");
+						if (timer !== undefined) window.clearTimeout(timer);
+						this.deferredSaveTimers.delete("transcription-custom-model");
+						try {
+							await this.saveSiliconFlowModel(value);
+						} catch (error) {
+							new Notice(`模型保存失败：${getSanitizedErrorMessage(error)}`);
+						}
 						this.refreshSettings();
 					});
 			});
@@ -1068,8 +1074,14 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.addButton((button) => button
 						.setButtonText("恢复提醒")
 						.onClick(async () => {
+							button.setDisabled(true);
 							this.plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = false;
-							await this.plugin.saveSettings();
+							try {
+								await this.plugin.saveSettings();
+							} catch (error) {
+								this.plugin.settings.siliconflowSenseVoiceUpgradeNoticeDismissed = true;
+								new Notice(`提醒设置保存失败：${getSanitizedErrorMessage(error)}`);
+							}
 							this.refreshSettings();
 						}));
 			}
@@ -1084,8 +1096,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					this.bindDeferredTextSave(customModelSetting, "transcription-custom-model", text.inputEl, async (value) => {
 						this.customTranscriptionModelProvider = "siliconflow";
 						if (!text.inputEl.isConnected) return;
-						this.plugin.settings.offlineTranscription.model = value;
-						await this.plugin.saveSettings();
+						await this.saveSiliconFlowModel(value);
 					}, (value) => value ? undefined : "模型 ID 不能为空。");
 					return text;
 				});
@@ -3066,6 +3077,21 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 		if (session.step === "api-key") {
 			this.closeSettingsGuide(true);
+		}
+	}
+
+	private async saveSiliconFlowModel(value: string): Promise<void> {
+		const generation = ++this.siliconFlowModelWriteGeneration;
+		const previous = this.plugin.settings.offlineTranscription.model;
+		const baseUrl = this.plugin.settings.offlineTranscription.baseUrl;
+		this.plugin.settings.offlineTranscription.model = value;
+		try {
+			await this.plugin.saveSettings();
+		} catch (error) {
+			const current = this.plugin.settings.offlineTranscription;
+			if (generation === this.siliconFlowModelWriteGeneration && current.provider === "siliconflow" &&
+				current.baseUrl === baseUrl && current.model === value) current.model = previous;
+			throw error;
 		}
 	}
 

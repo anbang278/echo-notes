@@ -8,7 +8,6 @@ import {
 	mkdtemp,
 	readFile,
 	readdir,
-	realpath,
 	rm,
 	stat,
 	writeFile
@@ -25,9 +24,6 @@ import { verifyCoreRecordingStorage, verifyRecordingStorageSettings } from "./ve
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, "..");
 const PLUGIN_ID = "echo-notes";
-const TEST_VAULT = path.resolve(
-	process.env.ECHO_NOTES_TEST_VAULT ?? path.resolve(PROJECT_ROOT, "../..")
-);
 const OBSIDIAN_BINARY = path.resolve(
 	process.env.OBSIDIAN_BINARY_PATH ?? "/Applications/Obsidian.app/Contents/MacOS/Obsidian"
 );
@@ -187,32 +183,14 @@ async function findLatestObsidianAsar() {
 }
 
 async function validateWorkspace() {
+	// 自动验证只读取当前工程产物；人工安装目录和真实 Vault 配置不参与前置检查。
 	const manifestPath = path.join(PROJECT_ROOT, "manifest.json");
-	const pluginInstallPath = path.join(TEST_VAULT, ".obsidian/plugins", PLUGIN_ID);
-	const communityPluginsPath = path.join(TEST_VAULT, ".obsidian/community-plugins.json");
-
 	await Promise.all([
 		requirePath(OBSIDIAN_BINARY, "Obsidian 可执行文件"),
 		requirePath(manifestPath, "插件 manifest"),
 		requirePath(path.join(PROJECT_ROOT, "main.js"), "插件构建产物 main.js"),
-		requirePath(path.join(PROJECT_ROOT, "styles.css"), "插件样式 styles.css"),
-		requirePath(pluginInstallPath, "测试 Vault 插件目录"),
-		requirePath(communityPluginsPath, "测试 Vault 插件启用列表")
+		requirePath(path.join(PROJECT_ROOT, "styles.css"), "插件样式 styles.css")
 	]);
-
-	const [projectRealPath, installRealPath] = await Promise.all([
-		realpath(PROJECT_ROOT),
-		realpath(pluginInstallPath)
-	]);
-	assert(
-		projectRealPath === installRealPath,
-		`测试 Vault 的 ${PLUGIN_ID} 未指向当前工程：${pluginInstallPath}`
-	);
-
-	const enabledPlugins = JSON.parse(await readFile(communityPluginsPath, "utf8"));
-	assert(Array.isArray(enabledPlugins), `${communityPluginsPath} 必须是 JSON 数组`);
-	assert(enabledPlugins.includes(PLUGIN_ID), `测试 Vault 尚未启用 ${PLUGIN_ID}`);
-
 	return JSON.parse(await readFile(manifestPath, "utf8"));
 }
 
@@ -2452,6 +2430,33 @@ async function verifyTabRelationships(page) {
 	assert(result.invalidTablists.length === 0, `Tablist 选中状态无效：${result.invalidTablists.join(" | ")}`);
 }
 
+async function verifySiliconFlowSettingsSaveFailure(page) {
+	const result = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const original = JSON.parse(JSON.stringify(plugin.settings));
+		const save = plugin.saveSettings;
+		try {
+			plugin.settings.offlineTranscription.provider = "siliconflow";
+			plugin.settings.offlineTranscription.model = "FunAudioLLM/SenseVoiceSmall";
+			plugin.saveSettings = async () => { throw new Error("模型设置失败注入"); };
+			try { await plugin.settingTab.saveSiliconFlowModel("Qwen/Qwen3-ASR-1.7B"); } catch { /* 预期失败。 */ }
+			const rolledBack = plugin.settings.offlineTranscription.model === "FunAudioLLM/SenseVoiceSmall";
+			let rejectFirst;
+			let call = 0;
+			plugin.saveSettings = () => ++call === 1 ? new Promise((_resolve, reject) => { rejectFirst = reject; }) : Promise.resolve();
+			const first = plugin.settingTab.saveSiliconFlowModel("Qwen/Qwen3-ASR-1.7B").catch(() => undefined);
+			await plugin.settingTab.saveSiliconFlowModel("XingChenAGI/XingChenGSR-V1.0");
+			rejectFirst(new Error("旧请求迟到失败"));
+			await first;
+			return { rolledBack, newerPreserved: plugin.settings.offlineTranscription.model === "XingChenAGI/XingChenGSR-V1.0" };
+		} finally {
+			plugin.settings = original;
+			plugin.saveSettings = save;
+		}
+	}, PLUGIN_ID);
+	assert(result.rolledBack && result.newerPreserved, "模型保存失败必须回滚自身，不能覆盖较新选择");
+}
+
 async function verifySiliconFlowMockChain(page, mock) {
 	const models = [
 		"Qwen/Qwen3-ASR-1.7B",
@@ -2581,7 +2586,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 			);
 		}, { pluginId: PLUGIN_ID, paths: ["SiliconFlow 本地 Mock 5.wav", "SiliconFlow 本地 Mock 7.wav", missingFilePath] });
 		await page.locator(".echo-notes-siliconflow-upgrade-modal").waitFor();
-		await page.locator(".echo-notes-siliconflow-upgrade-modal").getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(".echo-notes-siliconflow-upgrade-modal").getByRole("button", { name: "一键更换并转写" }).click();
 		await Promise.race([
 			page.evaluate(() => window.__echoNotesMockBatchPending),
 			new Promise((_, reject) => setTimeout(() => reject(new Error("三文件最终模型重检未完成")), 15_000))
@@ -2671,7 +2676,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 		const upgradedFailureCallCount = mock.calls.length;
 		audioPath = await createFileAndStart(models[4], 10);
 		await page.locator(".echo-notes-siliconflow-upgrade-modal").waitFor();
-		await page.locator(".echo-notes-siliconflow-upgrade-modal").getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(".echo-notes-siliconflow-upgrade-modal").getByRole("button", { name: "一键更换并转写" }).click();
 		outcome = await resultFor(audioPath);
 		assert(mock.calls.length === upgradedFailureCallCount + 1 && mock.calls.at(-1)?.model === models[0] &&
 			outcome.task?.status === "failed" && outcome.task.model === models[0] &&
@@ -2789,7 +2794,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 		await open();
 		await page.locator(selector).waitFor();
 		await page.locator(selector).locator(`input[value="${modelId}"]`).check();
-		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).click();
 		const decision = await result();
 		assert(decision?.kind === "switch" && decision.modelId === modelId,
 			`升级提醒未返回所选模型：${modelId}`);
@@ -2837,7 +2842,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 		await page.locator(selector).getByText("正在保存…").waitFor();
 		assert(await page.locator(selector).locator("button, input").evaluateAll((elements) => elements.every((element) => element.disabled)),
 			"保存中必须禁用全部候选和操作按钮");
-		await page.locator(selector).getByRole("button", { name: "保存并继续" }).dispatchEvent("click");
+		await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).dispatchEvent("click");
 		await page.locator(selector).getByRole("button", { name: "不再提醒" }).dispatchEvent("click");
 		assert(await page.evaluate(() => window.__echoNotesSaveCallCount) === 1, "保存中重复操作不得触发第二次设置保存");
 		await page.keyboard.press("Escape");
@@ -2878,7 +2883,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 		plugin.settings.offlineTranscription.model = "外部修改的模型/ID";
 	}, PLUGIN_ID);
 	try {
-		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).click();
 		await page.locator(selector).getByText(/转写配置已变化/).waitFor();
 		assert(await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.model, PLUGIN_ID) ===
 			"外部修改的模型/ID", "旧草稿不能覆盖弹窗等待期间的新配置");
@@ -2898,7 +2903,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 		plugin.settings.offlineTranscription.baseUrl = "http://127.0.0.1:12345";
 	}, PLUGIN_ID);
 	try {
-		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).click();
 		await page.locator(selector).getByText(/转写配置已变化/).waitFor();
 		await page.locator(selector).getByRole("button", { name: "本次关闭" }).click();
 		assert((await result())?.kind === "close", "Base URL 变化后不能提交旧弹窗的模型选择");
@@ -2944,7 +2949,7 @@ async function verifySiliconFlowUpgradeModal(page) {
 			};
 		}, { pluginId: PLUGIN_ID, filePath: gateFilePath });
 		assert(before.tasks === 0 && !before.transcript, "gate 等待期间不应创建 running 任务或转写稿");
-		await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+		await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).click();
 		const after = await page.evaluate(async (pluginId) => {
 			const result = await window.__echoNotesGateResult;
 			return {
@@ -3059,7 +3064,7 @@ async function verifySiliconFlowUpgradeUnload(page) {
 		return plugin.settings.offlineTranscription.model;
 	}, PLUGIN_ID);
 	await page.locator(selector).waitFor();
-	await page.locator(selector).getByRole("button", { name: "保存并继续" }).click();
+	await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).click();
 	await page.locator(selector).getByText("正在保存…").waitFor();
 	await page.evaluate(async (pluginId) => {
 		await window.app.plugins.disablePlugin(pluginId);
@@ -6140,7 +6145,8 @@ try {
 		pluginVersion: manifest.version,
 		runtimePluginVersion: runtimeState.pluginVersion,
 		obsidianVersion: obsidianAsar.version,
-		sourceTestVault: TEST_VAULT,
+		sourceProjectRoot: PROJECT_ROOT,
+		validationEnvironment: "isolated-temporary-vault",
 		generatedAt: new Date().toISOString(),
 		durationMs: Date.now() - verificationStartedAt,
 		semanticChecks: {

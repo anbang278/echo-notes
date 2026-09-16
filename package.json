@@ -1,6 +1,6 @@
 {
 	"name": "echo-notes",
-	"version": "0.4.26",
+	"version": "0.4.28",
 	"description": "Echo Notes Obsidian plugin MVP",
 	"main": "main.js",
 	"scripts": {
@@ -18,7 +18,9 @@
 		"verify:prototype": "node scripts/verify-design-prototype.mjs",
 		"verify": "node scripts/run-verification.mjs",
 		"package": "npm run verify && node scripts/package-release.mjs",
-		"test": "node scripts/run-tests.mjs"
+		"test": "node scripts/run-tests.mjs && npm run test:install",
+		"test-install": "node scripts/test-install.mjs",
+		"test:install": "node --test tests/test-install-tests.mjs"
 	},
 	"keywords": [
 		"obsidian",

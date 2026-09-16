@@ -1,12 +1,20 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { sourceState, fileHashes, writeJson, same, REQUIRED_STEP_IDS, assertFullVerificationMode } from "./lib/delivery-evidence.mjs";
+
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, "..");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+
+const evidencePath = path.join(PROJECT_ROOT, "output/verification/latest.json");
+await rm(evidencePath, { force: true });
+assertFullVerificationMode(process.env);
+const initialSource = await sourceState(PROJECT_ROOT);
+const startedAt = new Date().toISOString();
 
 const [packageJson, packageLock, manifest, versions] = await Promise.all([
 	readJson("package.json"),
@@ -88,6 +96,13 @@ for (const [index, step] of steps.entries()) {
 	console.log(`\n[常规验证 ${index + 1}/${steps.length}] ${step.label}`);
 	await run(step.command, step.args);
 }
+const finalSource = await sourceState(PROJECT_ROOT);
+if (!same(initialSource, finalSource)) throw new Error("验证期间源码发生变化，不能生成通过证据");
+await writeJson(evidencePath, {
+ schemaVersion: 1, status: "PASS", startedAt, finishedAt: new Date().toISOString(),
+ version: releaseVersion, source: finalSource, fileHashes: await fileHashes(PROJECT_ROOT),
+ steps: steps.map((step, index) => ({ id: REQUIRED_STEP_IDS[index], command: [step.command, ...step.args].join(" "), exitCode: 0 }))
+});
 console.log(`\nEcho Notes ${releaseVersion} 常规完整验证全部通过。`);
 
 async function readJson(fileName) {

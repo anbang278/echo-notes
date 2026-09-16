@@ -8,7 +8,6 @@ import {
 	mkdtemp,
 	readFile,
 	readdir,
-	realpath,
 	rm,
 	stat,
 	writeFile
@@ -23,7 +22,6 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const pluginId = "echo-notes";
 const menuTitle = "转写当前笔记音频";
-const testVault = path.resolve(process.env.ECHO_NOTES_TEST_VAULT ?? path.resolve(projectRoot, "../.."));
 const obsidianBinary = path.resolve(
 	process.env.OBSIDIAN_BINARY_PATH ?? "/Applications/Obsidian.app/Contents/MacOS/Obsidian"
 );
@@ -63,24 +61,14 @@ async function requirePath(targetPath, description) {
 }
 
 async function validateWorkspace() {
+	// 自动验证只读取当前工程产物；人工安装目录和真实 Vault 配置不参与前置检查。
 	const manifestPath = path.join(projectRoot, "manifest.json");
-	const pluginInstallPath = path.join(testVault, ".obsidian/plugins", pluginId);
-	const communityPluginsPath = path.join(testVault, ".obsidian/community-plugins.json");
 	await Promise.all([
 		requirePath(obsidianBinary, "Obsidian 可执行文件"),
-		requirePath(path.join(projectRoot, "main.js"), "插件构建产物 main.js"),
-		requirePath(path.join(projectRoot, "styles.css"), "插件样式 styles.css"),
 		requirePath(manifestPath, "插件 manifest"),
-		requirePath(pluginInstallPath, "测试 Vault 插件目录"),
-		requirePath(communityPluginsPath, "测试 Vault 插件启用列表")
+		requirePath(path.join(projectRoot, "main.js"), "插件构建产物 main.js"),
+		requirePath(path.join(projectRoot, "styles.css"), "插件样式 styles.css")
 	]);
-	const [projectRealPath, installRealPath] = await Promise.all([
-		realpath(projectRoot),
-		realpath(pluginInstallPath)
-	]);
-	assert(projectRealPath === installRealPath, `测试 Vault 的 ${pluginId} 未指向当前工程`);
-	const enabledPlugins = JSON.parse(await readFile(communityPluginsPath, "utf8"));
-	assert(Array.isArray(enabledPlugins) && enabledPlugins.includes(pluginId), `测试 Vault 尚未启用 ${pluginId}`);
 	return JSON.parse(await readFile(manifestPath, "utf8"));
 }
 
@@ -692,7 +680,8 @@ try {
 		pluginVersion: manifest.version,
 		runtimePluginVersion: runtimeVersion,
 		obsidianVersion: obsidianAsar.version,
-		sourceTestVault: testVault,
+		sourceProjectRoot: projectRoot,
+		validationEnvironment: "isolated-temporary-vault",
 		externalAudioUploads: 0,
 		localMockRequests: transcriptionMock.calls.length,
 		checks: {
