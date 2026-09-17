@@ -1756,9 +1756,11 @@ button.echo-notes-transcription-context-switch:focus-visible {
 	cursor: default;
 }
 
-.echo-notes-transcription-context-empty {
-	color: var(--text-muted);
+.echo-notes-transcription-context-current {
+	flex: 0 0 auto;
+	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
 }
 
 .echo-notes-transcription-context-details {
@@ -1860,9 +1862,9 @@ button.echo-notes-transcription-context-switch:focus-visible {
 
 .echo-notes-settings-capability-tabs {
 	display: grid;
-	grid-template-columns: repeat(6, minmax(0, 1fr));
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 8px;
-	margin-bottom: 14px;
+	margin-bottom: 26px;
 }
 
 button.echo-notes-settings-capability-tab {
@@ -1871,9 +1873,9 @@ button.echo-notes-settings-capability-tab {
 	flex-direction: column;
 	grid-column: span 2;
 	min-width: 0;
-	min-height: 96px;
-	height: auto;
-	padding: 12px;
+	min-height: 46px;
+	height: 46px;
+	padding: 10px 12px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	box-shadow: none;
@@ -1884,7 +1886,7 @@ button.echo-notes-settings-capability-tab {
 }
 
 button.echo-notes-settings-capability-tab:nth-child(n + 4) {
-	grid-column: span 3;
+	grid-column: auto;
 }
 
 button.echo-notes-settings-capability-tab:hover {
@@ -1895,7 +1897,10 @@ button.echo-notes-settings-capability-tab:hover {
 
 button.echo-notes-settings-capability-tab.is-active {
 	border-color: var(--interactive-accent);
-	background: var(--background-secondary);
+	border-left: 3px solid var(--interactive-accent);
+	padding-left: 10px;
+	background: color-mix(in srgb, var(--interactive-accent) 11%, var(--background-primary));
+	color: var(--text-accent);
 }
 
 button.echo-notes-settings-capability-tab:focus-visible {
@@ -1931,8 +1936,9 @@ button.echo-notes-settings-capability-tab:focus-visible {
 
 .echo-notes-settings-capability-panel {
 	min-width: 0;
-	padding: 4px 16px 8px;
+	padding: 0 18px 20px;
 	border: 1px solid var(--background-modifier-border);
+	border-top: 3px solid var(--interactive-accent);
 	border-radius: 8px;
 	background: var(--background-primary);
 }
@@ -1946,7 +1952,14 @@ button.echo-notes-settings-capability-tab:focus-visible {
 }
 
 .echo-notes-settings-capability-panel-heading.setting-item {
-	padding-top: 14px;
+	margin: 0 -18px 0;
+	padding: 18px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: color-mix(in srgb, var(--interactive-accent) 11%, var(--background-primary));
+}
+
+.echo-notes-settings-capability-panel-heading .setting-item-name {
+	color: var(--text-accent);
 }
 
 .echo-notes-settings-fusion-callout,
@@ -1979,29 +1992,33 @@ button.echo-notes-settings-capability-tab:focus-visible {
 
 @container echo-notes-settings-panel (max-width: 940px) {
 	.echo-notes-settings-capability-tabs {
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-	}
-
-	button.echo-notes-settings-capability-tab,
-	button.echo-notes-settings-capability-tab:nth-child(n + 4) {
-		grid-column: span 1;
-	}
-
-	button.echo-notes-settings-capability-tab:last-child {
-		grid-column: 1 / -1;
-	}
-}
-
-@container echo-notes-settings-panel (max-width: 620px) {
-	.echo-notes-settings-capability-tabs {
-		grid-template-columns: minmax(0, 1fr);
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 	}
 
 	button.echo-notes-settings-capability-tab,
 	button.echo-notes-settings-capability-tab:nth-child(n + 4),
 	button.echo-notes-settings-capability-tab:last-child {
-		grid-column: 1;
-		min-height: 44px;
+		grid-column: auto;
+	}
+}
+
+@container echo-notes-settings-panel (max-width: 620px) {
+	.echo-notes-settings-capability-tabs {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+
+	button.echo-notes-settings-capability-tab,
+	button.echo-notes-settings-capability-tab:nth-child(n + 4),
+	button.echo-notes-settings-capability-tab:last-child {
+		grid-column: auto;
+		min-height: 58px;
+		height: auto;
+	}
+
+	.echo-notes-settings-capability-tab-title {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 2px;
 	}
 
 	.echo-notes-settings-capabilities-heading {

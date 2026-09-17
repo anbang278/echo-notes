@@ -2395,11 +2395,15 @@ async function verifyTabRelationships(page) {
 			const controls = tab.getAttribute("aria-controls");
 			const panel = controls ? document.getElementById(controls) : null;
 			const selected = tab.getAttribute("aria-selected") === "true";
+			const isCapabilityTab = tab.closest(".echo-notes-settings-capability-tabs") !== null;
+			const hasValidRelationship = isCapabilityTab
+				? panel?.getAttribute("aria-labelledby") === tab.closest('[role="tablist"]')?.querySelector('[role="tab"][aria-selected="true"]')?.id
+				: panel?.getAttribute("aria-labelledby") === tab.id;
 			if (
 				!tab.id ||
 				!panel ||
 				panel.getAttribute("role") !== "tabpanel" ||
-				panel.getAttribute("aria-labelledby") !== tab.id ||
+				!hasValidRelationship ||
 				tab.tabIndex !== (selected ? 0 : -1)
 			) {
 				invalidTabs.push(tab.textContent?.trim() || "未命名 Tab");
@@ -3248,7 +3252,7 @@ async function verifyTabs(page) {
 	const serviceContext = activePanel.locator('.echo-notes-transcription-context');
 	assert(await serviceContext.locator('.echo-notes-transcription-context-provider').count() === 1, "当前服务卡缺少服务商主信息");
 	assert(await serviceContext.locator('.echo-notes-transcription-context-model').count() === 1, "当前服务卡缺少模型主信息");
-	assert(await serviceContext.locator('.echo-notes-transcription-context-mode').count() === 1, "当前服务卡缺少转写模式标签");
+	assert(await serviceContext.locator('.echo-notes-transcription-context-current').count() === 1, "当前服务卡缺少当前模型标识");
 	assert(await serviceContext.getByRole("button", { name: "切换服务", exact: true }).count() === 1, "当前服务信息栏缺少切换服务入口");
 	assert(await serviceContext.locator('.echo-notes-transcription-context-chip, .echo-notes-transcription-context-details').count() === 0,
 		"当前服务信息栏不应继续展示能力 Tag 或技术详情");
@@ -3258,7 +3262,14 @@ async function verifyTabs(page) {
 			JSON.stringify(["快捷键配置", "融合转写", "说话人分离", "术语增强", "上下文增强"]),
 		"能力增强未按固定五卡顺序组织"
 	);
-	assert(await activePanel.locator('.echo-notes-settings-capability-panel:not([hidden])').count() === 1, "能力增强应只显示一个活动配置面板");
+	assert(await capabilityTabs.locator('.echo-notes-settings-capability-tab-description').count() === 0, "V6 能力入口不应包含描述段落");
+	assert(await activePanel.locator('.echo-notes-settings-capability-panel').count() === 1, "V6 应复用单一详情容器");
+	assert(await capabilityTabs.evaluateAll((tabs) => tabs.every((tab) => tab.getAttribute("aria-controls") === tabs[0]?.getAttribute("aria-controls"))), "能力入口应关联同一详情容器");
+	assert(await capabilityTabs.evaluateAll((tabs) => {
+		const firstRow = tabs.slice(0, 3).map((tab) => tab.getBoundingClientRect());
+		return firstRow.length === 3 && firstRow.every((rect) => Math.abs(rect.width - firstRow[0].width) <= 1) &&
+			new Set(firstRow.map((rect) => Math.round(rect.top))).size === 1;
+	}), "能力入口应保持三列等宽布局");
 	assert(await capabilityTabs.first().getAttribute("aria-selected") === "true", "首次进入能力增强应默认选择快捷键配置");
 	await capabilityTabs.first().press("ArrowRight");
 	await page.waitForFunction(() => document.querySelector('[data-capability-tab="fusion"]')?.getAttribute("aria-selected") === "true");

@@ -1270,7 +1270,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const capabilityViews = this.getTranscriptionCapabilityViews(config, capability);
 		const renderId = this.settingsRenderSequence;
 
-		this.renderTranscriptionServiceContext(containerEl, config, mode);
+		this.renderTranscriptionServiceContext(containerEl, config);
 
 		const headingEl = containerEl.createDiv({ cls: "echo-notes-settings-capabilities-heading" });
 		const headingCopyEl = headingEl.createDiv();
@@ -1322,11 +1322,27 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			const commitActivation = (): void => {
 				this.stopActiveHotkeyCapture?.();
 				this.activeTranscriptionCapability = id;
-				this.refreshSettings();
-				if (moveFocus) {
-					window.requestAnimationFrame(() => this.settingsContainerEl
-						?.querySelector<HTMLButtonElement>(`[data-capability-tab="${id}"]`)?.focus());
+				const panelEl = containerEl.querySelector<HTMLElement>(".echo-notes-settings-capability-panel:not([hidden])");
+				if (!panelEl) {
+					this.refreshSettings();
+					return;
 				}
+				const scrollTop = this.settingsContainerEl?.scrollTop ?? 0;
+				panelEl.empty();
+				panelEl.id = `echo-notes-settings-capability-panel-${renderId}-${id}`;
+				panelEl.setAttribute("aria-labelledby", `echo-notes-settings-capability-tab-${renderId}-${id}`);
+				for (const tabEl of Array.from(tabsEl.querySelectorAll<HTMLButtonElement>("[data-capability-tab]"))) {
+					const selected = tabEl.dataset.capabilityTab === id;
+					tabEl.toggleClass("is-active", selected);
+					tabEl.setAttribute("aria-selected", String(selected));
+					tabEl.tabIndex = selected ? 0 : -1;
+					tabEl.setAttribute("aria-controls", panelEl.id);
+				}
+				this.renderTranscriptionCapabilityPanel(panelEl, id, config, capability);
+				window.requestAnimationFrame(() => {
+					if (this.settingsContainerEl) this.settingsContainerEl.scrollTop = scrollTop;
+					if (moveFocus) tabsEl.querySelector<HTMLButtonElement>(`[data-capability-tab="${id}"]`)?.focus({ preventScroll: true });
+				});
 			};
 			const activeInput = document.activeElement instanceof HTMLInputElement ? document.activeElement : null;
 			if (!activeInput) {
@@ -1360,7 +1376,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			const titleEl = buttonEl.createDiv({ cls: "echo-notes-settings-capability-tab-title" });
 			titleEl.createSpan({ text: definition.label });
 			titleEl.createSpan({ cls: "echo-notes-settings-capability-tab-state", text: definition.state });
-			buttonEl.createDiv({ cls: "echo-notes-settings-capability-tab-description", text: definition.description });
 			buttonEl.addEventListener("click", () => activate(definition.id));
 			buttonEl.addEventListener("keydown", (event) => {
 				let target: number;
@@ -1376,25 +1391,33 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			});
 		});
 
-		for (const definition of definitions) {
-			const selected = definition.id === this.activeTranscriptionCapability;
-			const panelEl = containerEl.createEl("section", {
-				cls: "echo-notes-settings-capability-panel",
-				attr: {
-					id: `echo-notes-settings-capability-panel-${renderId}-${definition.id}`,
-					role: "tabpanel",
-					"aria-labelledby": `echo-notes-settings-capability-tab-${renderId}-${definition.id}`
-				}
-			});
-			panelEl.hidden = !selected;
-			if (!selected) continue;
-			switch (definition.id) {
-				case "shortcuts": this.renderQuickRecordingPanel(panelEl); break;
-				case "fusion": this.renderFusionTranscriptionPanel(panelEl); break;
-				case "speaker": this.renderSpeakerCapabilityPanel(panelEl, config, capability); break;
-				case "hotwords": this.renderHotwordCapabilityPanel(panelEl, config, capability); break;
-				case "context": this.renderContextCapabilityPanel(panelEl, config, capability); break;
+		const selectedDefinition = definitions.find((definition) => definition.id === this.activeTranscriptionCapability) ?? definitions[0];
+		const panelEl = containerEl.createEl("section", {
+			cls: "echo-notes-settings-capability-panel",
+			attr: {
+				id: `echo-notes-settings-capability-panel-${renderId}-${selectedDefinition.id}`,
+				role: "tabpanel",
+				"aria-labelledby": `echo-notes-settings-capability-tab-${renderId}-${selectedDefinition.id}`
 			}
+		});
+		for (const tabEl of Array.from(tabsEl.querySelectorAll<HTMLButtonElement>("[data-capability-tab]"))) {
+			tabEl.setAttribute("aria-controls", panelEl.id);
+		}
+		this.renderTranscriptionCapabilityPanel(panelEl, selectedDefinition.id, config, capability);
+	}
+
+	private renderTranscriptionCapabilityPanel(
+		containerEl: HTMLElement,
+		id: TranscriptionCapabilityId,
+		config: TranscriptionConfig,
+		capability: ReturnType<typeof getTranscriptionProviderCapability>
+	): void {
+		switch (id) {
+			case "shortcuts": this.renderQuickRecordingPanel(containerEl); break;
+			case "fusion": this.renderFusionTranscriptionPanel(containerEl); break;
+			case "speaker": this.renderSpeakerCapabilityPanel(containerEl, config, capability); break;
+			case "hotwords": this.renderHotwordCapabilityPanel(containerEl, config, capability); break;
+			case "context": this.renderContextCapabilityPanel(containerEl, config, capability); break;
 		}
 	}
 
@@ -1583,8 +1606,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 	private renderTranscriptionServiceContext(
 		containerEl: HTMLElement,
-		config: TranscriptionConfig,
-		mode: "realtime" | "offline"
+		config: TranscriptionConfig
 	): void {
 		const contextEl = containerEl.createEl("section", {
 			cls: "echo-notes-transcription-context",
@@ -1597,7 +1619,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			cls: "echo-notes-transcription-context-provider",
 			text: this.getProviderLabel(config.provider).replace(/^【[^】]+】\\s*/, "")
 		});
-		serviceEl.createSpan({ cls: "echo-notes-transcription-context-mode", text: mode === "realtime" ? "实时转写" : "离线转写" });
+		serviceEl.createSpan({ cls: "echo-notes-transcription-context-current", text: "当前模型" });
 		serviceEl.createEl("code", { cls: "echo-notes-transcription-context-model", text: config.model });
 		const switchEl = identityEl.createEl("button", { text: "切换服务", attr: { type: "button" } });
 		switchEl.addClass("echo-notes-transcription-context-switch");
