@@ -1,9 +1,13 @@
 import type { DualModelProofreadingSession } from "./proofreading";
 
-export const PROOFREADING_DATA_START = "<!-- echo-notes-proofreading-data:start -->";
-export const PROOFREADING_DATA_END = "<!-- echo-notes-proofreading-data:end -->";
+// 恢复数据必须处在同一个 HTML 注释内；分开的起止注释会让中间的编码文本被 Markdown 渲染。
+export const PROOFREADING_DATA_START = "<!-- echo-notes-proofreading-data:start\n";
+export const PROOFREADING_DATA_END = "\necho-notes-proofreading-data:end -->";
 export const PROOFREADING_READING_START = "<!-- echo-notes-proofreading-reading:start -->";
 export const PROOFREADING_READING_END = "<!-- echo-notes-proofreading-reading:end -->";
+
+const LEGACY_PROOFREADING_DATA_START = "<!-- echo-notes-proofreading-data:start -->";
+const LEGACY_PROOFREADING_DATA_END = "<!-- echo-notes-proofreading-data:end -->";
 
 export interface ProofreadingDocument {
 	readingText: string;
@@ -32,10 +36,10 @@ export function renderProofreadingBlocks(session: DualModelProofreadingSession):
 
 export function parseProofreadingDocument(content: string): ProofreadingDocument | null {
 	const reading = between(content, PROOFREADING_READING_START, PROOFREADING_READING_END);
-	const encoded = between(content, PROOFREADING_DATA_START, PROOFREADING_DATA_END);
-	if (reading === null || encoded === null) return null;
+	const data = findProofreadingData(content);
+	if (reading === null || data === null) return null;
 	try {
-		const parsed = JSON.parse(decodeURIComponent(encoded.trim())) as DualModelProofreadingSession;
+		const parsed = JSON.parse(decodeURIComponent(data.encoded.trim())) as DualModelProofreadingSession;
 		if (parsed.schemaVersion !== 2 || !parsed.sessionId || !parsed.primary?.text || !Array.isArray(parsed.issues)) return null;
 		return { readingText: reading.trim(), session: { ...parsed, readingText: reading.trim() } };
 	} catch {
@@ -45,10 +49,9 @@ export function parseProofreadingDocument(content: string): ProofreadingDocument
 
 export function replaceProofreadingBlocks(content: string, session: DualModelProofreadingSession): string | null {
 	const oldStart = content.indexOf(PROOFREADING_READING_START);
-	const oldEnd = content.indexOf(PROOFREADING_DATA_END);
-	if (oldStart < 0 || oldEnd < oldStart) return null;
-	const end = oldEnd + PROOFREADING_DATA_END.length;
-	return `${content.slice(0, oldStart)}${renderProofreadingBlocks(session)}${content.slice(end)}`;
+	const data = findProofreadingData(content);
+	if (oldStart < 0 || data === null || data.end < oldStart) return null;
+	return `${content.slice(0, oldStart)}${renderProofreadingBlocks(session)}${content.slice(data.end)}`;
 }
 
 export function extractProofreadingReadingText(content: string): string | null {
@@ -61,6 +64,18 @@ function between(content: string, startMarker: string, endMarker: string): strin
 	return start < 0 || end < start ? null : content.slice(start + startMarker.length, end);
 }
 
+function findProofreadingData(content: string): { encoded: string; end: number } | null {
+	const current = findBetweenWithEnd(content, PROOFREADING_DATA_START, PROOFREADING_DATA_END);
+	return current ?? findBetweenWithEnd(content, LEGACY_PROOFREADING_DATA_START, LEGACY_PROOFREADING_DATA_END);
+}
+
+function findBetweenWithEnd(content: string, startMarker: string, endMarker: string): { encoded: string; end: number } | null {
+	const start = content.indexOf(startMarker);
+	const end = content.indexOf(endMarker, start + startMarker.length);
+	if (start < 0 || end < start) return null;
+	return { encoded: content.slice(start + startMarker.length, end), end: end + endMarker.length };
+}
+
 function encodeSession(session: DualModelProofreadingSession): string {
-	return encodeURIComponent(JSON.stringify(session)).replace(/%/g, "%");
+	return encodeURIComponent(JSON.stringify(session));
 }

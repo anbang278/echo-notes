@@ -34,7 +34,7 @@ import {
 	undoProofreadingDecision,
 	validateDualModelConfiguration
 } from "../src/proofreading/proofreading";
-import { parseProofreadingDocument, renderProofreadingBlocks } from "../src/proofreading/proofreading-document";
+import { parseProofreadingDocument, renderProofreadingBlocks, replaceProofreadingBlocks } from "../src/proofreading/proofreading-document";
 import {
 	ANALYSIS_TEMPLATE_ORDER,
 	buildAnalysisMessages,
@@ -7143,6 +7143,21 @@ assert.match(savedDualSession.readingText, /鲨域/);
 assert.match(undoProofreadingDecision(savedDualSession, "C01").readingText, /鲨鱼/);
 const dualDocument = renderProofreadingBlocks(dualSession);
 assert.equal(parseProofreadingDocument(dualDocument)?.session.sessionId, "dual-smoke");
+assert.match(dualDocument, /<!-- echo-notes-proofreading-data:start\n[\s\S]+\necho-notes-proofreading-data:end -->/);
+const proofreadingDataStart = dualDocument.indexOf("<!-- echo-notes-proofreading-data:start");
+const proofreadingDataEncoded = dualDocument.indexOf("%7B", proofreadingDataStart);
+const proofreadingDataCommentEnd = dualDocument.indexOf("-->", proofreadingDataStart);
+assert.ok(proofreadingDataEncoded > proofreadingDataStart && proofreadingDataEncoded < proofreadingDataCommentEnd, "恢复数据必须位于同一个 HTML 注释内");
+const legacyDualDocument = [
+	"<!-- echo-notes-proofreading-reading:start -->",
+	dualSession.readingText,
+	"<!-- echo-notes-proofreading-reading:end -->",
+	"<!-- echo-notes-proofreading-data:start -->",
+	encodeURIComponent(JSON.stringify(dualSession)),
+	"<!-- echo-notes-proofreading-data:end -->"
+].join("\n");
+assert.equal(parseProofreadingDocument(legacyDualDocument)?.session.sessionId, "dual-smoke", "已有分离注释格式仍可读取");
+assert.match(replaceProofreadingBlocks(legacyDualDocument, savedDualSession) ?? "", /<!-- echo-notes-proofreading-data:start\n/);
 assert.equal(extractTranscriptText(`---\ntype: audio-transcript\n---\n${dualDocument}`), dualSession.readingText);
 assert.equal(extractTranscriptText("<!-- echo-notes-proofreading-reading:start -->\n损坏"), "", "损坏的新格式不得回退为全文读取");
 assert.ok(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"));
