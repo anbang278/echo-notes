@@ -5550,7 +5550,8 @@ class SiliconFlowModelUpgradeModal extends Modal {
 			const heading = cardTop.createDiv({ cls: "echo-notes-siliconflow-model-card-heading" });
 			const icon = heading.createSpan({ cls: "echo-notes-siliconflow-model-card-icon" });
 			setIcon(icon, detail.icon);
-			heading.createEl("strong", { text: detail.title });
+			const cardTitle = option.priceLabel ? `${option.priceLabel}${detail.title}` : detail.title;
+			heading.createEl("strong", { text: cardTitle });
 			cardTop.createSpan({ cls: "echo-notes-siliconflow-model-radio-mark", attr: { "aria-hidden": "true" } });
 			card.createDiv({ cls: "echo-notes-siliconflow-model-option-description", text: detail.description });
 			if (detail.note) card.createDiv({ cls: "echo-notes-siliconflow-model-option-note", text: detail.note });
