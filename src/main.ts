@@ -158,7 +158,6 @@ import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
 import { createDualModelProofreadingSession, validateDualModelConfiguration } from "./proofreading/proofreading";
 import { requestIndependentProofreading } from "./proofreading/proofreading-provider";
-import { parseProofreadingDocument } from "./proofreading/proofreading-document";
 import { ProofreadingReviewModal } from "./proofreading/proofreading-review-modal";
 import {
 	SILICONFLOW_SENSEVOICE_MODEL_ID,
@@ -2545,7 +2544,7 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		const content = await this.app.vault.cachedRead(transcriptFile);
-		const document = parseProofreadingDocument(content);
+		const document = await this.transcriptService.getProofreadingDocument(transcriptFile, content);
 		if (!document) {
 			new Notice("当前文件没有完整的双模型校对记录，或记录已被手动修改。不会覆盖现有内容。");
 			return;

@@ -20,8 +20,15 @@ import {
 	isReusableTranscriptForAudio
 } from "./transcript-source-metadata";
 import { createTranscriptBackupPath, mergeManagedTranscriptDocument } from "./transcript-content";
-import { renderProofreadingBlocks, replaceProofreadingBlocks } from "../proofreading/proofreading-document";
+import {
+	extractProofreadingReadingText,
+	parseProofreadingDocument,
+	renderProofreadingBlocks,
+	replaceProofreadingBlocks,
+	type ProofreadingDocument
+} from "../proofreading/proofreading-document";
 import type { DualModelProofreadingSession } from "../proofreading/proofreading";
+import { ProofreadingSessionStore } from "../proofreading/proofreading-session-store";
 import {
 	createTranscriptionCheckpoint,
 	readResumableTranscriptionSegments,
@@ -32,11 +39,13 @@ export class TranscriptService {
 	private app: App;
 	private settings: EchoNotesSettings;
 	private fileService: FileService;
+	private proofreadingSessions: ProofreadingSessionStore;
 
 	constructor(app: App, settings: EchoNotesSettings) {
 		this.app = app;
 		this.settings = settings;
 		this.fileService = new FileService(app);
+		this.proofreadingSessions = new ProofreadingSessionStore(app, "echo-notes");
 	}
 
 	getTranscriptPath(audioFile: TFile): string {
@@ -113,6 +122,7 @@ export class TranscriptService {
 		session: DualModelProofreadingSession
 	): Promise<TFile> {
 		const transcriptPath = this.getTranscriptPath(audioFile);
+		await this.proofreadingSessions.save(transcriptPath, session);
 		const base = renderTranscriptTemplate({
 			app: this.app, audioFile, transcriptPath, sourceNote, result,
 			copyLanguage: this.settings.copyLanguage, speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle
@@ -122,6 +132,7 @@ export class TranscriptService {
 	}
 
 	async saveProofreadingSession(transcriptFile: TFile, session: DualModelProofreadingSession): Promise<void> {
+		await this.proofreadingSessions.save(transcriptFile.path, session);
 		let replaced = false;
 		await this.app.vault.process(transcriptFile, (content) => {
 			const next = replaceProofreadingBlocks(content, session);
@@ -130,6 +141,26 @@ export class TranscriptService {
 			return next;
 		});
 		if (!replaced) throw new Error("校对记录已损坏或被删除，已停止写入以保护人工内容。");
+	}
+
+	async getProofreadingDocument(transcriptFile: TFile, content: string): Promise<ProofreadingDocument | null> {
+		const readingText = extractProofreadingReadingText(content);
+		if (readingText === null) return null;
+		const storedSession = await this.proofreadingSessions.load(transcriptFile.path);
+		if (storedSession) return { readingText, session: { ...storedSession, readingText } };
+
+		const legacy = parseProofreadingDocument(content);
+		if (!legacy) return null;
+		await this.proofreadingSessions.save(transcriptFile.path, legacy.session);
+		let migrated = false;
+		await this.app.vault.process(transcriptFile, (currentContent) => {
+			const next = replaceProofreadingBlocks(currentContent, legacy.session);
+			if (next === null) return currentContent;
+			migrated = true;
+			return next;
+		});
+		if (!migrated) throw new Error("旧版校对记录无法安全迁移，已保留原笔记。");
+		return { readingText, session: { ...legacy.session, readingText } };
 	}
 
 	async writeTranscribingTranscript(

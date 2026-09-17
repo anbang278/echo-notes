@@ -34,7 +34,13 @@ import {
 	undoProofreadingDecision,
 	validateDualModelConfiguration
 } from "../src/proofreading/proofreading";
-import { parseProofreadingDocument, renderProofreadingBlocks, replaceProofreadingBlocks } from "../src/proofreading/proofreading-document";
+import {
+	extractProofreadingReadingText,
+	parseProofreadingDocument,
+	renderProofreadingBlocks,
+	replaceProofreadingBlocks
+} from "../src/proofreading/proofreading-document";
+import { ProofreadingSessionStore } from "../src/proofreading/proofreading-session-store";
 import {
 	ANALYSIS_TEMPLATE_ORDER,
 	buildAnalysisMessages,
@@ -7142,12 +7148,9 @@ const savedDualSession = applyProofreadingDecision(dualSession, "C01", "auxiliar
 assert.match(savedDualSession.readingText, /鲨域/);
 assert.match(undoProofreadingDecision(savedDualSession, "C01").readingText, /鲨鱼/);
 const dualDocument = renderProofreadingBlocks(dualSession);
-assert.equal(parseProofreadingDocument(dualDocument)?.session.sessionId, "dual-smoke");
-assert.match(dualDocument, /<!-- echo-notes-proofreading-data:start\n[\s\S]+\necho-notes-proofreading-data:end -->/);
-const proofreadingDataStart = dualDocument.indexOf("<!-- echo-notes-proofreading-data:start");
-const proofreadingDataEncoded = dualDocument.indexOf("%7B", proofreadingDataStart);
-const proofreadingDataCommentEnd = dualDocument.indexOf("-->", proofreadingDataStart);
-assert.ok(proofreadingDataEncoded > proofreadingDataStart && proofreadingDataEncoded < proofreadingDataCommentEnd, "恢复数据必须位于同一个 HTML 注释内");
+assert.equal(extractProofreadingReadingText(dualDocument), dualSession.readingText);
+assert.doesNotMatch(dualDocument, /echo-notes-proofreading-data/);
+assert.equal(parseProofreadingDocument(dualDocument), null, "新稿不得再从 Markdown 读取恢复数据");
 const legacyDualDocument = [
 	"<!-- echo-notes-proofreading-reading:start -->",
 	dualSession.readingText,
@@ -7157,9 +7160,33 @@ const legacyDualDocument = [
 	"<!-- echo-notes-proofreading-data:end -->"
 ].join("\n");
 assert.equal(parseProofreadingDocument(legacyDualDocument)?.session.sessionId, "dual-smoke", "已有分离注释格式仍可读取");
-assert.match(replaceProofreadingBlocks(legacyDualDocument, savedDualSession) ?? "", /<!-- echo-notes-proofreading-data:start\n/);
+const migratedDualDocument = replaceProofreadingBlocks(legacyDualDocument, savedDualSession) ?? "";
+assert.doesNotMatch(migratedDualDocument, /echo-notes-proofreading-data/);
+assert.equal(extractProofreadingReadingText(migratedDualDocument), savedDualSession.readingText);
 assert.equal(extractTranscriptText(`---\ntype: audio-transcript\n---\n${dualDocument}`), dualSession.readingText);
 assert.equal(extractTranscriptText("<!-- echo-notes-proofreading-reading:start -->\n损坏"), "", "损坏的新格式不得回退为全文读取");
+
+const proofreadingStoreFiles = new Map<string, string>();
+const proofreadingStoreFolders = new Set<string>();
+const proofreadingStore = new ProofreadingSessionStore({
+	vault: {
+		configDir: ".obsidian",
+		adapter: {
+			exists: async (path: string) => proofreadingStoreFiles.has(path) || proofreadingStoreFolders.has(path),
+			read: async (path: string) => {
+				const value = proofreadingStoreFiles.get(path);
+				if (value === undefined) throw new Error(`缺少测试文件：${path}`);
+				return value;
+			},
+			write: async (path: string, value: string) => { proofreadingStoreFiles.set(path, value); },
+			mkdir: async (path: string) => { proofreadingStoreFolders.add(path); }
+		}
+	}
+} as never, "echo-notes");
+await proofreadingStore.save("测试/双模型.transcript.md", savedDualSession);
+assert.equal((await proofreadingStore.load("测试/双模型.transcript.md"))?.sessionId, "dual-smoke");
+assert.equal(proofreadingStoreFiles.has("测试/双模型.transcript.md"), false, "恢复数据不得写入用户 Markdown 路径");
+assert.ok([...proofreadingStoreFiles.keys()].every((path) => path.startsWith(".obsidian/plugins/echo-notes/proofreading-sessions/")));
 assert.ok(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"));
 assert.equal(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "XingChenAGI/XingChenASR-V3.2-Ultra"), null);
 console.log("Smoke tests passed.");
