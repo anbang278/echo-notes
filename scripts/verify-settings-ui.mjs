@@ -2185,6 +2185,13 @@ async function getSettingOptionValues(page, name) {
 	return selectEl.locator("option").evaluateAll((options) => options.map((option) => option.value));
 }
 
+async function getSettingOptionLabels(page, name) {
+	const settingItem = await getActiveSetting(page, name);
+	const selectEl = settingItem.locator("select:not([aria-hidden=\"true\"])");
+	assert((await selectEl.count()) === 1, `${name} 应包含一个下拉选择器`);
+	return selectEl.locator("option").evaluateAll((options) => options.map((option) => option.textContent.trim()));
+}
+
 async function getSettingTextValue(page, name) {
 	const settingItem = await getActiveSetting(page, name);
 	const inputEl = settingItem.locator('input[type="text"]');
@@ -2758,6 +2765,15 @@ async function verifySiliconFlowUpgradeModal(page) {
 	]) {
 		assert(await page.locator(selector).getByText(copy, { exact: true }).count() === 1,
 			`模型提醒缺少冻结描述文案：${copy}`);
+	}
+	for (const expectedTitle of [
+		"【0.8元/h】综合且快速",
+		"【免费】说话人分离",
+		"【免费】方言优化",
+		"【免费】语义理解矫正"
+	]) {
+		assert(await page.locator(selector).getByText(expectedTitle, { exact: true }).count() === 1,
+			`模型提醒缺少带价格的标题文案：${expectedTitle}`);
 	}
 	const radioGroup = page.locator(selector).locator('input[type="radio"]');
 	await radioGroup.first().focus();
@@ -3448,6 +3464,18 @@ async function verifyTabs(page) {
 				"__custom__"
 			]),
 		"SiliconFlow 转写模型选项不完整"
+	);
+	assert(
+		JSON.stringify(await getSettingOptionLabels(page, "转写模型")) ===
+			JSON.stringify([
+				"【0.8元/h】Qwen/Qwen3-ASR-1.7B（综合且快速）",
+				"【免费】XingChenAGI/XingChenASR-Diarize-V3.0（说话人分离）",
+				"【免费】XingChenAGI/XingChenASR-V3.2-Ultra（方言优化）",
+				"【免费】XingChenAGI/XingChenGSR-V1.0（语义理解矫正）",
+				"FunAudioLLM/SenseVoiceSmall",
+				"自定义模型"
+			]),
+		"SiliconFlow 转写模型展示名称与价格标签不符合要求"
 	);
 	for (const advancedSettingName of ["Base URL", "默认转写语言", "自定义语言代码"]) {
 		const advancedSetting = await getActiveSetting(page, advancedSettingName);

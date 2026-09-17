@@ -392,6 +392,12 @@ import {
 	shouldPromptSiliconFlowUpgrade
 } from "../src/providers/siliconflow-model-upgrade-policy";
 import {
+	SILICONFLOW_DEFAULT_TRANSCRIPTION_MODEL_ID,
+	SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS,
+	formatSiliconFlowModelDisplayLabel,
+	getSiliconFlowModelOption
+} from "../src/providers/siliconflow-model-catalog";
+import {
 	renderFailedTranscriptTemplate,
 	renderProgressTranscriptTemplate,
 	renderTranscriptTemplate,
@@ -3930,6 +3936,33 @@ assert.equal(normalizeEchoNotesSettings({ siliconflowSenseVoiceUpgradeNoticeDism
 for (const value of [undefined, null, "true", 1, false]) {
 	assert.equal(normalizeEchoNotesSettings({ siliconflowSenseVoiceUpgradeNoticeDismissed: value }).siliconflowSenseVoiceUpgradeNoticeDismissed, false);
 }
+
+assert.equal(SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS.length, 5);
+const qwenOption = getSiliconFlowModelOption("Qwen/Qwen3-ASR-1.7B");
+assert.ok(qwenOption);
+assert.equal(qwenOption?.priceLabel, "【0.8元/h】");
+assert.equal(formatSiliconFlowModelDisplayLabel(qwenOption!), "【0.8元/h】Qwen/Qwen3-ASR-1.7B（综合且快速）");
+
+const diarizeOption = getSiliconFlowModelOption("XingChenAGI/XingChenASR-Diarize-V3.0");
+assert.ok(diarizeOption);
+assert.equal(diarizeOption?.priceLabel, "【免费】");
+assert.equal(formatSiliconFlowModelDisplayLabel(diarizeOption!), "【免费】XingChenAGI/XingChenASR-Diarize-V3.0（说话人分离）");
+
+const dialectOption = getSiliconFlowModelOption("XingChenAGI/XingChenASR-V3.2-Ultra");
+assert.ok(dialectOption);
+assert.equal(dialectOption?.priceLabel, "【免费】");
+assert.equal(formatSiliconFlowModelDisplayLabel(dialectOption!), "【免费】XingChenAGI/XingChenASR-V3.2-Ultra（方言优化）");
+
+const gsrOption = getSiliconFlowModelOption("XingChenAGI/XingChenGSR-V1.0");
+assert.ok(gsrOption);
+assert.equal(gsrOption?.priceLabel, "【免费】");
+assert.equal(formatSiliconFlowModelDisplayLabel(gsrOption!), "【免费】XingChenAGI/XingChenGSR-V1.0（语义理解矫正）");
+
+const senseVoiceOption = getSiliconFlowModelOption(SILICONFLOW_DEFAULT_TRANSCRIPTION_MODEL_ID);
+assert.ok(senseVoiceOption);
+assert.equal(senseVoiceOption?.priceLabel, undefined);
+assert.equal(formatSiliconFlowModelDisplayLabel(senseVoiceOption!), "FunAudioLLM/SenseVoiceSmall");
+
 assert.equal(DEFAULT_SETTINGS.redactTranscriptBeforeAnalysis, false);
 
 assert.equal(ANALYSIS_PROVIDER_DEFAULTS.deepseek.analysisBaseUrl, "https://api.deepseek.com/v1");

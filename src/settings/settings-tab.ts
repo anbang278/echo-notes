@@ -17,6 +17,7 @@ import {
 	SILICONFLOW_LEGACY_TELESPEECH_MODEL_ID,
 	SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS,
 	SILICONFLOW_TRANSCRIPTION_MODELS,
+	formatSiliconFlowModelDisplayLabel,
 	getSiliconFlowModelOption
 } from "../providers/siliconflow-model-catalog";
 import { validateRecordingStorage } from "../audio/recording-storage-path";
@@ -1041,7 +1042,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			modelDescriptionEl.id = `echo-notes-siliconflow-model-description-${this.settingsRenderSequence}`;
 			modelSetting.addDropdown((dropdown) => {
 				for (const option of SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS) {
-					dropdown.addOption(option.id, option.label);
+					dropdown.addOption(option.id, formatSiliconFlowModelDisplayLabel(option));
 				}
 				dropdown.addOption("__custom__", "自定义模型");
 				dropdown.selectEl.dataset.siliconflowModelSelect = "true";
