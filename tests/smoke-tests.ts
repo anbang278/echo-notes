@@ -7187,6 +7187,10 @@ await proofreadingStore.save("测试/双模型.transcript.md", savedDualSession)
 assert.equal((await proofreadingStore.load("测试/双模型.transcript.md"))?.sessionId, "dual-smoke");
 assert.equal(proofreadingStoreFiles.has("测试/双模型.transcript.md"), false, "恢复数据不得写入用户 Markdown 路径");
 assert.ok([...proofreadingStoreFiles.keys()].every((path) => path.startsWith(".obsidian/plugins/echo-notes/proofreading-sessions/")));
+const longSessionId = `模型测试/${"很长的目录/".repeat(40)}Recording.m4a:1789639711282`;
+await proofreadingStore.save("测试/长路径.transcript.md", { ...savedDualSession, sessionId: longSessionId });
+assert.equal((await proofreadingStore.load("测试/长路径.transcript.md"))?.sessionId, longSessionId);
+assert.ok([...proofreadingStoreFiles.keys()].every((path) => path.split("/").at(-1).length <= 80), "恢复文件名不得随会话 ID 无限增长");
 assert.ok(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"));
 assert.equal(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "XingChenAGI/XingChenASR-V3.2-Ultra"), null);
 console.log("Smoke tests passed.");

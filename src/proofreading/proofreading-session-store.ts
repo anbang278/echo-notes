@@ -31,7 +31,7 @@ export class ProofreadingSessionStore {
 		const index = await this.readIndex();
 		const sessionId = index.byTranscriptPath[transcriptPath];
 		if (!sessionId) return null;
-		const stored = await this.readStoredSession(this.getSessionPath(sessionId));
+		const stored = await this.readStoredSession(await this.getSessionPath(sessionId));
 		if (!stored || stored.transcriptPath !== transcriptPath || !isValidSession(stored.session)) return null;
 		return stored.session;
 	}
@@ -41,7 +41,7 @@ export class ProofreadingSessionStore {
 		return this.enqueue(async () => {
 			await this.ensureDirectory();
 			const index = await this.readIndex();
-			await this.app.vault.adapter.write(this.getSessionPath(session.sessionId), JSON.stringify({
+			await this.app.vault.adapter.write(await this.getSessionPath(session.sessionId), JSON.stringify({
 				schemaVersion: STORE_VERSION,
 				transcriptPath,
 				session
@@ -55,8 +55,10 @@ export class ProofreadingSessionStore {
 		return `${this.directory}/index.json`;
 	}
 
-	private getSessionPath(sessionId: string): string {
-		return `${this.directory}/session-${encodeURIComponent(sessionId)}.json`;
+	private async getSessionPath(sessionId: string): Promise<string> {
+		const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sessionId));
+		const fileKey = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+		return `${this.directory}/session-${fileKey}.json`;
 	}
 
 	private async readIndex(): Promise<ProofreadingSessionIndex> {
