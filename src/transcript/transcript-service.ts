@@ -20,6 +20,8 @@ import {
 	isReusableTranscriptForAudio
 } from "./transcript-source-metadata";
 import { createTranscriptBackupPath, mergeManagedTranscriptDocument } from "./transcript-content";
+import { renderProofreadingBlocks, replaceProofreadingBlocks } from "../proofreading/proofreading-document";
+import type { DualModelProofreadingSession } from "../proofreading/proofreading";
 import {
 	createTranscriptionCheckpoint,
 	readResumableTranscriptionSegments,
@@ -102,6 +104,32 @@ export class TranscriptService {
 			speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle
 		});
 		return this.writeTranscript(transcriptPath, content);
+	}
+
+	async writeDualModelProofreadingTranscript(
+		audioFile: TFile,
+		sourceNote: TFile | undefined,
+		result: TranscriptionResult,
+		session: DualModelProofreadingSession
+	): Promise<TFile> {
+		const transcriptPath = this.getTranscriptPath(audioFile);
+		const base = renderTranscriptTemplate({
+			app: this.app, audioFile, transcriptPath, sourceNote, result,
+			copyLanguage: this.settings.copyLanguage, speakerLabelStyle: this.settings.agentPlanSpeakerLabelStyle
+		});
+		const content = base.replace(result.text, renderProofreadingBlocks(session));
+		return this.writeTranscript(transcriptPath, content);
+	}
+
+	async saveProofreadingSession(transcriptFile: TFile, session: DualModelProofreadingSession): Promise<void> {
+		let replaced = false;
+		await this.app.vault.process(transcriptFile, (content) => {
+			const next = replaceProofreadingBlocks(content, session);
+			if (next === null) return content;
+			replaced = true;
+			return next;
+		});
+		if (!replaced) throw new Error("校对记录已损坏或被删除，已停止写入以保护人工内容。");
 	}
 
 	async writeTranscribingTranscript(

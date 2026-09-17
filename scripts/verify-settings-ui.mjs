@@ -3275,9 +3275,9 @@ async function verifyTabs(page) {
 	await page.waitForFunction(() => document.querySelector('[data-capability-tab="fusion"]')?.getAttribute("aria-selected") === "true");
 	assert(await activePanel.locator('[data-capability-tab="fusion"]').getAttribute("aria-selected") === "true", "右方向键未切换到融合转写");
 	const fusionPanel = activePanel.locator('.echo-notes-settings-capability-panel:not([hidden])');
-	assert(await fusionPanel.getByText("当前版本暂不可用", { exact: false }).count() === 1, "融合面板缺少暂不可用说明");
-	assert(await fusionPanel.locator('input, select, textarea, .checkbox-container').count() === 0, "融合面板不得包含开关或可编辑参数");
-	assert(await fusionPanel.getByText("不保证结果一定更准确", { exact: false }).count() === 1, "融合面板缺少准确性边界");
+	assert(await fusionPanel.getByText("融合转写", { exact: false }).count() >= 1, "融合面板缺少功能标题");
+	assert(await fusionPanel.getByText("只支持硅基流动", { exact: false }).count() === 1, "非硅基流动配置应明确双模型不可用原因");
+	assert(await fusionPanel.getByText("不保证准确率提升", { exact: false }).count() === 0, "不可用状态不应伪造已启用后的上传说明");
 	await activePanel.locator('[data-capability-tab="speaker"]').click();
 	assert(
 		await (await getActiveSetting(page, "说话人分离")).locator(".checkbox-container")

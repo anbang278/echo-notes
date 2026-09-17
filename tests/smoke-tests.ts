@@ -29,6 +29,13 @@ import {
 } from "../src/analysis/analysis-output";
 import { TRANSCRIPT_MANAGED_START, TRANSCRIPT_TECHNICAL_END, TRANSCRIPT_TECHNICAL_START } from "../src/transcript/transcript-content";
 import {
+	applyProofreadingDecision,
+	createDualModelProofreadingSession,
+	undoProofreadingDecision,
+	validateDualModelConfiguration
+} from "../src/proofreading/proofreading";
+import { parseProofreadingDocument, renderProofreadingBlocks } from "../src/proofreading/proofreading-document";
+import {
 	ANALYSIS_TEMPLATE_ORDER,
 	buildAnalysisMessages,
 	getAnalysisContextAroundAudioMatch,
@@ -7097,4 +7104,22 @@ assert.equal(reviewV2Approved.reviews["assertion-review-v2"].effectiveTier, unde
 }
 
 await runRecordingStorageTests();
+
+const dualSession = createDualModelProofreadingSession({
+	sessionId: "dual-smoke",
+	primary: { text: "鲨鱼订单金额五十万", provider: "siliconflow", model: "Qwen/Qwen3-ASR-1.7B" },
+	auxiliary: { text: "鲨域订单金额十五万", provider: "siliconflow", model: "XingChenAGI/XingChenASR-V3.2-Ultra" },
+	configurationFingerprint: "dual-fingerprint"
+});
+assert.equal(dualSession.issues.length, 1);
+assert.equal(dualSession.issues[0].risk, "high", "金额和同音词差异必须留给人工处理");
+const savedDualSession = applyProofreadingDecision(dualSession, "C01", "auxiliary");
+assert.match(savedDualSession.readingText, /鲨域/);
+assert.match(undoProofreadingDecision(savedDualSession, "C01").readingText, /鲨鱼/);
+const dualDocument = renderProofreadingBlocks(dualSession);
+assert.equal(parseProofreadingDocument(dualDocument)?.session.sessionId, "dual-smoke");
+assert.equal(extractTranscriptText(`---\ntype: audio-transcript\n---\n${dualDocument}`), dualSession.readingText);
+assert.equal(extractTranscriptText("<!-- echo-notes-proofreading-reading:start -->\n损坏"), "", "损坏的新格式不得回退为全文读取");
+assert.ok(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"));
+assert.equal(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "XingChenAGI/XingChenASR-V3.2-Ultra"), null);
 console.log("Smoke tests passed.");

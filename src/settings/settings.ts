@@ -103,6 +103,16 @@ export type MemoryMode = "candidates-only" | "compile-profiles";
 
 export type AgentPlanSpeakerLabelStyle = "speaker" | "speaker-with-time";
 
+export type ProofreadingStrategy = "auto-low-risk" | "review-all";
+
+export interface DualModelProofreadingSettings {
+	enabled: boolean;
+	auxiliaryModel: string;
+	useGlossaryForTranscription: boolean;
+	useGlossaryForProofreading: boolean;
+	strategy: ProofreadingStrategy;
+}
+
 export type EchoNotesHotkeySetting = Hotkey | null;
 
 export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
@@ -250,6 +260,7 @@ export interface EchoNotesSettings {
 	redactTranscriptBeforeAnalysis: boolean;
 	analysisLongTextEnabled: boolean;
 	analysisChunkCharacters: number;
+	dualModelProofreading: DualModelProofreadingSettings;
 	memoryEnabled: boolean;
 	memoryInitialized: boolean;
 	memoryRootFolder: string;
@@ -1039,6 +1050,13 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	redactTranscriptBeforeAnalysis: false,
 	analysisLongTextEnabled: true,
 	analysisChunkCharacters: 24000,
+	dualModelProofreading: {
+		enabled: false,
+		auxiliaryModel: "XingChenAGI/XingChenASR-V3.2-Ultra",
+		useGlossaryForTranscription: false,
+		useGlossaryForProofreading: false,
+		strategy: "auto-low-risk"
+	},
 	memoryEnabled: false,
 	memoryInitialized: false,
 	memoryRootFolder: "Echo Memory",
@@ -1364,6 +1382,16 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		4000,
 		100000
 	);
+	const rawProofreading = isRecord(raw.dualModelProofreading) ? raw.dualModelProofreading : {};
+	settings.dualModelProofreading = {
+		enabled: rawProofreading.enabled === true,
+		auxiliaryModel: typeof rawProofreading.auxiliaryModel === "string" && rawProofreading.auxiliaryModel.trim()
+			? rawProofreading.auxiliaryModel.trim()
+			: DEFAULT_SETTINGS.dualModelProofreading.auxiliaryModel,
+		useGlossaryForTranscription: rawProofreading.useGlossaryForTranscription === true,
+		useGlossaryForProofreading: rawProofreading.useGlossaryForProofreading === true,
+		strategy: rawProofreading.strategy === "review-all" ? "review-all" : "auto-low-risk"
+	};
 	settings.memoryEnabled =
 		typeof raw.memoryEnabled === "boolean" ? raw.memoryEnabled : DEFAULT_SETTINGS.memoryEnabled;
 	settings.memoryInitialized =

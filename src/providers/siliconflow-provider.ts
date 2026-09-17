@@ -76,7 +76,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
 		}
 
-		const audioBuffer = await this.app.vault.readBinary(input.audioFile);
+		const audioBuffer = input.preparedAudio ?? await this.app.vault.readBinary(input.audioFile);
 		const mimeType = getAudioMimeType(input.audioFile);
 		const policy = resolveProviderTranscriptionPolicy({
 			provider: "siliconflow",

@@ -19,6 +19,7 @@ import {
 	SILICONFLOW_TRANSCRIPTION_MODELS,
 	getSiliconFlowModelOption
 } from "../providers/siliconflow-model-catalog";
+import { DUAL_MODEL_PROOFREADING_MODELS, validateDualModelConfiguration } from "../proofreading/proofreading";
 import { validateRecordingStorage } from "../audio/recording-storage-path";
 import {
 	getProviderCapabilitySummary,
@@ -1291,8 +1292,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			{
 				id: "fusion",
 				label: "融合转写",
-				description: "双路转写与 AI 对照融合方案",
-				state: "实验中"
+				description: "双路转写与人工校对",
+				state: this.plugin.settings.dualModelProofreading.enabled ? "已开启" : "未开启"
 			},
 			{
 				id: "speaker",
@@ -1449,14 +1450,40 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderFusionTranscriptionPanel(containerEl: HTMLElement): void {
-		this.renderCapabilityPanelHeading(containerEl, "融合转写（实验中）", "方案仍在验证，当前版本暂不可用。这里不会保存参数、启用模型或发起外部请求。");
-		const calloutEl = containerEl.createDiv({ cls: "echo-notes-settings-fusion-callout", attr: { role: "note" } });
-		calloutEl.createEl("strong", { text: "拟议方案" });
-		const listEl = calloutEl.createEl("ul");
-		for (const item of ["由两路转写服务分别生成结果", "使用 AI 对照差异并生成融合稿", "完整保留两份原始转写，便于回溯核对"]) {
-			listEl.createEl("li", { text: item });
+		const config = this.plugin.settings.offlineTranscription;
+		const feature = this.plugin.settings.dualModelProofreading;
+		const heading = this.renderCapabilityPanelHeading(containerEl, "融合转写", "对同一录音生成两份原始转写，默认阅读主稿；差异在校对面板中人工选择。仅复用 AI 分析连接进行文本校对，不会创建第二套密钥。");
+		const validation = config.provider === "siliconflow"
+			? validateDualModelConfiguration(config.model, feature.auxiliaryModel)
+			: "双模型转写目前只支持硅基流动离线转写。";
+		heading.addToggle((toggle) => toggle.setValue(feature.enabled).setDisabled(Boolean(validation)).onChange(async (value) => {
+			if (value && validation) { new Notice(validation); return; }
+			feature.enabled = value;
+			await this.plugin.saveSettings();
+			this.refreshSettings();
+		}));
+		if (validation) {
+			this.renderTranscriptionCapabilityEmptyState(containerEl, validation, "前往转写服务", () => this.navigateToTranscriptionService());
+			return;
 		}
-		calloutEl.createEl("p", { text: "融合只提供更多对照证据，不保证结果一定更准确；正式开放前仍需完成隐私、费用与失败恢复验证。" });
+		new Setting(containerEl).setName("辅助模型").setDesc("主辅模型必须不同；不会自动修改当前主模型。")
+			.addDropdown((dropdown) => {
+				for (const model of DUAL_MODEL_PROOFREADING_MODELS) dropdown.addOption(model, model);
+				dropdown.setValue(feature.auxiliaryModel).onChange(async (value) => {
+					const error = validateDualModelConfiguration(config.model, value);
+					if (error) { new Notice(error); dropdown.setValue(feature.auxiliaryModel); return; }
+					feature.auxiliaryModel = value; await this.plugin.saveSettings();
+				});
+			});
+		new Setting(containerEl).setName("转写时提示常用词").setDesc("仅发送作用域匹配且已批准的人工词；不使用易错写法作为热词。")
+			.addToggle((toggle) => toggle.setValue(feature.useGlossaryForTranscription).onChange(async (value) => { feature.useGlossaryForTranscription = value; await this.plugin.saveSettings(); }));
+		new Setting(containerEl).setName("校对时使用常用词").setDesc("将相关常用词随文本发送给已配置的 AI 分析连接；不要求开启分析或 memory。")
+			.addToggle((toggle) => toggle.setValue(feature.useGlossaryForProofreading).onChange(async (value) => { feature.useGlossaryForProofreading = value; await this.plugin.saveSettings(); }));
+		new Setting(containerEl).setName("校对策略").setDesc("低风险仅保留可追溯的小范围建议；金额、日期、否定和责任归属始终交由人工确认。")
+			.addDropdown((dropdown) => dropdown.addOption("auto-low-risk", "低风险自动校对").addOption("review-all", "全部人工校对")
+				.setValue(feature.strategy).onChange(async (value) => { feature.strategy = value === "review-all" ? "review-all" : "auto-low-risk"; await this.plugin.saveSettings(); }));
+		const calloutEl = containerEl.createDiv({ cls: "echo-notes-settings-fusion-callout", attr: { role: "note" } });
+		calloutEl.createEl("p", { text: "启用后，同一音频会发送至两次硅基流动识别；校对文本及相关词条会发送至当前 AI 分析服务商。这会增加请求和费用，且不保证准确率提升。" });
 	}
 
 	private renderSpeakerCapabilityPanel(

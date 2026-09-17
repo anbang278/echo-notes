@@ -5803,3 +5803,80 @@ button.echo-notes-memory-tool:hover {
 		transition: none;
 	}
 }
+
+/* 双模型校对：全部使用 Obsidian 主题变量，避免与宿主主题冲突。 */
+.echo-notes-proofreading-modal .modal-content {
+	max-width: 760px;
+}
+
+.echo-notes-proofreading-summary,
+.echo-notes-proofreading-reason {
+	color: var(--text-muted);
+	line-height: 1.55;
+}
+
+.echo-notes-proofreading-audio,
+.echo-notes-proofreading-evidence {
+	padding: 12px;
+	margin: 12px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-secondary);
+}
+
+.echo-notes-proofreading-audio > div,
+.echo-notes-proofreading-actions,
+.echo-notes-proofreading-navigation {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+}
+
+.echo-notes-proofreading-audio input[type="range"] {
+	min-width: 160px;
+	flex: 1;
+}
+
+.echo-notes-proofreading-audio button,
+.echo-notes-proofreading-actions button,
+.echo-notes-proofreading-navigation button {
+	min-height: 44px;
+}
+
+.echo-notes-proofreading-evidence strong {
+	color: var(--text-normal);
+}
+
+.echo-notes-proofreading-evidence p {
+	margin: 6px 0 0;
+	white-space: pre-wrap;
+}
+
+.echo-notes-proofreading-issue-label {
+	font-weight: 600;
+	color: var(--color-orange);
+}
+
+.echo-notes-proofreading-modal textarea {
+	width: 100%;
+	min-height: 88px;
+	margin: 8px 0;
+}
+
+@media (width <= 620px) {
+	.echo-notes-proofreading-modal .modal-content {
+		padding: 12px;
+	}
+
+	.echo-notes-proofreading-actions,
+	.echo-notes-proofreading-navigation {
+		display: grid;
+		grid-template-columns: 1fr;
+	}
+
+	.echo-notes-proofreading-audio input[type="range"] {
+		min-width: 0;
+		width: 100%;
+	}
+}

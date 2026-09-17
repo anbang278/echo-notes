@@ -145,6 +145,8 @@ export type TranscriptionProgress =
 
 export interface TranscriptionInput {
 	audioFile: TFile;
+	/** 同一会话双路识别共享已读取的音频字节；不得持久化。 */
+	preparedAudio?: ArrayBuffer;
 	sourceNote?: TFile;
 	language?: string;
 	resumeSegments?: TranscriptionSegment[];

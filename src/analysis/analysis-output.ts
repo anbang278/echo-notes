@@ -2,6 +2,7 @@ import { type AnalysisTemplateId, type CopyLanguage } from "../settings/settings
 import type { AnalysisResult } from "./analysis-provider";
 import { removeAllAnalysisCheckpoints } from "./analysis-checkpoint";
 import { TRANSCRIPT_MANAGED_END, TRANSCRIPT_MANAGED_START } from "../transcript/transcript-content";
+import { extractProofreadingReadingText } from "../proofreading/proofreading-document";
 import { insertOrReplaceTranscriptTechnicalItem, renderTranscriptTechnicalInfo } from "./analysis-technical";
 
 export const ANALYSIS_LINKS_START = "<!-- echo-notes-analysis-links:start -->";
@@ -23,6 +24,10 @@ export interface ExtractedTranscriptAnalysis {
 }
 
 export function extractTranscriptText(content: string): string {
+	const proofreadingReading = extractProofreadingReadingText(content);
+	if (proofreadingReading !== null) return proofreadingReading;
+	// 新格式出现不完整标记时不回退到全文，避免把原稿和技术记录外发。
+	if (content.includes("<!-- echo-notes-proofreading-")) return "";
 	const contentWithoutManagedBlocks = removeAllAnalysisCheckpoints(content)
 		.replace(/^---\n[\s\S]*?\n---\n?/, "")
 		.replace(new RegExp(`${escapeRegExp(ANALYSIS_LINKS_START)}[\\s\\S]*?${escapeRegExp(ANALYSIS_LINKS_END)}\\n?`, "g"), "")

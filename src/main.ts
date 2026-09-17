@@ -156,6 +156,10 @@ import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
 import { parseMemoryCandidate } from "./memory/memory-output";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
+import { createDualModelProofreadingSession, validateDualModelConfiguration } from "./proofreading/proofreading";
+import { requestIndependentProofreading } from "./proofreading/proofreading-provider";
+import { parseProofreadingDocument } from "./proofreading/proofreading-document";
+import { ProofreadingReviewModal } from "./proofreading/proofreading-review-modal";
 import {
 	SILICONFLOW_SENSEVOICE_MODEL_ID,
 	SILICONFLOW_TRANSCRIPTION_MODEL_OPTIONS,
@@ -174,6 +178,7 @@ import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diag
 import {
 	shouldWriteFailedTranscript,
 	TranscriptionError,
+	type TranscriptionResult,
 	type StreamingTranscriptionState,
 	type TranscriptionEnhancementSnapshot,
 	type TranscriptionProgress,
@@ -2533,6 +2538,27 @@ export default class EchoNotesPlugin extends Plugin {
 		await this.openMemoryCenter("inbox");
 	}
 
+	private async openCurrentProofreadingReview(): Promise<void> {
+		const transcriptFile = this.app.workspace.getActiveFile();
+		if (!(transcriptFile instanceof TFile)) {
+			new Notice("请先打开包含双模型校对记录的转写稿。");
+			return;
+		}
+		const content = await this.app.vault.cachedRead(transcriptFile);
+		const document = parseProofreadingDocument(content);
+		if (!document) {
+			new Notice("当前文件没有完整的双模型校对记录，或记录已被手动修改。不会覆盖现有内容。");
+			return;
+		}
+		const audioPath = /^source_audio_path:\s*"?([^"\n]+)"?\s*$/m.exec(content)?.[1];
+		const audioFile = audioPath ? this.app.vault.getAbstractFileByPath(audioPath) : null;
+		const audioUrl = audioFile instanceof TFile ? this.app.vault.adapter.getResourcePath(audioFile.path) : undefined;
+		new ProofreadingReviewModal(this.app, document.session, {
+			audioUrl,
+			save: async (session) => this.transcriptService.saveProofreadingSession(transcriptFile, session)
+		}).open();
+	}
+
 	async reviewMemoryCandidatePath(path: string): Promise<void> {
 		if (!this.settings.memoryInitialized) {
 			new Notice("请先初始化 Echo Memory。");
@@ -2710,6 +2736,12 @@ export default class EchoNotesPlugin extends Plugin {
 			editorCallback: (editor, view) => {
 				void this.handleTranscribeSelectedAudio(editor, view);
 			}
+		});
+
+		this.addCommand({
+			id: "review-current-dual-model-transcript",
+			name: "打开当前转写稿的双模型校对",
+			callback: () => { void this.openCurrentProofreadingReview(); }
 		});
 
 		this.addCommand({
@@ -3863,8 +3895,14 @@ export default class EchoNotesPlugin extends Plugin {
 					`长音频处理中：已完成分段 ${progress.segment.index}/${progress.segment.total} · ${audioFile.name}`
 				);
 			};
+			const dualModelError = transcriptionConfig.provider === "siliconflow"
+				? validateDualModelConfiguration(transcriptionConfig.model, this.settings.dualModelProofreading.auxiliaryModel)
+				: "双模型转写只支持硅基流动离线转写。";
+			const dualModelEnabled = this.settings.dualModelProofreading.enabled && !options.resumeRemoteTask && !dualModelError;
+			const preparedAudio = dualModelEnabled ? await this.app.vault.readBinary(audioFile) : undefined;
 			const result = await provider.transcribe({
 				audioFile,
+				preparedAudio,
 				sourceNote,
 				language: transcriptionConfig.language,
 				resumeSegments: completedSegments,
@@ -3876,7 +3914,37 @@ export default class EchoNotesPlugin extends Plugin {
 				diagnostics: diagnosticSink
 			});
 			result.configurationFingerprint = checkpointIdentity.configurationFingerprint;
-			const transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
+			let transcriptFile: TFile;
+			if (dualModelEnabled) {
+				let auxiliaryResult: TranscriptionResult | undefined;
+				try {
+					const auxiliaryConfig = { ...transcriptionConfig, model: this.settings.dualModelProofreading.auxiliaryModel };
+					const auxiliaryProvider = createTranscriptionProvider(this.app, auxiliaryConfig, apiKeySnapshot);
+					this.taskCenter.updateTask(transcriptionTaskId, { stage: "主稿已就绪，正在生成辅助稿" });
+					auxiliaryResult = await auxiliaryProvider.transcribe({ audioFile, sourceNote, language: auxiliaryConfig.language, preparedAudio, signal: transcriptionController.signal, diagnostics: diagnosticSink });
+				} catch (error) {
+					this.log("辅助转写失败，保留主稿", error);
+					this.diagnostics.record(diagnostic.id, "lifecycle", "dual-model-auxiliary-failed", { error: getErrorMessage(error) });
+				}
+				let session = createDualModelProofreadingSession({
+					sessionId: `${audioFile.path}:${Date.now()}`,
+					primary: result,
+					auxiliary: auxiliaryResult,
+					configurationFingerprint: checkpointIdentity.configurationFingerprint,
+					status: auxiliaryResult ? "ready" : "partial"
+				});
+				if (auxiliaryResult && this.getAnalysisApiKey().trim()) {
+					try {
+						const textProvider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
+						session = { ...session, issues: await requestIndependentProofreading({ provider: textProvider, primary: result.text, auxiliary: auxiliaryResult.text, copyLanguage: this.settings.copyLanguage }) };
+					} catch (error) {
+						this.diagnostics.record(diagnostic.id, "lifecycle", "dual-model-proofreading-skipped", { error: getErrorMessage(error) });
+					}
+				}
+				transcriptFile = await this.transcriptService.writeDualModelProofreadingTranscript(audioFile, sourceNote, result, session);
+			} else {
+				transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
+			}
 			await notifyTranscriptFileReady(transcriptFile, true);
 			hideLongAudioNotice();
 			this.taskCenter.updateTask(transcriptionTaskId, {
