@@ -5753,20 +5753,14 @@ async function captureAdvancedCapabilityViewports(page) {
 		const snapshot = {
 			transcriptionMode: plugin.settings.transcriptionMode,
 			memoryInitialized: plugin.settings.memoryInitialized,
-			offlineTranscription: JSON.parse(JSON.stringify(plugin.settings.offlineTranscription))
+			offlineTranscription: JSON.parse(JSON.stringify(plugin.settings.offlineTranscription)),
+			dualModelProofreading: JSON.parse(JSON.stringify(plugin.settings.dualModelProofreading))
 		};
 		plugin.settings.transcriptionMode = "offline";
 		plugin.settings.memoryInitialized = false;
-		plugin.settings.offlineTranscription.provider = "aliyun-bailian";
-		plugin.settings.offlineTranscription.model = "qwen-audio-3.0-asr-flash-filetrans";
-		plugin.settings.offlineTranscription.aliyunFiletrans = {
-			...(plugin.settings.offlineTranscription.aliyunFiletrans ?? {}),
-			diarizationEnabled: true,
-			hotwordEnhancementEnabled: false,
-			contextEnhancementEnabled: false,
-			memoryEnhancementEnabled: false
-		};
-		delete plugin.settings.offlineTranscription.aliyunFiletrans.speakerCount;
+		plugin.settings.offlineTranscription.provider = "siliconflow";
+		plugin.settings.offlineTranscription.model = "Qwen/Qwen3-ASR-1.7B";
+		plugin.settings.dualModelProofreading.auxiliaryModel = "XingChenAGI/XingChenASR-V3.2-Ultra";
 		await plugin.saveSettings();
 		plugin.settingTab.showDestination("transcription-recording");
 		return snapshot;
@@ -5796,6 +5790,7 @@ async function captureAdvancedCapabilityViewports(page) {
 						const tabs = [...(section?.querySelectorAll(".echo-notes-settings-capability-tab") ?? [])];
 						const visiblePanels = [...(section?.querySelectorAll(".echo-notes-settings-capability-panel:not([hidden])") ?? [])];
 						const targets = [...(visiblePanels[0]?.querySelectorAll("button, input, select") ?? [])];
+						const dropdowns = [...(visiblePanels[0]?.querySelectorAll(".setting-item-control > select:not(.is-measuring)") ?? [])];
 						const sectionRect = section?.getBoundingClientRect();
 						return {
 							innerWidth: window.innerWidth,
@@ -5814,6 +5809,16 @@ async function captureAdvancedCapabilityViewports(page) {
 								const rect = target.getBoundingClientRect();
 								return !sectionRect || (rect.left >= sectionRect.left - 1 && rect.right <= sectionRect.right + 1);
 							}),
+							dropdowns: dropdowns.map((dropdown) => {
+								const dropdownRect = dropdown.getBoundingClientRect();
+								const controlRect = dropdown.parentElement?.getBoundingClientRect();
+								return {
+									label: dropdown.closest(".setting-item")?.querySelector(".setting-item-name")?.textContent?.trim() ?? "",
+									usesUniformFieldClass: dropdown.classList.contains("echo-notes-settings-field"),
+									dropdownWidth: dropdownRect.width,
+									controlWidth: controlRect?.width ?? 0
+								};
+							}),
 							minimumButtonHeight: targets.filter((target) => target instanceof HTMLButtonElement).length
 								? Math.min(...targets.filter((target) => target instanceof HTMLButtonElement).map((target) => target.getBoundingClientRect().height))
 								: 0
@@ -5825,6 +5830,16 @@ async function captureAdvancedCapabilityViewports(page) {
 					assert(metrics.summaryFits && metrics.tabsFit && metrics.targetsFit, `${context} 服务栏、能力卡或控件溢出：${JSON.stringify(metrics)}`);
 					assert(JSON.stringify(metrics.tabLabels) === JSON.stringify(expectedLabels), `${context} 五卡顺序不正确`);
 					assert(metrics.selectedCount === 1 && metrics.visiblePanelCount === 1, `${context} 活动能力或面板数量不正确`);
+					if (capabilityId === "fusion") {
+						assert(
+							JSON.stringify(metrics.dropdowns.map((dropdown) => dropdown.label)) === JSON.stringify(["辅助模型", "校对策略"]),
+							`${context} 未渲染两个融合转写下拉框：${JSON.stringify(metrics.dropdowns)}`
+						);
+						assert(
+							metrics.dropdowns.every((dropdown) => dropdown.usesUniformFieldClass && dropdown.dropdownWidth > 0 && Math.abs(dropdown.dropdownWidth - dropdown.controlWidth) <= 1),
+							`${context} 融合转写下拉框未填满统一字段宽度：${JSON.stringify(metrics.dropdowns)}`
+						);
+					}
 					if (viewport.mobileShell && metrics.minimumButtonHeight > 0) {
 						assert(metrics.minimumButtonHeight >= 44, `${context} 可见按钮小于 44px`);
 					}
@@ -5844,6 +5859,7 @@ async function captureAdvancedCapabilityViewports(page) {
 			plugin.settings.transcriptionMode = snapshot.transcriptionMode;
 			plugin.settings.memoryInitialized = snapshot.memoryInitialized;
 			plugin.settings.offlineTranscription = snapshot.offlineTranscription;
+			plugin.settings.dualModelProofreading = snapshot.dualModelProofreading;
 			await plugin.saveSettings();
 			plugin.settingTab.showDestination("transcription-service");
 		}, { pluginId: PLUGIN_ID, snapshot: original });

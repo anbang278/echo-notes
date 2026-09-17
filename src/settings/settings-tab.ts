@@ -1420,6 +1420,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			case "hotwords": this.renderHotwordCapabilityPanel(containerEl, config, capability); break;
 			case "context": this.renderContextCapabilityPanel(containerEl, config, capability); break;
 		}
+		// 能力卡按需重绘，不能依赖首次渲染时的统一字段扫描。
+		// 否则下拉框会按原生内容宽度收缩，只显示箭头。
+		this.markUniformSettingsFields(containerEl);
 	}
 
 	private getShortcutCapabilityState(): string {
