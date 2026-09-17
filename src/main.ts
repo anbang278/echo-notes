@@ -3915,41 +3915,93 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			result.configurationFingerprint = checkpointIdentity.configurationFingerprint;
 			let transcriptFile: TFile;
+			let auxiliaryComplete = !dualModelEnabled;
 			if (dualModelEnabled) {
+				let session = createDualModelProofreadingSession({
+					sessionId: `${audioFile.path}:${Date.now()}`,
+					primary: result,
+					configurationFingerprint: checkpointIdentity.configurationFingerprint,
+					status: "partial"
+				});
+				// 主稿成功即持久化。辅稿较慢或失败时，用户仍可立即阅读、播放和分析主稿。
+				transcriptFile = await this.transcriptService.writeDualModelProofreadingTranscript(audioFile, sourceNote, result, session);
+				await notifyTranscriptFileReady(transcriptFile, true);
+				this.taskCenter.updateTask(transcriptionTaskId, {
+					stage: "主稿已就绪，正在生成辅助稿",
+					outputPath: transcriptFile.path
+				});
 				let auxiliaryResult: TranscriptionResult | undefined;
 				try {
 					const auxiliaryConfig = { ...transcriptionConfig, model: this.settings.dualModelProofreading.auxiliaryModel };
 					const auxiliaryProvider = createTranscriptionProvider(this.app, auxiliaryConfig, apiKeySnapshot);
-					this.taskCenter.updateTask(transcriptionTaskId, { stage: "主稿已就绪，正在生成辅助稿" });
-					auxiliaryResult = await auxiliaryProvider.transcribe({ audioFile, sourceNote, language: auxiliaryConfig.language, preparedAudio, signal: transcriptionController.signal, diagnostics: diagnosticSink });
+					auxiliaryResult = await auxiliaryProvider.transcribe({
+						audioFile,
+						sourceNote,
+						language: auxiliaryConfig.language,
+						preparedAudio,
+						signal: transcriptionController.signal,
+						diagnostics: diagnosticSink,
+						onProgress: async (progress) => {
+							this.recordTranscriptionDiagnosticProgress(diagnostic.id, progress);
+							if (progress.type === "long-audio-started") {
+								this.taskCenter.updateTask(transcriptionTaskId, {
+									stage: `主稿已就绪，辅助稿分段处理中（共 ${progress.totalSegments} 段）`,
+									currentSegment: progress.segments.length,
+									totalSegments: progress.totalSegments
+								});
+								return;
+							}
+							if (progress.type === "segment-started") {
+								this.taskCenter.updateTask(transcriptionTaskId, {
+									stage: `主稿已就绪，正在生成辅助稿分段 ${progress.segment.index}/${progress.segment.total}`,
+									currentSegment: progress.segment.index,
+									totalSegments: progress.segment.total
+								});
+								return;
+							}
+							if (progress.type === "segment-split") {
+								this.taskCenter.updateTask(transcriptionTaskId, {
+									stage: `主稿已就绪，辅助稿失败片段已缩小为 ${progress.replacementSegments.length} 段`,
+									currentSegment: progress.segments.length,
+									totalSegments: progress.totalSegments
+								});
+							}
+						}
+					});
 				} catch (error) {
 					this.log("辅助转写失败，保留主稿", error);
 					this.diagnostics.record(diagnostic.id, "lifecycle", "dual-model-auxiliary-failed", { error: getErrorMessage(error) });
 				}
-				let session = createDualModelProofreadingSession({
-					sessionId: `${audioFile.path}:${Date.now()}`,
-					primary: result,
-					auxiliary: auxiliaryResult,
-					configurationFingerprint: checkpointIdentity.configurationFingerprint,
-					status: auxiliaryResult ? "ready" : "partial"
-				});
+				if (auxiliaryResult) {
+					auxiliaryComplete = true;
+					session = createDualModelProofreadingSession({
+						sessionId: session.sessionId,
+						primary: result,
+						auxiliary: auxiliaryResult,
+						configurationFingerprint: checkpointIdentity.configurationFingerprint,
+						status: "ready"
+					});
+					await this.transcriptService.saveProofreadingSession(transcriptFile, session);
+				}
 				if (auxiliaryResult && this.getAnalysisApiKey().trim()) {
 					try {
 						const textProvider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
 						session = { ...session, issues: await requestIndependentProofreading({ provider: textProvider, primary: result.text, auxiliary: auxiliaryResult.text, copyLanguage: this.settings.copyLanguage }) };
+						await this.transcriptService.saveProofreadingSession(transcriptFile, session);
 					} catch (error) {
 						this.diagnostics.record(diagnostic.id, "lifecycle", "dual-model-proofreading-skipped", { error: getErrorMessage(error) });
 					}
 				}
-				transcriptFile = await this.transcriptService.writeDualModelProofreadingTranscript(audioFile, sourceNote, result, session);
 			} else {
 				transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
+				await notifyTranscriptFileReady(transcriptFile, true);
 			}
-			await notifyTranscriptFileReady(transcriptFile, true);
 			hideLongAudioNotice();
 			this.taskCenter.updateTask(transcriptionTaskId, {
 				status: "success",
-				stage: enhancementWarning ? `转写完成 · 增强已跳过：${enhancementWarning}` : "转写完成",
+				stage: dualModelEnabled && !auxiliaryComplete
+					? "主稿已完成，辅助稿未完成"
+					: enhancementWarning ? `转写完成 · 增强已跳过：${enhancementWarning}` : "转写完成",
 				provider: result.provider,
 				model: result.model,
 				outputPath: transcriptFile.path,

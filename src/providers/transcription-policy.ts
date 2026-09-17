@@ -62,6 +62,20 @@ const EXACT_MODEL_POLICIES: ProviderTranscriptionPolicy[] = [
 		model: "TeleAI/TeleSpeechASR"
 	},
 	{
+		// 带说话人分离的模型在长整段请求上容易积压。按目标片段主动切分，
+		// 服务端 5xx 则直接缩小失败片段，避免重新上传整段录音。
+		provider: "siliconflow",
+		model: "XingChenAGI/XingChenASR-Diarize-V3.0",
+		supportsChunking: true,
+		maxSourceBytes: 50 * MB,
+		maxSourceDurationSeconds: 10 * 60,
+		targetSegmentSeconds: 10 * 60,
+		minSegmentSeconds: 60,
+		retryableHttpStatuses: RETRYABLE_SERVER_STATUSES,
+		retryDelaysMs: [],
+		maxSplitDepth: 4
+	},
+	{
 		provider: "aliyun-bailian",
 		model: "qwen3-asr-flash",
 		supportsChunking: true,

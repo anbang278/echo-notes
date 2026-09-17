@@ -2868,6 +2868,31 @@ assert.equal(siliconFlowSenseVoicePolicy.targetSegmentSeconds, 600);
 assert.equal(siliconFlowSenseVoicePolicy.minSegmentSeconds, 60);
 assert.deepEqual(siliconFlowSenseVoicePolicy.retryDelaysMs, [1000, 3000]);
 assert.equal(siliconFlowSenseVoicePolicy.maxSplitDepth, 4);
+const siliconFlowDiarizePolicy = resolveProviderTranscriptionPolicy({
+	provider: "siliconflow",
+	model: "XingChenAGI/XingChenASR-Diarize-V3.0"
+});
+assert.equal(siliconFlowDiarizePolicy.maxSourceDurationSeconds, 600);
+assert.equal(siliconFlowDiarizePolicy.targetSegmentSeconds, 600);
+assert.deepEqual(siliconFlowDiarizePolicy.retryDelaysMs, []);
+assert.equal(
+	shouldPreChunkTranscription({
+		policy: siliconFlowDiarizePolicy,
+		sourceBytes: 10 * 1024 * 1024,
+		durationSeconds: 601
+	}),
+	true,
+	"带说话人分离的长音频必须在上传前切段"
+);
+assert.equal(
+	shouldPreChunkTranscription({
+		policy: siliconFlowDiarizePolicy,
+		sourceBytes: 10 * 1024 * 1024,
+		durationSeconds: 600
+	}),
+	false
+);
+assert.equal(shouldSplitPolicyError(siliconFlowDiarizePolicy, 500), true);
 assert.equal(
 	resolveProviderTranscriptionPolicy({
 		provider: "siliconflow",
