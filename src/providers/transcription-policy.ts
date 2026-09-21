@@ -28,6 +28,9 @@ export interface PreChunkDecisionInput {
 
 const RETRYABLE_SERVER_STATUSES = [500, 502, 503, 504] as const;
 const DEFAULT_RETRY_DELAYS_MS = [1000, 3000] as const;
+const GSR_RETRY_DELAYS_MS = [1000, 3000, 7000] as const;
+export const SILICONFLOW_GSR_MODEL = "XingChenAGI/XingChenGSR-V1.0";
+const SILICONFLOW_RETRYABLE_STATUSES = [429, 500, 502, 503, 504] as const;
 
 const SILICONFLOW_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
 	provider: "siliconflow",
@@ -53,6 +56,18 @@ const MOSI_POLICY: Omit<ProviderTranscriptionPolicy, "model"> = {
 };
 
 const EXACT_MODEL_POLICIES: ProviderTranscriptionPolicy[] = [
+	{
+		provider: "siliconflow",
+		model: SILICONFLOW_GSR_MODEL,
+		supportsChunking: true,
+		maxSourceBytes: 50 * MB,
+		maxSourceDurationSeconds: 60 * 60,
+		targetSegmentSeconds: 3 * 60,
+		minSegmentSeconds: 30,
+		retryableHttpStatuses: SILICONFLOW_RETRYABLE_STATUSES,
+		retryDelaysMs: GSR_RETRY_DELAYS_MS,
+		maxSplitDepth: 4
+	},
 	{
 		...SILICONFLOW_POLICY,
 		model: "FunAudioLLM/SenseVoiceSmall"

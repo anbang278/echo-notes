@@ -2905,6 +2905,22 @@ assert.equal(
 	false
 );
 assert.equal(shouldSplitPolicyError(siliconFlowDiarizePolicy, 500), true);
+const siliconFlowGsrPolicy = resolveProviderTranscriptionPolicy({
+	provider: "siliconflow",
+	model: "XingChenAGI/XingChenGSR-V1.0"
+});
+assert.equal(siliconFlowGsrPolicy.targetSegmentSeconds, 180);
+assert.equal(siliconFlowGsrPolicy.minSegmentSeconds, 30);
+assert.deepEqual(siliconFlowGsrPolicy.retryableHttpStatuses, [429, 500, 502, 503, 504]);
+assert.deepEqual(siliconFlowGsrPolicy.retryDelaysMs, [1000, 3000, 7000]);
+assert.equal(siliconFlowGsrPolicy.maxSplitDepth, 4);
+assert.equal(
+	resolveProviderTranscriptionPolicy({
+		provider: "siliconflow",
+		model: "XingChenAGI/XingChenGSR-V1.0"
+	}).targetSegmentSeconds,
+	180
+);
 assert.equal(
 	resolveProviderTranscriptionPolicy({
 		provider: "siliconflow",
@@ -2995,6 +3011,8 @@ assert.equal(
 );
 assert.equal(isRetryablePolicyStatus(siliconFlowSenseVoicePolicy, 500), true);
 assert.equal(isRetryablePolicyStatus(siliconFlowSenseVoicePolicy, 429), false);
+assert.equal(isRetryablePolicyStatus(siliconFlowGsrPolicy, 429), true);
+assert.equal(shouldSplitPolicyError(siliconFlowGsrPolicy, 429), true);
 assert.equal(shouldSplitPolicyError(siliconFlowSenseVoicePolicy, 413), true);
 assert.equal(shouldSplitPolicyError(siliconFlowSenseVoicePolicy, 401), false);
 

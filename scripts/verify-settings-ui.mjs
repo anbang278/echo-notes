@@ -2563,14 +2563,24 @@ async function verifySiliconFlowMockChain(page, mock) {
 			"五个模型的本地 multipart 请求必须按顺序使用纯 ID，不能包含展示标签");
 
 		const longAudioCallCount = mock.calls.length;
-		audioPath = await createFileAndStart(models[3], 9, true, 661);
+		audioPath = await createFileAndStart(models[4], 9, true, 661);
 		outcome = await resultFor(audioPath);
 		const longAudioCalls = mock.calls.slice(longAudioCallCount);
-		assert(longAudioCalls.length === 2 && longAudioCalls.every((call) => call.model === models[3]),
+		assert(longAudioCalls.length === 2 && longAudioCalls.every((call) => call.model === models[4]),
 			"超过 10 分钟的 WAV 应切为两个请求，且所有分段使用同一任务模型");
-		assert(outcome.task?.status === "success" && outcome.task.model === models[3] &&
-			outcome.text?.includes(`model: "${models[3]}"`) && !outcome.text.includes("%% echo-notes-checkpoint:start"),
+		assert(outcome.task?.status === "success" && outcome.task.model === models[4] &&
+			outcome.text?.includes(`model: "${models[4]}"`) && !outcome.text.includes("%% echo-notes-checkpoint:start"),
 			"长音频最终任务、稿件技术信息与检查点清理必须使用同一模型");
+
+		const gsrLongAudioCallCount = mock.calls.length;
+		const gsrLongAudioPath = await createFileAndStart(models[3], 13, true, 661);
+		const gsrOutcome = await resultFor(gsrLongAudioPath);
+		const gsrLongAudioCalls = mock.calls.slice(gsrLongAudioCallCount);
+		assert(gsrLongAudioCalls.length === 4 && gsrLongAudioCalls.every((call) => call.model === models[3]),
+			"GSR 超过 10 分钟的 WAV 应切为约 3 分钟共四个请求，且所有分段使用同一任务模型");
+		assert(gsrOutcome.task?.status === "success" && gsrOutcome.task.model === models[3] &&
+			gsrOutcome.text?.includes(`model: "${models[3]}"`) && !gsrOutcome.text.includes("%% echo-notes-checkpoint:start"),
+			"GSR 长音频最终任务、稿件技术信息与检查点清理必须使用同一模型");
 
 		const oldFilePath = await createFileAndStart(models[4], 7);
 		outcome = await resultFor(oldFilePath);

@@ -15,6 +15,7 @@ import {
 	resolveProviderTranscriptionPolicy,
 	shouldPreChunkTranscription,
 	shouldSplitPolicyError,
+	SILICONFLOW_GSR_MODEL,
 	type ProviderTranscriptionPolicy
 } from "./transcription-policy";
 import {
@@ -125,7 +126,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 			};
 		} catch (error) {
 			const httpStatus = readHttpStatus(error);
-			if (!shouldSplitPolicyError(policy, httpStatus)) {
+			if (!shouldSplitSiliconFlowError(policy, error)) {
 				throw error;
 			}
 			return this.transcribeLongAudio(audioBuffer, input, policy, httpStatus === 413);
@@ -184,8 +185,8 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 				}
 			},
 			splitChunk: (chunk) => splitWavAudioSegment(chunk),
-			shouldRetry: (error) => isRetryablePolicyStatus(policy, readHttpStatus(error)),
-			shouldSplit: (error) => shouldSplitPolicyError(policy, readHttpStatus(error)),
+			shouldRetry: (error) => isRetryableSiliconFlowError(policy, error),
+			shouldSplit: (error) => shouldSplitSiliconFlowError(policy, error),
 			retryDelaysMs: policy.retryDelaysMs,
 			maxSplitDepth: policy.maxSplitDepth,
 			minSegmentSeconds: policy.minSegmentSeconds ?? 60,
@@ -248,7 +249,7 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 				return await this.transcribeAudioBuffer(audioBuffer, mimeType, fileName, input);
 			} catch (error) {
 				const delayMs = policy.retryDelaysMs[attempt];
-				if (delayMs === undefined || !isRetryablePolicyStatus(policy, readHttpStatus(error))) {
+				if (delayMs === undefined || !isRetryableSiliconFlowError(policy, error)) {
 					throw error;
 				}
 
@@ -338,14 +339,16 @@ export class SiliconFlowTeleSpeechProvider implements TranscriptionProvider {
 				raw: data
 			};
 		} catch (error) {
+			const transcriptionError =
+				error instanceof TranscriptionError
+					? error
+					: createNetworkTranscriptionError("SiliconFlow", error);
 			input.diagnostics?.event("result", "siliconflow-request-failed", {
-				error: error instanceof Error ? error.message : String(error)
+				error: transcriptionError.message,
+				retryCategory: classifySiliconFlowFailure(transcriptionError),
+				httpStatus: transcriptionError.httpStatus
 			});
-			if (error instanceof TranscriptionError) {
-				throw error;
-			}
-
-			throw createNetworkTranscriptionError("SiliconFlow", error);
+			throw transcriptionError;
 		}
 	}
 }
@@ -363,4 +366,36 @@ function readTraceId(headers: Record<string, string>): string | undefined {
 
 function readHttpStatus(error: unknown): number | undefined {
 	return error instanceof TranscriptionError ? error.httpStatus : undefined;
+}
+
+function isRetryableSiliconFlowError(policy: ProviderTranscriptionPolicy, error: unknown): boolean {
+	if (isRetryablePolicyStatus(policy, readHttpStatus(error))) {
+		return true;
+	}
+
+	return policy.model === SILICONFLOW_GSR_MODEL && isTransientNetworkError(error);
+}
+
+function shouldSplitSiliconFlowError(policy: ProviderTranscriptionPolicy, error: unknown): boolean {
+	if (shouldSplitPolicyError(policy, readHttpStatus(error))) {
+		return true;
+	}
+
+	return policy.model === SILICONFLOW_GSR_MODEL && isTransientNetworkError(error);
+}
+
+function isTransientNetworkError(error: unknown): boolean {
+	if (!(error instanceof TranscriptionError) || error.code !== "network_error") {
+		return false;
+	}
+
+	return /timeout|timed out|abort|econnreset|socket|network|fetch/i.test(error.message);
+}
+
+function classifySiliconFlowFailure(error: unknown): string {
+	const status = readHttpStatus(error);
+	if (status !== undefined) {
+		return `http_${status}`;
+	}
+	return isTransientNetworkError(error) ? "transient_network" : "non_retryable";
 }
