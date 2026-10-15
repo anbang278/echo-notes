@@ -6138,7 +6138,7 @@ async function verifyTemplateResponsiveLayouts(page) {
 }
 
 async function stopChild(child) {
-	if (!child || child.exitCode !== null) {
+	if (!child || child.exitCode !== null || child.signalCode !== null) {
 		return;
 	}
 	child.kill("SIGTERM");
@@ -6146,7 +6146,7 @@ async function stopChild(child) {
 		once(child, "exit"),
 		new Promise((resolve) => setTimeout(resolve, 3_000))
 	]);
-	if (child.exitCode === null) {
+	if (child.exitCode === null && child.signalCode === null) {
 		child.kill("SIGKILL");
 		await once(child, "exit");
 	}
