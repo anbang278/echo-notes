@@ -236,7 +236,13 @@ export async function verifyCoreRecordingStorage(page, pluginId) {
 					check(app.commands.commands["audio-recorder:start"].checkCallback(false), "快捷键开始命令不可用");
 				} else check(app.commands.executeCommandById("audio-recorder:start"), "开始命令不可用");
 				await waitFor(() => activeRecorder.recording, `${route} 未开始录音`);
-				await new Promise((resolve) => setTimeout(resolve, 180));
+				// recording 标志仅表示已调用 MediaRecorder.start()；等合成源实际渲染半秒音频后再停止。
+				// M4A 可能到 stop 才输出媒体内容，不要求提前产生 dataavailable 分片。
+				const sourceContext = contexts.at(-1).context;
+				const startedAudioTime = sourceContext.currentTime;
+				await waitFor(() => sourceContext.state === "running" && sourceContext.currentTime - startedAudioTime >= 0.5,
+					`${route} 合成录音的音频渲染时钟未推进`);
+				const renderedSecondsBeforeStop = sourceContext.currentTime - startedAudioTime;
 				await app.workspace.getLeaf(false).openFile(noteB);
 				if (route === "麦克风按钮") activeRecorder.plugin.addedButtonEls[0].click();
 				else if (route === "快捷键") check(app.commands.commands["audio-recorder:stop"].checkCallback(false), "快捷键停止命令不可用");
@@ -245,9 +251,13 @@ export async function verifyCoreRecordingStorage(page, pluginId) {
 				const audio = captured.at(-1);
 				await waitFor(() => linksTo(noteB, audio), "保存时笔记未收到可解析音频链接");
 				check(audio.parent.path === `${root}/笔记乙/入口验收/${route}`, "切换笔记后核心录音未按保存时笔记归档");
-				check((await app.vault.readBinary(audio)).byteLength > 0, "核心录音保存了空文件");
+				const savedAudio = await app.vault.readBinary(audio);
+				check(savedAudio.byteLength > 0, "核心录音保存了空文件");
+				const decodedAudio = await sourceContext.decodeAudioData(savedAudio.slice(0));
+				check(decodedAudio.duration > 0, "核心合成录音未包含可解码音频");
 				check(!linksTo(noteA, audio), "核心录音误回链开始时笔记");
-				results.push({ scenario: `核心${route}合成音频`, path: audio.path });
+				results.push({ scenario: `核心${route}合成音频`, path: audio.path,
+					renderedSecondsBeforeStop, savedBytes: savedAudio.byteLength, decodedSeconds: decodedAudio.duration });
 			}
 
 			plugin.settings.transcriptionMode = "realtime";

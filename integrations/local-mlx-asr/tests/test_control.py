@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import subprocess
 import sys
@@ -44,6 +45,17 @@ class ControlTests(unittest.TestCase):
                     self.assertIsNone(own_pid(root,service,18081))
             finally:
                 process.terminate();process.wait(timeout=5)
+
+    def test_status_shell_is_directly_executable_without_loading_models(self):
+        script=Path(__file__).resolve().parents[1]/'status.sh'
+        with tempfile.TemporaryDirectory(prefix='asr status space ') as temp:
+            result=subprocess.run([str(script),'--root',temp,'--port','18081'],
+                                  env=dict(os.environ,ECHONOTES_ASR_PYTHON=sys.executable),
+                                  text=True,capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,1,result.stderr)
+            state=json.loads(result.stdout)
+            self.assertIsNone(state['pid']);self.assertIsNone(state['health'])
+            self.assertEqual(state['root'],str(Path(temp).resolve()))
 
 
 if __name__=='__main__':unittest.main()

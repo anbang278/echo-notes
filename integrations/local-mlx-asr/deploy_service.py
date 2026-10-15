@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 APP = 'MLX ASR 控制台.app'
+REQUIRED_EXECUTABLES = {'start.sh','stop.sh','status.sh',APP+'/Contents/MacOS/ASRControl'}
 RUNTIME_FILES = {'service.py','job_store.py','bounded_audio.py','bounded_diarization.py',
                  'bounded_worker.py','diarization.py','multipart_stream.py','control.py',
                  'start.sh','stop.sh','status.sh','README.md','DEPLOYMENT.md','deploy_service.py',
@@ -29,6 +30,13 @@ def digest(path):
         if item.is_symlink(): raise ValueError(f'Symlink refused: {item}')
         if item.is_file(): values[str(item.relative_to(path))]=digest(item)
     return hashlib.sha256(json.dumps(values,sort_keys=True).encode()).hexdigest()
+
+
+def permission_snapshot(path):
+    if path.is_symlink(): raise ValueError(f'Symlink refused: {path}')
+    if not path.exists(): return None
+    if path.is_file(): return path.stat().st_mode & 0o777
+    return {str(p.relative_to(path)):p.stat().st_mode & 0o777 for p in sorted(path.rglob('*')) if p.is_file()}
 
 
 def safe_path(path):
@@ -64,12 +72,17 @@ def unpack_verified(archive,destination,expected):
             target.chmod(member.mode & 0o777)
     manifest=json.loads((destination/'bundle-manifest.json').read_text())
     files=manifest['files']
+    modes=manifest.get('modes',{})
     actual={str(p.relative_to(destination)) for p in destination.rglob('*') if p.is_file()}-{'bundle-manifest.json'}
     if set(files)!=actual: raise ValueError('Manifest file inventory mismatch')
+    if set(modes)!=actual: raise ValueError('Manifest permission inventory mismatch')
+    if any(modes.get(name)!=0o755 for name in REQUIRED_EXECUTABLES):
+        raise ValueError('Required executable must have mode 0755')
     if {n for n in files if '/' not in n}!=RUNTIME_FILES: raise ValueError('Unexpected runtime file inventory')
     if any('/' in n and not n.startswith(APP+'/') for n in files): raise ValueError('Unexpected package directory')
     for name,sha in files.items():
         if digest(destination/name)!=sha: raise ValueError(f'Bundle hash mismatch: {name}')
+        if permission_snapshot(destination/name)!=modes[name]: raise ValueError(f'Bundle permission mismatch: {name}')
     return manifest
 
 
@@ -86,13 +99,16 @@ def prepare(archive,expected,runtime,app,backups,port):
     targets={name:runtime/name for name in sorted(RUNTIME_FILES|{'bundle-manifest.json'})}
     targets['app']=app
     before={key:digest(path) for key,path in targets.items()}
+    before_modes={key:permission_snapshot(path) for key,path in targets.items()}
     for key,path in targets.items():
         if before[key] is None:continue
         if key=='app': shutil.copytree(path,originals/'app')
         else: shutil.copy2(path,originals/key)
     after={key:digest(stage/(APP if key=='app' else key)) for key in targets}
-    plan={'schema':1,'state':'prepared','transaction_id':folder.name,'runtime':str(runtime),'app':str(app),
+    after_modes={key:permission_snapshot(stage/(APP if key=='app' else key)) for key in targets}
+    plan={'schema':2,'state':'prepared','transaction_id':folder.name,'runtime':str(runtime),'app':str(app),
           'port':port,'package':str(archive.absolute()),'package_sha256':expected,'before':before,'after':after,
+          'before_modes':before_modes,'after_modes':after_modes,
           'service_version':manifest['service_version'],'controller_version':manifest['controller_version'],
           'created_at':time.strftime('%Y-%m-%dT%H:%M:%S%z')}
     write_json(folder/'plan.json',plan)
@@ -119,6 +135,7 @@ def transaction_lock(plan):
 
 
 def targets(plan):
+    if plan.get('schema')!=2:raise ValueError('Prepare a new transaction with permission evidence; old plan was not modified')
     runtime=safe_path(Path(plan['runtime']));app=safe_path(Path(plan['app']))
     if set(plan['before'])!=RUNTIME_FILES|{'bundle-manifest.json','app'} or set(plan['after'])!=set(plan['before']):
         raise ValueError('Unexpected transaction inventory')
@@ -150,8 +167,12 @@ def restore(plan_path,plan):
         current=digest(path)
         if current not in {plan['before'][key],plan['after'][key],None}:
             raise ValueError(f'Rollback refused changed file: {key}')
+        if permission_snapshot(path) not in [plan['before_modes'][key],plan['after_modes'][key],None]:
+            raise ValueError(f'Rollback refused changed permissions: {key}')
         if plan['before'][key] is not None and digest(originals/key)!=plan['before'][key]:
             raise ValueError(f'Rollback backup hash mismatch: {key}')
+        if permission_snapshot(originals/key)!=plan['before_modes'][key]:
+            raise ValueError(f'Rollback backup permission mismatch: {key}')
     plan['state']='rolling_back';write_json(plan_path,plan)
     for key,path in paths.items():
         if plan['before'][key] is None:
@@ -160,6 +181,7 @@ def restore(plan_path,plan):
         elif key=='app':replace_app(originals/key,path,plan['transaction_id'])
         else:replace_file(originals/key,path,plan['transaction_id'])
     if any(digest(path)!=plan['before'][key] for key,path in paths.items()):raise ValueError('Rollback verification failed')
+    if any(permission_snapshot(path)!=plan['before_modes'][key] for key,path in paths.items()):raise ValueError('Rollback permission verification failed')
     plan['state']='rolled_back';write_json(plan_path,plan)
 
 
@@ -170,13 +192,16 @@ def apply(plan_path):
         paths=targets(plan);stage=plan_path.parent/'staged'
         for key,path in paths.items():
             if digest(path)!=plan['before'][key]:raise ValueError(f'Installed target changed since preparation: {key}')
+            if permission_snapshot(path)!=plan['before_modes'][key]:raise ValueError(f'Installed permissions changed since preparation: {key}')
             if digest(stage/(APP if key=='app' else key))!=plan['after'][key]:raise ValueError('Staged files changed')
+            if permission_snapshot(stage/(APP if key=='app' else key))!=plan['after_modes'][key]:raise ValueError('Staged permissions changed')
         plan['state']='applying';write_json(plan_path,plan)
         try:
             for key,path in paths.items():
                 if key=='app':replace_app(stage/APP,path,plan['transaction_id'])
                 else:replace_file(stage/key,path,plan['transaction_id'])
             if any(digest(path)!=plan['after'][key] for key,path in paths.items()):raise ValueError('Installed verification failed')
+            if any(permission_snapshot(path)!=plan['after_modes'][key] for key,path in paths.items()):raise ValueError('Installed permission verification failed')
             plan['state']='applied';write_json(plan_path,plan)
         except BaseException:
             restore(plan_path,plan)

@@ -9,7 +9,7 @@
 - 备份：`/Users/anbang/.local/share/echo-notes/backups`
 - 解释器：运行目录既有 `.venv/bin/python`
 
-脚本仅更新服务包明确列出的 Python、Shell、说明、依赖锁、模型清单及控制台。`.venv`、Hugging Face 缓存、日志、配置、现存任务与其他文件保留。它不安装依赖、不修改 Obsidian 配置，也不启动或停止进程。旧代码与 App 按文件哈希备份；计划绑定包 SHA-256、原安装哈希及新哈希。
+脚本仅更新服务包明确列出的 Python、Shell、说明、依赖锁、模型清单及控制台。`.venv`、Hugging Face 缓存、日志、配置、现存任务与其他文件保留。它不安装依赖、不修改 Obsidian 配置，也不启动或停止进程。旧代码与 App 按文件哈希和权限备份；计划绑定包 SHA-256、原安装哈希与权限及新哈希与权限。三个控制脚本与 App 可执行文件必须为 `0755`，打包、解包和安装后均核验；回退恢复原权限。
 
 ## 1. 核验并暂停
 
@@ -33,7 +33,7 @@
 /Users/anbang/.local/share/echonotes-asr/.venv/bin/python deploy_service.py prepare --package PACKAGE --sha256 SHA256 --runtime /Users/anbang/.local/share/echonotes-asr --app '/Users/anbang/Applications/MLX ASR 控制台.app' --backups /Users/anbang/.local/share/echo-notes/backups --port 18080
 ```
 
-命令打印独立 `plan.json` 路径。回读它，核对 `state=prepared`、目标路径、包摘要、版本及 `before/after`。`original/` 为回退副本，`staged/` 是已校验的新文件；这一步不会更新安装文件。
+命令打印独立 `plan.json` 路径。回读它，核对 `schema=2`、`state=prepared`、目标路径、包摘要、版本、`before/after` 与 `before_modes/after_modes`。`original/` 为回退副本，`staged/` 是已校验的新文件；这一步不会更新安装文件。旧的 `schema=1` 计划不再用于切换，应保留原记录并重新 prepare，不改写旧计划的哈希。
 
 ## 3. 执行与核验
 
