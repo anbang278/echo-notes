@@ -1,0 +1,15 @@
+{
+  "model": "mlx-community/diar_streaming_sortformer_4spk-v2.1-fp32",
+  "revision": "8541fc3db304f350b544bbcab1cfae4f3eeb2356",
+  "path": "/Users/anbang/.cache/huggingface/hub/models--mlx-community--diar_streaming_sortformer_4spk-v2.1-fp32/snapshots/8541fc3db304f350b544bbcab1cfae4f3eeb2356",
+  "files": {
+    "config.json": {
+      "sha256": "731ed06353d8a5af68c646db000642b87c8f16b4420e1c33dd2641e8ad63f420",
+      "bytes": 1702
+    },
+    "model.safetensors": {
+      "sha256": "dd18528b0e74a130501cde9beb655f9fc011e8718682728e2e88a981184cf282",
+      "bytes": 472107058
+    }
+  }
+}

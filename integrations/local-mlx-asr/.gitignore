@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+jobs/
+logs/
+*.pid
+*.lock.tmp
+controller/build/
+validation/output/
+*.wav
+*.mp3
+*.m4a
+*.f32le

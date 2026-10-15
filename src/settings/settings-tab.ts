@@ -49,6 +49,8 @@ import {
 	ALIYUN_FILETRANS_MODEL,
 	ALIYUN_TRANSCRIPTION_MODELS,
 	MEMORY_PROVIDER_LABELS,
+	LOCAL_OPENAI_DIARIZATION_MODEL,
+	LOCAL_OPENAI_MODEL_OPTIONS,
 	OPENCODE_GO_ANALYSIS_MODELS,
 	ANALYSIS_TEMPLATE_CATEGORIES,
 	COPY_LANGUAGE_LABELS,
@@ -68,6 +70,8 @@ import {
 	isMemoryProviderId,
 	isOfflineTranscriptionProviderId,
 	normalizeTranscriptionLanguageForProvider,
+	switchOfflineTranscriptionProvider,
+	validateLocalOpenAIBaseUrl,
 	parseRecognitionKeywordsInput,
 	restoreDefaultAnalysisTemplate,
 	type AnalysisProviderId,
@@ -182,6 +186,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	private settingsGuideSyncTimer: number | null = null;
 	private settingsGuideFinished: (() => void) | null = null;
 	private deferredSaveTimers = new Map<string, number>();
+	private deferredSaveCallbacks = new Map<string, () => Promise<boolean>>();
 	private customTranscriptionModelProvider: OfflineTranscriptionProviderId | null = null;
 	private stopActiveHotkeyCapture: (() => void) | null = null;
 
@@ -948,7 +953,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const isRealtime = this.getSelectedTranscriptionMode() === "realtime";
 		const isMosi = !isRealtime && config.provider === "mosi";
 		const isAgentPlan = config.provider === "volcengine-agentplan";
-		if (config.provider !== "siliconflow") {
+		const isLocalOpenAI = config.provider === "local-openai-compatible";
+		if (config.provider !== "siliconflow" && !isLocalOpenAI) {
 			this.customTranscriptionModelProvider = null;
 		}
 		this.renderBasicHeading(containerEl, "连接配置");
@@ -977,9 +983,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						if (!isOfflineTranscriptionProviderId(value)) {
 							return;
 						}
+						if (!await this.flushDeferredTranscriptionSaves()) {
+							dropdown.setValue(this.plugin.settings.offlineTranscription.provider);
+							return;
+						}
 						this.customTranscriptionModelProvider = null;
-						this.plugin.settings.offlineTranscription.provider = value;
-						this.applyOfflineProviderDefaults(value);
+						switchOfflineTranscriptionProvider(this.plugin.settings, value);
 						await this.plugin.saveSettings();
 						this.refreshSettings();
 					});
@@ -988,22 +997,27 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const apiKey = this.plugin.getApiKey(config.provider);
 		const apiKeyDescription = createFragment();
-		apiKeyDescription.appendText("按服务商隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
+		apiKeyDescription.appendText(isLocalOpenAI
+			? "本机服务无需认证时可留空。填写后仅保存到当前服务商的 Obsidian SecretStorage，不会复用其他服务商密钥。"
+			: "按服务商隔离保存到 Obsidian SecretStorage，不会写入插件设置文件。");
 		this.appendProviderSignupLink(apiKeyDescription, config.provider);
 		const apiKeySetting = new Setting(containerEl)
-			.setName(isAgentPlan ? "AgentPlan 专属 API Key" : "API Key")
+			.setName(isAgentPlan ? "AgentPlan 专属 API Key" : isLocalOpenAI ? "API Key（可选）" : "API Key")
 			.setDesc(apiKeyDescription);
 		apiKeySetting.settingEl.dataset.echoNotesGuideTarget = "transcription-api-key";
 		const apiKeyStatusEl = this.createSecretSaveStatus(apiKeySetting, apiKey);
+		if (isLocalOpenAI && !apiKey) {
+			renderStatusIndicator(apiKeyStatusEl, { tone: "neutral", text: "无需认证时可留空" }, setIcon);
+		}
 		apiKeySetting.addText((text) => {
 			text.inputEl.type = "password";
 			text
-				.setPlaceholder("sk-...")
+				.setPlaceholder(isLocalOpenAI ? "可选：本机服务的 API Key" : "sk-...")
 				.setValue(apiKey);
 			this.bindDeferredTextSave(apiKeySetting, `transcription-api-key:${config.provider}`, text.inputEl, async (value) => {
 				await this.plugin.saveApiKey(config.provider, value);
 				this.setSecretSaveStatus(apiKeyStatusEl, value ? "saved" : "cleared");
-			}, (value) => value && value.length < 8 ? "API Key 少于 8 个字符，请确认是否完整。" : undefined, apiKeyStatusEl);
+			}, (value) => !isLocalOpenAI && value && value.length < 8 ? "API Key 少于 8 个字符，请确认是否完整。" : undefined, apiKeyStatusEl);
 			return text;
 		});
 		apiKeySetting.controlEl.append(apiKeyStatusEl);
@@ -1026,6 +1040,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					});
 				});
 
+		} else if (!isRealtime && isLocalOpenAI) {
+			this.renderLocalOpenAIModelSetting(containerEl, config);
 		} else if (!isRealtime && config.provider === "siliconflow") {
 			const isOfficialModel = SILICONFLOW_TRANSCRIPTION_MODELS.some((model) => model === config.model);
 			const isChoosingCustomModel = !isOfficialModel || this.customTranscriptionModelProvider === config.provider;
@@ -1164,7 +1180,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.plugin.settings.offlineTranscription.baseUrl = value;
 						await this.plugin.saveSettings();
 					},
-					(value) => validateBaseUrl(value)
+					(value) => isLocalOpenAI ? validateLocalOpenAIBaseUrl(value) : validateBaseUrl(value)
 				);
 			}
 			return text;
@@ -1179,17 +1195,20 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			)
 			.addDropdown((dropdown) => {
 				for (const [value, label] of Object.entries(TRANSCRIPTION_LANGUAGE_LABELS)) {
-					dropdown.addOption(value, label);
+					if (!isLocalOpenAI || ["auto", "zh", "en"].includes(value)) dropdown.addOption(value, label);
 				}
-				if (!Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, config.language)) {
+				if (!Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, config.language) ||
+					(isLocalOpenAI && !["auto", "zh", "en"].includes(config.language))) {
 					dropdown.addOption(config.language, `自定义：${config.language}`);
 				}
 				return dropdown
 					.setValue(config.language || "auto")
 					.onChange(async (value) => {
-						config.language = normalizeTranscriptionLanguageForProvider(config.provider, value || "auto");
+						const current = this.getSelectedTranscriptionConfig();
+						if (current.provider !== config.provider) return;
+						current.language = normalizeTranscriptionLanguageForProvider(current.provider, value || "auto");
 						await this.plugin.saveSettings();
-						if (config.language !== value) {
+						if (current.language !== value) {
 							new Notice("AgentPlan 说话人分离仅支持 auto 或中文，已自动切换为 auto。");
 							this.refreshSettings();
 						}
@@ -1197,29 +1216,21 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			});
 
 		if (!isRealtime && !isAgentPlan) {
-			new Setting(advancedEl)
+			const languageSetting = new Setting(advancedEl)
 				.setName("自定义语言代码")
-				.setDesc("填写当前离线服务商支持的语言代码；清空不会改变当前语言。")
-				.addText((text) => {
-					const customLanguage = Object.prototype.hasOwnProperty.call(
-						TRANSCRIPTION_LANGUAGE_LABELS,
-						config.language
-					)
-						? ""
-						: config.language;
-					let draftValue = customLanguage;
-					text.setPlaceholder("例如 cmn、yue、fr").setValue(customLanguage).onChange((value) => {
-						draftValue = value;
-					});
-					text.inputEl.addEventListener("blur", () => {
-						const value = draftValue.trim();
-						if (!value || value === config.language) {
-							return;
-						}
-						config.language = value;
-						void this.plugin.saveSettings().then(() => this.refreshSettings());
-					});
+				.setDesc("填写当前离线服务商支持的语言代码；清空不会改变当前语言。");
+			languageSetting.addText((text) => {
+				const customLanguage = Object.prototype.hasOwnProperty.call(TRANSCRIPTION_LANGUAGE_LABELS, config.language)
+					? "" : config.language;
+				text.setPlaceholder("例如 cmn、yue、fr").setValue(customLanguage);
+				this.bindDeferredTextSave(languageSetting, "transcription-language", text.inputEl, async (value) => {
+					const current = this.getSelectedTranscriptionConfig();
+					if (!value || current.provider !== config.provider) return;
+					current.language = value;
+					await this.plugin.saveSettings();
 				});
+				return text;
+			});
 		}
 
 		if (isRealtime) {
@@ -1231,6 +1242,63 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			this.renderTranscriptionRecordingSettings(containerEl);
 		}
 
+	}
+
+	private renderLocalOpenAIModelSetting(containerEl: HTMLElement, config: TranscriptionConfig): void {
+		const isPreset = LOCAL_OPENAI_MODEL_OPTIONS.some((option) => option.id === config.model);
+		const custom = !isPreset || this.customTranscriptionModelProvider === "local-openai-compatible";
+		new Setting(containerEl)
+			.setName("转写模型")
+			.setDesc("选择本机已部署的模型。分说话人模式最多区分 4 位匿名说话人；也可填写其他兼容服务的模型 ID。")
+			.addDropdown((dropdown) => {
+				for (const option of LOCAL_OPENAI_MODEL_OPTIONS) dropdown.addOption(option.id, option.label);
+				dropdown.addOption("__custom__", "自定义模型");
+				return dropdown.setValue(custom ? "__custom__" : config.model).onChange(async (value) => {
+					if (value === "__custom__") {
+						this.customTranscriptionModelProvider = "local-openai-compatible";
+						this.refreshSettings();
+						return;
+					}
+					this.customTranscriptionModelProvider = null;
+					const timer = this.deferredSaveTimers.get("transcription-local-custom-model");
+					if (timer !== undefined) window.clearTimeout(timer);
+					this.deferredSaveTimers.delete("transcription-local-custom-model");
+					try {
+						await this.saveLocalOpenAIModel(value);
+					} catch (error) {
+						new Notice(`模型保存失败：${getSanitizedErrorMessage(error)}`);
+					}
+					this.refreshSettings();
+				});
+			});
+		if (custom) {
+			const setting = new Setting(containerEl).setName("自定义转写模型")
+				.setDesc("填写本机服务提供的模型 ID；不会自动下载或切换服务端模型。");
+			setting.addText((text) => {
+				text.setPlaceholder("例如本地服务返回的模型 ID").setValue(isPreset ? "" : config.model);
+				this.bindDeferredTextSave(setting, "transcription-local-custom-model", text.inputEl,
+					(value) => this.saveLocalOpenAIModel(value),
+					(value) => value ? undefined : "模型 ID 不能为空。");
+				return text;
+			});
+		}
+	}
+
+	private async saveLocalOpenAIModel(value: string): Promise<void> {
+		const current = this.plugin.settings.offlineTranscription;
+		if (current.provider !== "local-openai-compatible") return;
+		const previous = current.model;
+		const baseUrl = current.baseUrl;
+		current.model = value;
+		try {
+			await this.plugin.saveSettings();
+		} catch (error) {
+			const latest = this.plugin.settings.offlineTranscription;
+			if (latest.provider === "local-openai-compatible" && latest.baseUrl === baseUrl && latest.model === value) {
+				latest.model = previous;
+			}
+			throw error;
+		}
 	}
 
 	private renderTranscriptionRecordingSettings(containerEl: HTMLElement): void {
@@ -1514,7 +1582,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 				this.refreshSettings();
 			}));
-		} else if (isAgentPlan) {
+		} else if (isAgentPlan || config.provider === "local-openai-compatible") {
 			enabled = true;
 			this.renderTranscriptionCapabilityStatus(heading, view);
 		} else if (config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL) {
@@ -1777,6 +1845,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const isAliyunFiletrans = config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL;
 		const filetrans = isAliyunFiletrans ? config.aliyunFiletrans : undefined;
 		const speakerEnabled = config.provider === "volcengine-agentplan" ||
+			(config.provider === "local-openai-compatible" && config.model === LOCAL_OPENAI_DIARIZATION_MODEL) ||
 			(config.provider === "mosi" && this.plugin.settings.mosiSpeakerDiarizationEnabled) ||
 			Boolean(filetrans?.diarizationEnabled);
 		const featureView = (
@@ -1796,9 +1865,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			capability.supportsSpeakerDiarization,
 			speakerEnabled ? "enabled" : "disabled"
 		);
-		if (config.provider === "volcengine-agentplan") {
+		if (config.provider === "volcengine-agentplan" ||
+			(config.provider === "local-openai-compatible" && capability.supportsSpeakerDiarization)) {
 			speaker.state = "fixed";
-			speaker.stateLabel = "始终开启";
+			speaker.stateLabel = config.provider === "local-openai-compatible" ? "随模型启用" : "始终开启";
 		}
 		const hotwords = featureView(
 			"hotwords",
@@ -3207,40 +3277,41 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			}
 			return !message;
 		};
-		const commit = (): void => {
+		const commit = async (): Promise<boolean> => {
 			const existing = this.deferredSaveTimers.get(key);
 			if (existing !== undefined) {
 				window.clearTimeout(existing);
 			}
 			this.deferredSaveTimers.delete(key);
-			if (!inputEl.isConnected) return;
+			if (!inputEl.isConnected) return true;
 			const value = inputEl.value.trim();
-			if (!renderValidation(value)) {
-				return;
-			}
-			void save(value).then(() => {
-				if (feedbackEl) {
-					return;
+			if (!renderValidation(value)) return false;
+			try {
+				await save(value);
+				if (!feedbackEl) {
+					renderStatusIndicator(validationEl, {
+						tone: "success",
+						text: value ? "已保存" : "已清除",
+						live: "polite"
+					}, setIcon);
 				}
-				renderStatusIndicator(validationEl, {
-					tone: "success",
-					text: value ? "已保存" : "已清除",
-					live: "polite"
-				}, setIcon);
-			}).catch((error) => {
+				return true;
+			} catch (error) {
 				renderStatusIndicator(validationEl, {
 					tone: "failed",
 					text: `保存失败：${getSanitizedErrorMessage(error)}`,
 					live: "polite"
 				}, setIcon);
-			});
+				return false;
+			}
 		};
+		this.deferredSaveCallbacks.set(key, commit);
 		const schedule = (delay: number): void => {
 			const existing = this.deferredSaveTimers.get(key);
 			if (existing !== undefined) {
 				window.clearTimeout(existing);
 			}
-			const timer = window.setTimeout(commit, delay);
+			const timer = window.setTimeout(() => { void commit(); }, delay);
 			this.deferredSaveTimers.set(key, timer);
 		};
 		inputEl.addEventListener("input", () => {
@@ -3252,11 +3323,20 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		});
 	}
 
+	private async flushDeferredTranscriptionSaves(): Promise<boolean> {
+		const keys = [...this.deferredSaveTimers.keys()].filter((key) => key.startsWith("transcription-"));
+		for (const key of keys) {
+			if (await this.deferredSaveCallbacks.get(key)?.() === false) return false;
+		}
+		return true;
+	}
+
 	private clearDeferredSaveTimers(): void {
 		for (const timer of this.deferredSaveTimers.values()) {
 			window.clearTimeout(timer);
 		}
 		this.deferredSaveTimers.clear();
+		this.deferredSaveCallbacks.clear();
 	}
 
 	private renderAdvancedSection(
@@ -3298,24 +3378,6 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		renderStatusIndicator(statusEl, { tone, text, live: "polite" }, setIcon);
 	}
 
-	private applyOfflineProviderDefaults(provider: OfflineTranscriptionProviderId): void {
-		const defaults = getOfflineTranscriptionProviderDefaults(provider);
-		this.plugin.settings.offlineTranscription.baseUrl = defaults.baseUrl;
-		this.plugin.settings.offlineTranscription.model =
-			provider === "mosi"
-				? getMosiTranscriptionModel(
-						this.plugin.settings.mosiSpeakerDiarizationEnabled
-					)
-				: defaults.model;
-		this.plugin.settings.offlineTranscription.language = defaults.language;
-		if (defaults.aliyunFiletrans) {
-			this.plugin.settings.offlineTranscription.aliyunFiletrans = {
-				...defaults.aliyunFiletrans
-			};
-		} else {
-			delete this.plugin.settings.offlineTranscription.aliyunFiletrans;
-		}
-	}
 
 	private applyAnalysisProviderDefaults(provider: AnalysisProviderId): void {
 		const defaults = ANALYSIS_PROVIDER_DEFAULTS[provider] ?? ANALYSIS_PROVIDER_DEFAULTS["aliyun-bailian"];
@@ -3382,6 +3444,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return "Ollama OpenAI 兼容基础地址，默认 http://localhost:11434/v1。需确认本地服务支持音频转写接口。";
 			case "lm-studio":
 				return "LM Studio OpenAI 兼容基础地址，默认 http://localhost:1234/v1。需确认本地服务支持音频转写接口。";
+			case "local-openai-compatible":
+				return "本机 OpenAI 兼容音频服务地址，默认 http://127.0.0.1:18080/v1。仅支持 localhost、127.0.0.1 或 [::1]；长录音会流式上传，无需手动切分。";
 			case "siliconflow":
 				return "硅基流动（SiliconFlow）API 基础地址。";
 			case "mosi":
@@ -3454,6 +3518,8 @@ function getUploadModeLabel(uploadMode: string): string {
 	switch (uploadMode) {
 		case "multipart":
 			return "multipart";
+		case "streaming-multipart":
+			return "流式 multipart（已有音频文件）";
 		case "base64-data-url":
 			return "Base64 Data URL";
 		case "temporary-oss-url":

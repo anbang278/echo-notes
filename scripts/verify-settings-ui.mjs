@@ -3210,6 +3210,118 @@ async function verifySiliconFlowModelPersistence(page) {
 	}
 }
 
+async function verifyLocalOpenAISettings(page) {
+	await reopenSettings(page);
+	const snapshot = await page.evaluate(async (pluginId) => {
+		const plugin = window.app.plugins.plugins[pluginId];
+		const previous = {
+			offline: structuredClone(plugin.settings.offlineTranscription),
+			profiles: structuredClone(plugin.settings.offlineTranscriptionByProvider),
+			mode: plugin.settings.transcriptionMode,
+			stage: plugin.settingTab.activeSettingsStage,
+			transcriptionSection: plugin.settingTab.activeTranscriptionSettingsSection,
+			analysisSection: plugin.settingTab.activeAnalysisSettingsSection,
+			capability: plugin.settingTab.activeTranscriptionCapability,
+			localKey: plugin.getApiKey("local-openai-compatible"),
+			lmKey: plugin.getApiKey("lm-studio")
+		};
+		plugin.settings.transcriptionMode = "offline";
+		plugin.settings.offlineTranscriptionByProvider = {};
+		plugin.settings.offlineTranscription = {
+			provider: "lm-studio", baseUrl: "http://localhost:1234/custom", model: "lm/original", language: "yue"
+		};
+		await plugin.saveApiKey("lm-studio", "ui-test-lm-only-key");
+		await plugin.saveApiKey("local-openai-compatible", "");
+		await plugin.saveSettings();
+		plugin.settingTab.showDestination("transcription-service");
+		return previous;
+	}, PLUGIN_ID);
+	try {
+		const lmInput = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
+		await lmInput.fill("lm/immediate-switch");
+		// No debounce delay: provider switching itself must flush the old provider's pending input.
+		await selectSettingOption(page, "服务商", "local-openai-compatible");
+		const localDefaults = await page.evaluate((pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			return { ...plugin.settings.offlineTranscription, keyEmpty: plugin.getApiKey("local-openai-compatible") === "" };
+		}, PLUGIN_ID);
+		assert(localDefaults.baseUrl === "http://127.0.0.1:18080/v1" &&
+			localDefaults.model === "mlx-community/Qwen3-ASR-0.6B-8bit" && localDefaults.language === "auto" && localDefaults.keyEmpty,
+			"本地模型默认值或独立空 Key 不正确");
+		assert(JSON.stringify(await getSettingOptionValues(page, "转写模型")) === JSON.stringify([
+			"mlx-community/Qwen3-ASR-0.6B-8bit", "local/qwen3-asr-0.6b-sortformer-4spk", "__custom__"
+		]), "本地模型缺少普通、分说话人与自定义选项");
+		assert(await (await getActiveSetting(page, "API Key（可选）")).isVisible(), "本地模型未说明 Key 可选");
+		await (await getActiveSetting(page, "转写配置自检")).getByRole("button", { name: "检查转写配置", exact: true }).click();
+		const diagnosticModal = page.locator(".echo-notes-provider-diagnostics-modal");
+		await diagnosticModal.waitFor({ state: "visible" });
+		assert((await diagnosticModal.textContent()).includes("未发现阻塞性问题"), "本机模型无 Key 时被自检阻断");
+		assert(!(await diagnosticModal.textContent()).includes("长音频分段暂不支持"), "本地长音频能力仍显示旧限制");
+		await page.keyboard.press("Escape");
+		await diagnosticModal.waitFor({ state: "hidden" });
+
+		await selectSettingOption(page, "转写模型", "local/qwen3-asr-0.6b-sortformer-4spk");
+		await getActivePanel(page).getByRole("tab", { name: "能力增强", exact: true }).click();
+		await getActivePanel(page).locator('[data-capability-tab="speaker"]').click();
+		assert((await getActivePanel(page).textContent()).includes("随模型启用"), "本地分说话人模型未正确显示已启用状态");
+		assert(!(await (await getActiveSetting(page, "说话人标签样式")).locator('select:not([aria-hidden="true"])').isDisabled()), "本地分说话人模型无法设置标签样式");
+		await getActivePanel(page).getByRole("tab", { name: "转写服务", exact: true }).click();
+		await selectSettingOption(page, "转写模型", "__custom__");
+		await (await getActiveSetting(page, "自定义转写模型")).locator('input[type="text"]').fill("custom/immediate-local");
+		await selectSettingOption(page, "服务商", "lm-studio");
+		assert(await getSettingTextValue(page, "转写模型") === "lm/immediate-switch", "快速切换服务商丢失 LM Studio 自定义模型");
+		await selectSettingOption(page, "服务商", "local-openai-compatible");
+		assert(await getSettingTextValue(page, "自定义转写模型") === "custom/immediate-local", "本地自定义模型在切换后丢失");
+		const advanced = getActivePanel(page).locator('.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced').first();
+		await advanced.locator("summary").click();
+		const baseSetting = await getActiveSetting(page, "Base URL");
+		await baseSetting.locator('input[type="text"]').fill("http://192.168.1.2:18080/v1");
+		await baseSetting.locator('input[type="text"]').blur();
+		await baseSetting.getByText("本地模型只支持", { exact: false }).waitFor({ state: "visible" });
+		assert(await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.baseUrl, PLUGIN_ID) ===
+			"http://127.0.0.1:18080/v1", "非本机地址不应写入本地服务商配置");
+		await baseSetting.locator('input[type="text"]').fill("http://[::1]:23456/v1");
+		await baseSetting.locator('input[type="text"]').blur();
+		await baseSetting.getByText("已保存", { exact: true }).waitFor({ state: "visible" });
+		const language = (await getActiveSetting(page, "默认转写语言")).locator('select:not([aria-hidden="true"])');
+		await language.selectOption("en");
+		await page.waitForFunction((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.language === "en", PLUGIN_ID);
+		await (await getActiveSetting(page, "自定义语言代码")).locator('input[type="text"]').fill("fr");
+		await selectSettingOption(page, "服务商", "lm-studio");
+		await selectSettingOption(page, "服务商", "local-openai-compatible");
+		const restored = await page.evaluate(async (pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			await plugin.loadSettings();
+			plugin.settingTab.showDestination("transcription-service");
+			return {
+				local: plugin.settings.offlineTranscription,
+				lm: plugin.settings.offlineTranscriptionByProvider["lm-studio"],
+				keyIsolated: plugin.getApiKey("local-openai-compatible") === "" && plugin.getApiKey("lm-studio") === "ui-test-lm-only-key"
+			};
+		}, PLUGIN_ID);
+		assert(restored.local.model === "custom/immediate-local" && restored.local.baseUrl === "http://[::1]:23456/v1" &&
+			restored.local.language === "fr" && restored.lm.model === "lm/immediate-switch" &&
+			restored.lm.baseUrl === "http://localhost:1234/custom" && restored.lm.language === "yue" && restored.keyIsolated,
+			"重载设置后各服务商的地址、模型、语言或 Key 隔离不正确");
+		return { defaults: true, presets: true, optionalKey: true, diagnostics: true, providerDraftFlush: true, persistedProfiles: true };
+	} finally {
+		await page.evaluate(async ({ pluginId, previous }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.offlineTranscription = previous.offline;
+			plugin.settings.offlineTranscriptionByProvider = previous.profiles;
+			plugin.settings.transcriptionMode = previous.mode;
+			await plugin.saveApiKey("lm-studio", previous.lmKey);
+			await plugin.saveApiKey("local-openai-compatible", previous.localKey);
+			await plugin.saveSettings();
+			plugin.settingTab.activeSettingsStage = previous.stage;
+			plugin.settingTab.activeTranscriptionSettingsSection = previous.transcriptionSection;
+			plugin.settingTab.activeAnalysisSettingsSection = previous.analysisSection;
+			plugin.settingTab.activeTranscriptionCapability = previous.capability;
+			plugin.settingTab.refreshSettings();
+		}, { pluginId: PLUGIN_ID, previous: snapshot });
+	}
+}
+
 async function verifyTabs(page) {
 	const transcriptionTab = page.locator('[data-settings-stage="transcription"]');
 	const analysisTab = page.locator('[data-settings-stage="analysis"]');
@@ -3266,7 +3378,7 @@ async function verifyTabs(page) {
 	);
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "服务商")) ===
-			JSON.stringify(["aliyun-bailian", "siliconflow", "mosi", "ollama", "lm-studio"]),
+			JSON.stringify(["aliyun-bailian", "siliconflow", "mosi", "ollama", "lm-studio", "local-openai-compatible"]),
 		"离线转写服务商的成员或顺序不正确"
 	);
 	assert(
@@ -6135,6 +6247,7 @@ try {
 	await verifySettingsSurface(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
+	const localOpenAISettings = await verifyLocalOpenAISettings(page);
 	await verifySiliconFlowUpgradeModal(page);
 	const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
 		pluginId: PLUGIN_ID, getActiveSetting, selectSettingOption, getActivePanel,
@@ -6174,6 +6287,7 @@ try {
 		generatedAt: new Date().toISOString(),
 		durationMs: Date.now() - verificationStartedAt,
 		semanticChecks: {
+			localOpenAISettings: true,
 			recordingStorageSettings: true,
 			recordingStorageIntegration: true,
 			audioWorkletSupport: true,
@@ -6213,6 +6327,7 @@ try {
 		recordingStorageLayouts,
 		recordingStorageIntegration,
 		siliconFlowMockChain,
+		localOpenAISettings,
 		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
 		realtimeStatusLayout,
@@ -6241,6 +6356,17 @@ try {
 	}
 } catch (error) {
 	console.error(error instanceof Error ? error.stack : error);
+	const failedPage = browser?.contexts().flatMap((context) => context.pages())
+		.find((candidate) => candidate.url() === "app://obsidian.md/index.html");
+	if (failedPage) {
+		const failureState = await failedPage.evaluate(() => ({
+			settingsVisible: Boolean(document.querySelector(".modal.mod-settings")),
+			settingsHeadings: [...document.querySelectorAll(".vertical-tab-header-group-title")].map((element) => element.textContent),
+			pluginRootCount: document.querySelectorAll(".echo-notes-settings-intro").length,
+			notices: [...document.querySelectorAll(".notice")].map((element) => element.textContent)
+		})).catch(() => undefined);
+		console.error(`隔离 UI 失败状态：${JSON.stringify(failureState)}`);
+	}
 	const obsidianOutput = getObsidianOutput();
 	if (obsidianOutput) {
 		console.error(`隔离 Obsidian 输出：\n${obsidianOutput}`);

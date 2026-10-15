@@ -15,7 +15,16 @@ export interface TranscriptionSegment extends TranscriptionSegmentRange {
 	utterances?: TranscriptionUtterance[];
 }
 
+export type LocalSpeakerNumber = 1 | 2 | 3 | 4;
+
+/** Local diarization can mark uncertainty without inventing another speaker. */
+export interface LocalSpeakerAttribution {
+	kind: "identified" | "unassigned" | "overlap" | "boundary";
+	speakers: LocalSpeakerNumber[];
+}
+
 export interface TranscriptionUtterance {
+	localSpeaker?: LocalSpeakerAttribution;
 	speakerId: string;
 	text: string;
 	startSeconds?: number;
@@ -56,6 +65,36 @@ export interface RemoteTranscriptionTaskResume {
 	configurationFingerprint: string;
 }
 
+export type LocalTranscriptionPhase =
+	| "creating" | "uploading" | "waiting" | "decoding" | "diarizing"
+	| "transcribing" | "aligning" | "saving" | "canceling" | "canceled" | "cleanup-pending";
+
+/** Safe recovery metadata only; never persist audio, credentials or raw responses. */
+export interface LocalTranscriptionTaskResume {
+	protocol: 1;
+	origin: string;
+	clientRequestId: string;
+	jobId?: string;
+	instanceId: string;
+	sourcePath: string;
+	sourceSize: number;
+	sourceMtimeMs: number;
+	sourceIdentity: string;
+	model: string;
+	language: string;
+	configurationFingerprint: string;
+	confirmedOffset: number;
+	phase: LocalTranscriptionPhase;
+	cancelRequested?: boolean;
+}
+
+export interface LocalTaskControlResult {
+	confirmed: boolean;
+	/** A verified new service instance makes the old task terminal. */
+	expired?: boolean;
+	task: LocalTranscriptionTaskResume;
+}
+
 export interface StreamingTranscriptionState {
 	text: string;
 	utterances?: TranscriptionUtterance[];
@@ -68,6 +107,14 @@ export interface StreamingTranscriptionState {
 }
 
 export type TranscriptionProgress =
+	| {
+			type: "local-asr-progress";
+			phase: LocalTranscriptionPhase;
+			uploadedBytes?: number;
+			totalBytes?: number;
+			processedSeconds?: number;
+			totalSeconds?: number;
+	  }
 	| {
 			type: "long-audio-preparing";
 			segments: TranscriptionSegment[];
@@ -151,6 +198,9 @@ export interface TranscriptionInput {
 	language?: string;
 	resumeSegments?: TranscriptionSegment[];
 	resumeRemoteTask?: RemoteTranscriptionTaskResume;
+	resumeLocalTask?: LocalTranscriptionTaskResume;
+	/** Must be awaited before creating a job and after every acknowledged mutation. */
+	onLocalCheckpoint?: (task: LocalTranscriptionTaskResume) => Promise<void> | void;
 	enhancement?: TranscriptionEnhancementSnapshot;
 	configurationFingerprint?: string;
 	signal?: AbortSignal;
@@ -159,6 +209,7 @@ export interface TranscriptionInput {
 }
 
 export interface TranscriptionResult {
+	localTask?: LocalTranscriptionTaskResume;
 	text: string;
 	provider: string;
 	model: string;
@@ -173,9 +224,17 @@ export interface TranscriptionProvider {
 	id: string;
 	name: string;
 	transcribe(input: TranscriptionInput): Promise<TranscriptionResult>;
+	cancelLocalTask?(task: LocalTranscriptionTaskResume): Promise<LocalTaskControlResult>;
+	/** Call only after the successful transcript has been durably saved. */
+	acknowledgeLocalResult?(task: LocalTranscriptionTaskResume): Promise<LocalTaskControlResult>;
 }
 
 export type TranscriptionErrorCode =
+	| "cancelled"
+	| "local_task_expired"
+	| "local_configuration_changed"
+	| "source_changed"
+	| "result_unknown"
 	| "missing_api_key"
 	| "unsupported_audio"
 	| "unsupported_format"

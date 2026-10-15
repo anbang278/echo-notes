@@ -51,6 +51,10 @@ Long term, Echo Notes aims to help users build a more complete AI version of the
 
 The real goal is not to help you write a few fewer meeting notes. It is to continuously capture your real-world action trail and turn it into personal context infrastructure that future AI can understand, retrieve, reason over, and collaborate with. This direction should respect user control over data: personal memory should stay in your Obsidian vault whenever possible, and external providers should only be called when you explicitly configure and trigger them.
 
+## Local model transcription
+
+Choose **Local models (OpenAI compatible)** in the offline transcription settings. The dedicated desktop provider streams existing Vault audio to a loopback service without a 25 MiB client limit. Its address, model, language and optional API key are isolated from other providers. The bundled MLX service supports resumable jobs up to 1 GiB / 8 decoded hours; standard OpenAI-compatible servers use streaming multipart without automatic resubmission. See [local model setup and recovery](docs/local-model-transcription.md).
+
 ## Features
 
 - Choose **Real-time transcription** or **Offline transcription** above the Provider setting. Each mode keeps an isolated provider configuration.

@@ -392,3 +392,38 @@ test("完整验证拒绝以录音定向筛选冒充全量回归", async () => {
 	assert.throws(() => assertFullVerificationMode({ ECHO_NOTES_VERIFY_RECORDING_ONLY: "1" }), /完整验证/);
 	assert.doesNotThrow(() => assertFullVerificationMode({}));
 });
+
+
+test("显式接管绑定旧交付及三个文件哈希，不伪造原任务批准", async (t) => {
+	const f = await ready(t);
+	const first = await f.installer.deploy(f.pkg);
+	const otherTask = path.join(f.project, ".trellis/tasks/other");
+	await writeJson(path.join(otherTask, "task.json"), { id: "other" });
+	await f.update("0.4.28");
+	const pkg = { ...await f.packageFixture(), task: otherTask };
+	await assert.rejects(f.installer.deploy(pkg), /其他任务仍占用/);
+	await assert.rejects(f.installer.deploy({ ...pkg, takeover: true }), /其他任务仍占用/);
+	const authorization = {
+		schemaVersion: 1, previousDeliveryId: first.current.id, previousFileHashes: first.current.fileHashes,
+		taskId: "other", authorizedBy: "测试用户", authorizedAt: new Date().toISOString(), userQuote: "升级到最新的做验收"
+	};
+	const authPath = path.join(otherTask, "supersede-authorization.json");
+	for (const invalid of [
+		{ previousDeliveryId: "stale" }, { previousFileHashes: { ...first.current.fileHashes, "main.js": "stale" } },
+		{ taskId: "wrong" }, { userQuote: "" }, { authorizedAt: "invalid" }
+	]) {
+		await writeJson(authPath, { ...authorization, ...invalid });
+		await assert.rejects(f.installer.deploy({ ...pkg, supersedeAuthorization: authPath }), /接管授权未绑定/);
+	}
+	await writeJson(authPath, authorization);
+	const config = await readFile(path.join(f.install, "data.json"));
+	const next = await f.installer.deploy({ ...pkg, supersedeAuthorization: authPath });
+	assert.equal(next.state, "awaiting-human");
+	assert.equal(next.current.supersededPrevious.deliveryId, first.current.id);
+	assert.deepEqual(next.current.supersededPrevious.fileHashes, first.current.fileHashes);
+	assert.equal((await f.installer.status()).approvalValid, false);
+	await assert.rejects(readFile(path.join(first.directory, "approval.json")), { code: "ENOENT" });
+	await f.installer.rollback();
+	assert.deepEqual(await fileHashes(f.install), first.current.fileHashes);
+	assert.deepEqual(await readFile(path.join(f.install, "data.json")), config);
+});

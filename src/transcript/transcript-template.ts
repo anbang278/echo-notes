@@ -213,10 +213,16 @@ export function renderTranscriptionUtterances(
 
 	return turns
 		.map((turn) => {
-			let speakerNumber = speakerNumbers.get(turn.speakerId);
-			if (speakerNumber === undefined) {
-				speakerNumber = speakerNumbers.size + 1;
-				speakerNumbers.set(turn.speakerId, speakerNumber);
+			let speakerLabel: string;
+			if (turn.localSpeaker) {
+				speakerLabel = renderLocalSpeakerLabel(turn.localSpeaker, copyLanguage);
+			} else {
+				let speakerNumber = speakerNumbers.get(turn.speakerId);
+				if (speakerNumber === undefined) {
+					speakerNumber = speakerNumbers.size + 1;
+					speakerNumbers.set(turn.speakerId, speakerNumber);
+				}
+				speakerLabel = `${copy.speakerLabel} ${speakerNumber}`;
 			}
 			let localizedTimeRange = "";
 			if (
@@ -232,9 +238,18 @@ export function renderTranscriptionUtterances(
 				localizedTimeRange =
 					copyLanguage === "en" ? ` (${formattedTimeRange})` : `（${formattedTimeRange}）`;
 			}
-			return `**${copy.speakerLabel} ${speakerNumber}${localizedTimeRange}**\n\n${turn.text}`;
+			return `**${speakerLabel}${localizedTimeRange}**\n\n${turn.text}`;
 		})
 		.join("\n\n");
+}
+
+function renderLocalSpeakerLabel(attribution: NonNullable<TranscriptionUtterance["localSpeaker"]>, language: CopyLanguage): string {
+	const english = language === "en";
+	if (attribution.kind === "unassigned") return english ? "Speaker undetermined" : "说话人未确定";
+	const speakers = attribution.speakers.map((number) => `${english ? "Speaker" : "说话人"} ${number}`).join(" / ");
+	if (attribution.kind === "identified") return speakers;
+	if (english) return `${attribution.kind === "overlap" ? "Overlapping speech" : "Speaker transition"} (${speakers}, attribution unverified)`;
+	return `${attribution.kind === "overlap" ? "重叠发言" : "说话人切换处"}（${speakers}，归属待核对）`;
 }
 
 function renderInterruptedTranscriptTemplate(input: FailedTranscriptTemplateInput): string {
@@ -338,7 +353,11 @@ function groupConsecutiveSpeakerUtterances(utterances: TranscriptionUtterance[])
 		}
 
 		const previous = turns.at(-1);
-		if (previous?.speakerId === utterance.speakerId) {
+		const canGroupLocal = !previous?.localSpeaker && !utterance.localSpeaker
+			|| previous?.localSpeaker?.kind === "identified" && utterance.localSpeaker?.kind === "identified"
+				&& previous.localSpeaker.speakers[0] === utterance.localSpeaker.speakers[0]
+				&& (utterance.startSeconds ?? 0) - (previous.endSeconds ?? 0) <= 1.5;
+		if (previous?.speakerId === utterance.speakerId && canGroupLocal) {
 			previous.text = joinUtteranceText(previous.text, text);
 			previous.startSeconds ??= utterance.startSeconds;
 			if (utterance.endSeconds !== undefined) {

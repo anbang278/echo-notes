@@ -173,6 +173,7 @@ import {
 	queryAliyunFiletransTask,
 	type AliyunHttpRequester
 } from "./providers/aliyun-filetrans-client";
+import { formatLocalProgress, mergeLocalCheckpoint, LOCAL_TRANSCRIPT_SAVE_STAGE } from "./providers/local-task-lifecycle";
 import { diagnoseTranscriptionProviderSettings } from "./providers/provider-diagnostics";
 import {
 	shouldWriteFailedTranscript,
@@ -182,6 +183,7 @@ import {
 	type TranscriptionEnhancementSnapshot,
 	type TranscriptionProgress,
 	type RemoteTranscriptionTaskResume,
+	type LocalTranscriptionTaskResume,
 	type TranscriptionSegment
 } from "./providers/transcription-provider";
 import {
@@ -247,6 +249,15 @@ const LEGACY_ANALYSIS_API_KEY_SECRET_ID = "echo-notes-analysis-api-key";
 const AUDIO_RECORDER_PLUGIN_ID = "audio-recorder";
 const AUDIO_RECORDER_START_COMMAND_ID = "audio-recorder:start";
 const AUDIO_RECORDER_STOP_COMMAND_ID = "audio-recorder:stop";
+const LOCAL_CANCELLATION_CONFIRMATION_MS = 2 * 60 * 1000;
+
+interface LocalCancellationConfirmation {
+	task: LocalTranscriptionTaskResume;
+	deadline: number;
+	nextDelayMs: number;
+	timer?: number;
+	deadlineTimer?: number;
+}
 
 const ECHO_NOTES_COMMAND_IDS = [
 	"start-official-audio-recorder",
@@ -289,6 +300,7 @@ interface ProcessAudioOptions {
 	diagnosticChainId?: string;
 	diagnosticRetryOfSessionId?: string;
 	resumeRemoteTask?: RemoteTranscriptionTaskResume;
+	resumeLocalTask?: LocalTranscriptionTaskResume;
 	siliconFlowUpgradeDecision?: { value?: SiliconFlowUpgradeDecision; config?: EchoNotesSettings["offlineTranscription"] };
 }
 
@@ -399,6 +411,9 @@ export default class EchoNotesPlugin extends Plugin {
 	private siliconFlowUpgradeModal: SiliconFlowModelUpgradeModal | null = null;
 	private siliconFlowUpgradeRollback: (() => void) | null = null;
 	private activeTranscriptionControllers = new Map<string, AbortController>();
+	private localCancellationRequests?: Map<string, Promise<boolean>>;
+	private localCancellationConfirmations?: Map<string, LocalCancellationConfirmation>;
+	private localCleanupRequests?: Map<string, Promise<void>>;
 	private processingAnalyses = new Set<string>();
 	private activeMemoryTasks = new Map<string, ActiveMemoryTask>();
 	private mutatingFiles = new Set<string>();
@@ -494,6 +509,9 @@ export default class EchoNotesPlugin extends Plugin {
 
 	onunload(): void {
 		this.unloading = true;
+		for (const taskId of this.localCancellationConfirmations?.keys() ?? []) {
+			this.stopLocalCancellationConfirmation(taskId);
+		}
 		this.realtimeUnloading = true;
 		this.siliconFlowUpgradeRollback?.();
 		this.siliconFlowUpgradeRollback = null;
@@ -754,6 +772,10 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private recordTranscriptionDiagnosticProgress(sessionId: string, progress: TranscriptionProgress): void {
+		if (progress.type === "local-asr-progress") {
+			this.diagnostics.record(sessionId, "progress", "local-asr-progress", { ...progress });
+			return;
+		}
 		if (progress.type === "whole-audio-request-started") {
 			this.diagnostics.record(sessionId, "request", "whole-audio-request", {
 				attempt: progress.attempt,
@@ -944,6 +966,190 @@ export default class EchoNotesPlugin extends Plugin {
 		return this.taskCenter.retryTask(taskId);
 	}
 
+	private createLocalTaskProvider(task: LocalTranscriptionTaskResume) {
+		return createTranscriptionProvider(this.app, {
+			provider: "local-openai-compatible", baseUrl: `${task.origin}/v1`, model: task.model, language: task.language
+		}, this.getApiKey("local-openai-compatible"));
+	}
+
+	private isCurrentLocalTask(taskId: string, task: LocalTranscriptionTaskResume): boolean {
+		const current = this.taskCenter.getTask(taskId)?.localTask;
+		return current?.clientRequestId === task.clientRequestId && current.instanceId === task.instanceId;
+	}
+
+	async cancelTaskCenterLocalTask(taskId: string): Promise<boolean> {
+		return this.requestLocalTaskCancellation(taskId, false);
+	}
+
+	private async requestLocalTaskCancellation(taskId: string, automatic: boolean): Promise<boolean> {
+		if (this.unloading) return false;
+		const task = this.taskCenter.getTask(taskId)?.localTask;
+		const requestId = task?.clientRequestId ?? "standard";
+		const key = `${taskId}:${requestId}`;
+		const pending = this.localCancellationRequests ??= new Map<string, Promise<boolean>>();
+		const existing = pending.get(key);
+		if (existing) return existing;
+		if (!automatic) this.stopLocalCancellationConfirmation(taskId);
+		const request = this.performLocalTaskCancellation(taskId, automatic);
+		pending.set(key, request);
+		try { return await request; } finally {
+			if (pending.get(key) === request) pending.delete(key);
+			const current = this.taskCenter.getTask(taskId);
+			if (task && this.isCurrentLocalTask(taskId, task) && current?.localTask?.cancelRequested
+				&& current.localTask.phase === "canceling" && current.status === "paused" && !this.unloading) {
+				this.scheduleLocalCancellationConfirmation(taskId, current.localTask);
+			} else if (task && this.localCancellationConfirmations?.get(taskId)?.task.clientRequestId === task.clientRequestId
+				&& this.localCancellationConfirmations.get(taskId)?.task.instanceId === task.instanceId) {
+				this.stopLocalCancellationConfirmation(taskId);
+			}
+		}
+	}
+
+	private stopLocalCancellationConfirmation(taskId: string): void {
+		const confirmation = this.localCancellationConfirmations?.get(taskId);
+		if (!confirmation) return;
+		if (confirmation.timer !== undefined) window.clearTimeout(confirmation.timer);
+		if (confirmation.deadlineTimer !== undefined) window.clearTimeout(confirmation.deadlineTimer);
+		this.localCancellationConfirmations?.delete(taskId);
+	}
+
+	private expireLocalCancellationConfirmation(taskId: string, confirmation: LocalCancellationConfirmation): void {
+		if (this.unloading || this.localCancellationConfirmations?.get(taskId) !== confirmation) return;
+		const current = this.taskCenter.getTask(taskId);
+		if (!this.isCurrentLocalTask(taskId, confirmation.task) || !current?.localTask?.cancelRequested
+			|| current.localTask.phase !== "canceling" || current.status !== "paused") {
+			this.stopLocalCancellationConfirmation(taskId);
+			return;
+		}
+		if (confirmation.timer !== undefined) window.clearTimeout(confirmation.timer);
+		if (confirmation.deadlineTimer !== undefined) window.clearTimeout(confirmation.deadlineTimer);
+		confirmation.timer = undefined;
+		confirmation.deadlineTimer = undefined;
+		// Keep this deadline until a deliberate retry; a late response must not open another window.
+		this.taskCenter.updateTask(taskId, { stage: "取消尚未确认，请重试取消" });
+		void this.persistPersistentState().catch(error => this.log("保存本地取消确认状态失败", error));
+	}
+
+	private scheduleLocalCancellationConfirmation(taskId: string, task: LocalTranscriptionTaskResume): void {
+		if (this.unloading) return;
+		const confirmations = this.localCancellationConfirmations ??= new Map<string, LocalCancellationConfirmation>();
+		let confirmation = confirmations.get(taskId);
+		if (confirmation && (confirmation.task.clientRequestId !== task.clientRequestId || confirmation.task.instanceId !== task.instanceId)) {
+			this.stopLocalCancellationConfirmation(taskId);
+			confirmation = undefined;
+		}
+		if (!confirmation) {
+			confirmation = { task, deadline: Date.now() + LOCAL_CANCELLATION_CONFIRMATION_MS, nextDelayMs: 1000 };
+			confirmations.set(taskId, confirmation);
+			const created = confirmation;
+			created.deadlineTimer = window.setTimeout(() => this.expireLocalCancellationConfirmation(taskId, created), LOCAL_CANCELLATION_CONFIRMATION_MS);
+		}
+		if (Date.now() >= confirmation.deadline) {
+			this.expireLocalCancellationConfirmation(taskId, confirmation);
+			return;
+		}
+		if (confirmation.timer !== undefined) return;
+		const active = confirmation;
+		active.timer = window.setTimeout(() => {
+			active.timer = undefined;
+			if (this.unloading || confirmations.get(taskId) !== active) return;
+			const current = this.taskCenter.getTask(taskId);
+			if (!this.isCurrentLocalTask(taskId, active.task) || !current?.localTask?.cancelRequested
+				|| current.localTask.phase !== "canceling" || current.status !== "paused") {
+				this.stopLocalCancellationConfirmation(taskId);
+				return;
+			}
+			if (Date.now() >= active.deadline) { this.expireLocalCancellationConfirmation(taskId, active); return; }
+			void this.requestLocalTaskCancellation(taskId, true).catch(error => this.log("自动确认本地取消失败", error));
+		}, Math.min(active.nextDelayMs, active.deadline - Date.now()));
+		active.nextDelayMs = Math.min(active.nextDelayMs * 2, 15_000);
+	}
+
+	private async performLocalTaskCancellation(taskId: string, automatic: boolean): Promise<boolean> {
+		const current = this.taskCenter.getTask(taskId);
+		if (!current || current.provider !== "local-openai-compatible" || current.status === "success" || current.status === "cancelled" || (current.status === "running" && (current.localTask?.phase === "saving" || current.stage === LOCAL_TRANSCRIPT_SAVE_STAGE))) return false;
+		if (!current.localTask) {
+			this.taskCenter.updateTask(taskId, { status: "failed", stage: "连接已停止，服务端结果未知", error: "标准接口不能确认服务端取消；核对服务端后可手动重新上传。", completedAt: Date.now() });
+			this.activeTranscriptionControllers.get(taskId)?.abort(new TranscriptionSuspendedError("paused", "已停止本地连接，服务端结果未知。"));
+			await this.persistPersistentState();
+			return true;
+		}
+		const task: LocalTranscriptionTaskResume = { ...current.localTask, cancelRequested: true, phase: "canceling" };
+		this.taskCenter.updateTask(taskId, { localTask: task, status: "paused", stage: "正在取消，等待服务确认" });
+		try {
+			await this.persistPersistentState();
+		} catch (error) {
+			this.log("无法保存本地取消意图", error);
+			if (!automatic) new Notice("取消意图尚未保存，未请求服务端取消。请修复存储后在任务中心重试。");
+			return false;
+		}
+		if (this.unloading || !this.isCurrentLocalTask(taskId, task)) return false;
+		this.activeTranscriptionControllers.get(taskId)?.abort(new TranscriptionSuspendedError("paused", "正在取消本地任务。"));
+		try {
+			const result = await this.createLocalTaskProvider(task).cancelLocalTask!(task);
+			if (this.unloading || !this.isCurrentLocalTask(taskId, task)) return false;
+			const updated = this.taskCenter.updateTask(taskId, {
+				localTask: result.task, status: result.confirmed ? "cancelled" : "paused",
+				stage: result.expired ? "原本地任务已失效（服务重启）" : result.confirmed ? "本地任务已取消" : "正在取消，等待服务确认",
+				completedAt: result.confirmed ? Date.now() : undefined, error: undefined
+			});
+			if (updated) this.taskCenter.updateTask(taskId, { retry: this.createTaskRecoveryRetry(updated) });
+			await this.persistPersistentState();
+			return result.confirmed;
+		} catch (error) {
+			if (this.unloading || !this.isCurrentLocalTask(taskId, task)) return false;
+			const updated = this.taskCenter.updateTask(taskId, { status: "paused", stage: "正在取消，服务暂不可达", error: getErrorMessage(error) });
+			if (updated) this.taskCenter.updateTask(taskId, { retry: this.createTaskRecoveryRetry(updated) });
+			await this.persistPersistentState();
+			return false;
+		}
+	}
+
+	private async cleanupLocalTranscriptionResult(taskId: string): Promise<void> {
+		const requestId = this.taskCenter.getTask(taskId)?.localTask?.clientRequestId;
+		if (!requestId) return;
+		const key = `${taskId}:${requestId}`;
+		const pending = this.localCleanupRequests ??= new Map<string, Promise<void>>();
+		const existing = pending.get(key);
+		if (existing) return existing;
+		const request = this.performLocalResultCleanup(taskId);
+		pending.set(key, request);
+		try { await request; } finally { if (pending.get(key) === request) pending.delete(key); }
+	}
+
+	private async performLocalResultCleanup(taskId: string): Promise<void> {
+		const current = this.taskCenter.getTask(taskId);
+		if (!current?.localTask || current.localTask.cancelRequested || !current.outputPath || current.status !== "success") return;
+		let localTask: LocalTranscriptionTaskResume | undefined = { ...current.localTask, phase: "cleanup-pending" };
+		try {
+			const result = await this.createLocalTaskProvider(current.localTask).acknowledgeLocalResult!(current.localTask);
+			if (result.confirmed) localTask = undefined;
+		} catch (error) {
+			this.log("转写稿已保存，服务端结果清理失败", error);
+		}
+		if (!this.isCurrentLocalTask(taskId, current.localTask)) return;
+		const updated = this.taskCenter.updateTask(taskId, {
+			localTask, stage: localTask ? "转写完成；服务端清理待重试" : "转写完成"
+		})!;
+		this.taskCenter.updateTask(taskId, { retry: localTask ? this.createTaskRecoveryRetry(updated) : undefined });
+		await this.persistPersistentState();
+	}
+
+	private async resumeLocalTranscriptionTask(taskId: string): Promise<void> {
+		const current = this.taskCenter.getTask(taskId);
+		if (!current?.localTask || current.recovery?.kind !== "transcription") return;
+		if (current.localTask.phase === "canceled") return;
+		if (current.localTask.cancelRequested) { await this.cancelTaskCenterLocalTask(taskId); return; }
+		if (current.localTask.phase === "cleanup-pending") { await this.cleanupLocalTranscriptionResult(taskId); return; }
+		if (this.settings.offlineTranscription.provider !== "local-openai-compatible") {
+			this.taskCenter.updateTask(taskId, { status: "paused", stage: "请切回本地模型服务商后继续任务" });
+			return;
+		}
+		await this.processingAudio.get(current.recovery.audioPath)?.catch(() => null);
+		await this.retryTranscriptionTask(current.recovery.audioPath, current.recovery.sourcePath, current.recovery.audioLinkPath,
+			current.diagnosticChainId, current.diagnosticSessionId, undefined, current.localTask);
+	}
+
 	async cancelTaskCenterRemoteTask(taskId: string): Promise<boolean> {
 		const task = this.taskCenter.getTask(taskId);
 		if (task?.kind !== "transcription" || task.status !== "running" || task.remoteTask?.status !== "PENDING") {
@@ -1034,6 +1240,10 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private async resumeRestoredRemoteTranscriptionTasks(): Promise<void> {
 		for (const task of this.taskCenter.getTasks()) {
+			if (task.localTask && (task.status === "running" || task.localTask.cancelRequested || task.localTask.phase === "cleanup-pending")) {
+				void this.resumeLocalTranscriptionTask(task.id).catch(error => this.log("恢复本地任务失败", error));
+				continue;
+			}
 			if (
 				task.status === "running" &&
 				task.remoteTask &&
@@ -1403,13 +1613,19 @@ export default class EchoNotesPlugin extends Plugin {
 		this.taskCenter.restoreTasks(restoredTasks);
 	}
 
-	private createTaskRecoveryRetry(task: Pick<EchoNotesTask, "status" | "remoteTask" | "recovery">): EchoNotesTaskRetry | undefined {
+	private createTaskRecoveryRetry(task: Pick<EchoNotesTask, "id" | "status" | "provider" | "localTask" | "remoteTask" | "recovery">): EchoNotesTaskRetry | undefined {
 		const recovery = task.recovery;
 		if (!recovery) {
 			return undefined;
 		}
 		switch (recovery.kind) {
 			case "transcription":
+				if (task.localTask) {
+					return {
+						label: task.localTask.cancelRequested ? "重试取消" : task.localTask.phase === "cleanup-pending" ? "重试清理" : "继续本地任务",
+						run: () => this.resumeLocalTranscriptionTask(task.id)
+					};
+				}
 				if (task.remoteTask) {
 					return {
 						label: "继续跟踪",
@@ -1418,7 +1634,7 @@ export default class EchoNotesPlugin extends Plugin {
 					};
 				}
 				return {
-					label: "重试转写",
+					label: task.provider === "local-openai-compatible" ? "重新上传" : "重试转写",
 					run: () => this.retryTranscriptionTask(
 						recovery.audioPath,
 						recovery.sourcePath,
@@ -2057,7 +2273,8 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	getApiKey(provider: TranscriptionProviderId = getSelectedTranscriptionConfig(this.settings).provider): string {
-		return this.app.secretStorage.getSecret(getTranscriptionApiKeySecretId(provider)) ?? this.settings.apiKey ?? "";
+		const key = this.app.secretStorage.getSecret(getTranscriptionApiKeySecretId(provider));
+		return key ?? (provider === "local-openai-compatible" ? "" : this.settings.apiKey ?? "");
 	}
 
 	async saveApiKey(provider: TranscriptionProviderId, apiKey: string): Promise<void> {
@@ -3037,7 +3254,10 @@ export default class EchoNotesPlugin extends Plugin {
 	}
 
 	private async migrateApiKeyToSecretStorage(): Promise<void> {
-		const targetSecretId = getTranscriptionApiKeySecretId(getSelectedTranscriptionConfig(this.settings).provider);
+		const provider = getSelectedTranscriptionConfig(this.settings).provider;
+		// A newly added local provider must never inherit an unidentified legacy cloud credential.
+		if (provider === "local-openai-compatible") return;
+		const targetSecretId = getTranscriptionApiKeySecretId(provider);
 		migrateLegacySecret(this.app.secretStorage, LEGACY_API_KEY_SECRET_ID, targetSecretId, this.settings.apiKey);
 		if (this.settings.apiKey !== undefined) {
 			delete this.settings.apiKey;
@@ -3393,6 +3613,18 @@ export default class EchoNotesPlugin extends Plugin {
 			return result;
 		}
 
+		const previous = this.taskCenter.getTask(createTaskId("transcription", audioFile.path));
+		if (previous?.localTask && previous.localTask.phase !== "canceled" && !options.resumeLocalTask) {
+			if (previous.localTask.cancelRequested || previous.localTask.phase === "cleanup-pending") {
+				await this.resumeLocalTranscriptionTask(previous.id);
+				return null;
+			}
+			if (this.settings.offlineTranscription.provider !== "local-openai-compatible") {
+				new Notice("此音频仍有本地任务，请先在任务中心继续或取消。");
+				return null;
+			}
+			options = { ...options, resumeLocalTask: previous.localTask };
+		}
 		const processingPromise = this.performAudioToTranscript(audioFile, sourceNote, options);
 		this.processingAudio.set(audioFile.path, processingPromise);
 		try {
@@ -3547,7 +3779,7 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		const apiKeySnapshot = this.getApiKey(transcriptionConfig.provider);
-		if (this.settings.confirmBeforeTranscription && !options.resumeRemoteTask) {
+		if (this.settings.confirmBeforeTranscription && !options.resumeRemoteTask && !options.resumeLocalTask) {
 			if (options.allowUploadConfirmation === false) {
 				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "upload-confirmation-required" });
 				new Notice("已跳过自动转写：当前开启了手动转写前确认上传。");
@@ -3571,6 +3803,7 @@ export default class EchoNotesPlugin extends Plugin {
 			title: audioFile.name,
 			status: "running",
 			stage: "准备转写",
+			localTask: options.resumeLocalTask,
 			provider: transcriptionConfig.provider,
 			model: transcriptionConfig.model,
 			targetPath: audioFile.path,
@@ -3666,7 +3899,7 @@ export default class EchoNotesPlugin extends Plugin {
 			const diagnostics = diagnoseTranscriptionProviderSettings(
 				transcriptionConfig,
 				apiKeySnapshot,
-				{ isMobile: Platform.isMobile, usage: "offline" }
+				{ isMobile: Platform.isMobile, isFileSystemVault: this.app.vault.adapter instanceof FileSystemAdapter, usage: "offline" }
 			);
 			this.diagnostics.record(diagnostic.id, "configuration", "transcription-local-diagnostics", {
 				canAttempt: diagnostics.canAttemptTranscription,
@@ -3685,7 +3918,9 @@ export default class EchoNotesPlugin extends Plugin {
 				audioFile,
 				checkpointIdentity
 			);
-			const initialTranscriptFile = await this.transcriptService.writeTranscribingTranscript(
+			const initialTranscriptFile = options.resumeLocalTask && existingTranscript
+				? existingTranscript
+				: await this.transcriptService.writeTranscribingTranscript(
 				audioFile,
 				sourceNote,
 				provider.id,
@@ -3702,6 +3937,12 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice(`已创建转写稿，开始准备音频：${audioFile.name}`);
 			const handleProgress = async (progress: TranscriptionProgress): Promise<void> => {
 				this.recordTranscriptionDiagnosticProgress(diagnostic.id, progress);
+				if (progress.type === "local-asr-progress") {
+					if (!transcriptionController.signal.aborted && !this.taskCenter.getTask(transcriptionTaskId)?.localTask?.cancelRequested) {
+						this.taskCenter.updateTask(transcriptionTaskId, { stage: formatLocalProgress(progress) });
+					}
+					return;
+				}
 				if (progress.type === "whole-audio-request-started") {
 					const attemptText = progress.totalAttempts > 1
 						? `尝试 ${progress.attempt}/${progress.totalAttempts} · `
@@ -3908,10 +4149,20 @@ export default class EchoNotesPlugin extends Plugin {
 				enhancement,
 				configurationFingerprint: checkpointIdentity.configurationFingerprint,
 				resumeRemoteTask: options.resumeRemoteTask,
+				resumeLocalTask: options.resumeLocalTask,
+				onLocalCheckpoint: async (next) => {
+					const previous = this.taskCenter.getTask(transcriptionTaskId)?.localTask;
+					const localTask = mergeLocalCheckpoint(previous, next);
+					const updated = this.taskCenter.updateTask(transcriptionTaskId, { localTask });
+					if (updated) this.taskCenter.updateTask(transcriptionTaskId, { retry: this.createTaskRecoveryRetry(updated) });
+					await this.persistPersistentState();
+				},
 				signal: transcriptionController.signal,
 				onProgress: handleProgress,
 				diagnostics: diagnosticSink
 			});
+			transcriptionController.signal.throwIfAborted();
+			if (this.taskCenter.getTask(transcriptionTaskId)?.localTask?.cancelRequested) throw new TranscriptionSuspendedError("paused", "正在取消本地任务。");
 			result.configurationFingerprint = checkpointIdentity.configurationFingerprint;
 			let transcriptFile: TFile;
 			let auxiliaryComplete = !dualModelEnabled;
@@ -3992,6 +4243,13 @@ export default class EchoNotesPlugin extends Plugin {
 					}
 				}
 			} else {
+				if (transcriptionConfig.provider === "local-openai-compatible") this.taskCenter.updateTask(transcriptionTaskId, { stage: LOCAL_TRANSCRIPT_SAVE_STAGE });
+				if (result.localTask) {
+					this.taskCenter.updateTask(transcriptionTaskId, { localTask: { ...result.localTask, phase: "saving" }, stage: "保存转写稿" });
+					await this.persistPersistentState();
+					transcriptionController.signal.throwIfAborted();
+				}
+				transcriptionController.signal.throwIfAborted();
 				transcriptFile = await this.transcriptService.writeSuccessTranscript(audioFile, sourceNote, result);
 				await notifyTranscriptFileReady(transcriptFile, true);
 			}
@@ -4010,7 +4268,13 @@ export default class EchoNotesPlugin extends Plugin {
 				error: undefined,
 				completedAt: Date.now()
 			});
+			if (result.localTask) {
+				this.taskCenter.updateTask(transcriptionTaskId, { localTask: { ...result.localTask, phase: "cleanup-pending" } });
+				await this.persistPersistentState();
+				await this.cleanupLocalTranscriptionResult(transcriptionTaskId);
+			}
 			this.activeTranscriptionControllers.delete(transcriptionTaskId);
+			if (transcriptionController.signal.aborted) return null;
 			this.diagnostics.complete(diagnostic.id, "success", {
 				traceId: result.traceId,
 				segmentCount: result.segments?.length ?? 0
@@ -4021,6 +4285,34 @@ export default class EchoNotesPlugin extends Plugin {
 		} catch (error) {
 			hideLongAudioNotice();
 			this.activeTranscriptionControllers.delete(transcriptionTaskId);
+			if (transcriptionConfig.provider === "local-openai-compatible") {
+				const current = this.taskCenter.getTask(transcriptionTaskId)!;
+				if (error instanceof TranscriptionError && error.code === "source_changed" && current.localTask) {
+					this.taskCenter.updateTask(transcriptionTaskId, { status: "paused", stage: "音频已变化，正在取消原任务" });
+					const canceled = await this.cancelTaskCenterLocalTask(transcriptionTaskId);
+					this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: canceled ? "音频已变化，原任务已取消；请重新上传" : "音频已变化，等待取消原任务",
+						error: getErrorMessage(error)
+					});
+					await this.persistPersistentState();
+					this.diagnostics.complete(diagnostic.id, "skipped", { reason: "local-source-changed" });
+					return null;
+				}
+				const expired = error instanceof TranscriptionError && error.code === "local_task_expired";
+				const localTask = expired ? undefined : current.localTask;
+				if (current.status !== "cancelled" && current.status !== "success") {
+					const updated = this.taskCenter.updateTask(transcriptionTaskId, {
+						localTask, status: localTask ? "paused" : "failed",
+						stage: localTask?.cancelRequested ? "正在取消，等待服务确认" : localTask ? "本地任务已保留，可继续" : "转写未完成，请核对后重新上传",
+						error: getErrorMessage(error), completedAt: localTask ? undefined : Date.now()
+					});
+					if (updated) this.taskCenter.updateTask(transcriptionTaskId, { retry: this.createTaskRecoveryRetry(updated) });
+				}
+				await this.persistPersistentState();
+				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "local-task-interrupted", error: getErrorMessage(error) });
+				if (!this.unloading) new Notice(localTask ? "本地任务已保留，可在任务中心继续或取消。" : getErrorMessage(error));
+				return null;
+			}
 			if (error instanceof TranscriptionSuspendedError) {
 				this.diagnostics.complete(diagnostic.id, "skipped", {
 					reason: error.kind,
@@ -4082,7 +4374,8 @@ export default class EchoNotesPlugin extends Plugin {
 		audioLinkPath: string | undefined,
 		diagnosticChainId?: string,
 		diagnosticRetryOfSessionId?: string,
-		resumeRemoteTask?: RemoteTranscriptionTaskResume
+		resumeRemoteTask?: RemoteTranscriptionTaskResume,
+		resumeLocalTask?: LocalTranscriptionTaskResume
 	): Promise<void> {
 		const audioFile = this.app.vault.getAbstractFileByPath(audioPath);
 		if (!(audioFile instanceof TFile) || !isSupportedAudioFile(audioFile)) {
@@ -4114,6 +4407,7 @@ export default class EchoNotesPlugin extends Plugin {
 			audioLinkPath,
 			forceTranscription: true,
 			resumeRemoteTask,
+			resumeLocalTask,
 			diagnosticChainId: diagnosticChainId ?? previousTask?.diagnosticChainId,
 			diagnosticRetryOfSessionId: diagnosticRetryOfSessionId ?? previousTask?.diagnosticSessionId,
 			onTranscriptFileReady: async (transcriptFile, final) => {

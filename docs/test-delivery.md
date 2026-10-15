@@ -120,3 +120,14 @@ npm run test-install -- status
 5. 登录、权限、资产不一致和审核 Required 等实质阻塞按中央流程报告。发布及源码留存核实前保留 worktree 与交付；不自动清理待人工验收成果。
 
 本次流程建设不恢复丢失的五模型源码，不追认其原型或测试通过，也不自动执行任何旧任务的外部发布。
+
+
+### 显式接管尚未验收的旧交付
+
+默认仍拒绝覆盖其他任务。用户明确选择由新版本接管时，在新任务目录保存 `supersede-authorization.json`，包含 `schemaVersion: 1`、旧 `previousDeliveryId`、旧三个产物的 `previousFileHashes`、新 `taskId`、`authorizedBy`、ISO时间 `authorizedAt` 与用户原话 `userQuote`。先核对当前安装与旧记录完全一致，再执行：
+
+```sh
+npm run test-install -- deploy --task <新任务绝对路径> --zip <已验证ZIP绝对路径> --supersede-authorization <新任务内授权文件绝对路径>
+```
+
+工具将授权快照绑定到新交付 `supersededPrevious`，保留旧交付、备份和事务回退；不生成旧任务的 `approval.json` 或 `release.json`，不继承旧批准。任何 ID、哈希或目标任务不匹配均拒绝覆盖。此参数与既有 `--takeover` 互斥。

@@ -16,6 +16,8 @@ import { createServer as createNetServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { verifyRealLocalMLXChain } from "./verify-local-mlx-chain.mjs";
+import { verifyLocalOpenAIChain } from "./verify-local-openai-chain.mjs";
 import { chromium } from "playwright-core";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -673,6 +675,8 @@ try {
 	await page.waitForFunction((id) => Boolean(window.app.plugins.plugins[id]), pluginId);
 	assert(await openEditorMenu(page) === 1, "重载插件后出现重复右键菜单项");
 
+	const localOpenAI = await verifyLocalOpenAIChain(page);
+	const realLocalMLX = await verifyRealLocalMLXChain(page, isolated.vault, outputDir);
 	assert(transcriptionMock.calls.length === 4, `本地转写 mock 请求数量不正确：${transcriptionMock.calls.length}`);
 	assert(transcriptionMock.calls.every((call) => call.local && call.multipart), "转写验收出现非本机或非 multipart 请求");
 	assert(pageErrors.length === 0, `右键菜单验收出现运行时错误：${pageErrors.join(" | ")}`);
@@ -684,6 +688,8 @@ try {
 		validationEnvironment: "isolated-temporary-vault",
 		externalAudioUploads: 0,
 		localMockRequests: transcriptionMock.calls.length,
+		localOpenAI,
+		realLocalMLX,
 		checks: {
 			uniqueMenuItem: true,
 			emptyNote: true,

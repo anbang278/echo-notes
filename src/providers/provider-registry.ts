@@ -6,6 +6,7 @@ import {
 	type TranscriptionConfig
 } from "../settings/settings";
 import { AliyunBailianQwenAsrProvider } from "./aliyun-bailian-provider";
+import { LocalOpenAICompatibleProvider } from "./local-openai-compatible-provider";
 import { MosiTranscriptionProvider } from "./mosi-provider";
 import { OpenAICompatibleAudioProvider } from "./openai-compatible-provider";
 import { SiliconFlowTeleSpeechProvider } from "./siliconflow-provider";
@@ -17,6 +18,8 @@ export function createTranscriptionProvider(
 	apiKey: string
 ): TranscriptionProvider {
 	switch (settings.provider) {
+		case "local-openai-compatible":
+			return new LocalOpenAICompatibleProvider(app, settings, apiKey);
 		case "aliyun-bailian":
 			return new AliyunBailianQwenAsrProvider(app, settings, apiKey);
 		case "siliconflow":

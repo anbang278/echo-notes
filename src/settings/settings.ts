@@ -22,7 +22,8 @@ export type OfflineTranscriptionProviderId =
 	| "siliconflow"
 	| "mosi"
 	| "ollama"
-	| "lm-studio";
+	| "lm-studio"
+	| "local-openai-compatible";
 
 export type AnalysisProviderId =
 	| "siliconflow"
@@ -81,6 +82,11 @@ export interface TranscriptionConfig<TProvider extends TranscriptionProviderId =
 	aliyunFiletrans?: AliyunFileTranscriptionSettings;
 }
 
+/** Persist only non-secret configuration; the selected config remains authoritative. */
+export type OfflineTranscriptionProfiles = Partial<{
+	[Provider in OfflineTranscriptionProviderId]: TranscriptionConfig<Provider>;
+}>;
+
 export interface RealtimeTranscriptionConfig extends TranscriptionConfig<RealtimeTranscriptionProviderId> {
 	inputDeviceId: string;
 }
@@ -119,6 +125,13 @@ export const DEFAULT_ANALYSIS_TEMPLATE_VERSION = "1";
 export const AGENTPLAN_ASYNC_BASE_URL = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async";
 export const AGENTPLAN_ANALYSIS_BASE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3";
 export const OPENCODE_GO_ANALYSIS_BASE_URL = "https://opencode.ai/zen/go/v1";
+export const LOCAL_OPENAI_BASE_URL = "http://127.0.0.1:18080/v1";
+export const LOCAL_OPENAI_TRANSCRIPTION_MODEL = "mlx-community/Qwen3-ASR-0.6B-8bit";
+export const LOCAL_OPENAI_DIARIZATION_MODEL = "local/qwen3-asr-0.6b-sortformer-4spk";
+export const LOCAL_OPENAI_MODEL_OPTIONS = [
+	{ id: LOCAL_OPENAI_TRANSCRIPTION_MODEL, label: "Qwen3 ASR（普通转写）" },
+	{ id: LOCAL_OPENAI_DIARIZATION_MODEL, label: "Qwen3 ASR + Sortformer（最多 4 位说话人）" }
+] as const;
 export const MOSI_TRANSCRIPTION_BASE_URL = "https://api.mosi.cn/v1";
 export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
 export const MOSI_TRANSCRIPTION_VERSION = "moss-transcribe-diarize-20260325";
@@ -243,6 +256,7 @@ export interface AnalysisTemplateConfig {
 export interface EchoNotesSettings {
 	transcriptionMode: TranscriptionMode;
 	offlineTranscription: TranscriptionConfig<OfflineTranscriptionProviderId>;
+	offlineTranscriptionByProvider: OfflineTranscriptionProfiles;
 	realtimeTranscription: RealtimeTranscriptionConfig;
 	apiKey?: string;
 	agentPlanSpeakerLabelStyle: AgentPlanSpeakerLabelStyle;
@@ -320,6 +334,11 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 		baseUrl: "http://localhost:1234/v1",
 		model: "whisper-1",
 		language: "zh"
+	},
+	"local-openai-compatible": {
+		baseUrl: LOCAL_OPENAI_BASE_URL,
+		model: LOCAL_OPENAI_TRANSCRIPTION_MODEL,
+		language: "auto"
 	}
 };
 
@@ -351,7 +370,8 @@ export const OFFLINE_TRANSCRIPTION_PROVIDER_LABELS: Record<OfflineTranscriptionP
 	siliconflow: "【免费】硅基流动（SiliconFlow）",
 	mosi: "MOSI（可选说话人分离）",
 	ollama: "Ollama",
-	"lm-studio": "LM Studio"
+	"lm-studio": "LM Studio",
+	"local-openai-compatible": "本地模型（OpenAI 兼容）"
 };
 
 export const PROVIDER_LABELS: Record<TranscriptionProviderId, string> = {
@@ -1025,6 +1045,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 		language: "zh",
 		aliyunFiletrans: { ...DEFAULT_ALIYUN_FILETRANS_SETTINGS }
 	},
+	offlineTranscriptionByProvider: {},
 	realtimeTranscription: {
 		provider: "volcengine-agentplan",
 		baseUrl: AGENTPLAN_ASYNC_BASE_URL,
@@ -1302,6 +1323,11 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			? { aliyunFiletrans: normalizeAliyunFiletransSettings(nestedOffline.aliyunFiletrans) }
 			: {})
 	};
+	settings.offlineTranscriptionByProvider = normalizeOfflineTranscriptionProfiles(
+		raw.offlineTranscriptionByProvider,
+		settings.offlineTranscription,
+		mosiSpeakerDiarizationEnabled
+	);
 	settings.realtimeTranscription = {
 		provider: "volcengine-agentplan",
 		baseUrl: AGENTPLAN_ASYNC_BASE_URL,
@@ -1543,6 +1569,86 @@ export function getOfflineTranscriptionProviderDefaults(
 		...defaults,
 		...(defaults.aliyunFiletrans ? { aliyunFiletrans: { ...defaults.aliyunFiletrans } } : {})
 	};
+}
+
+/** Save the selected provider before restoring another provider's own configuration. */
+export function switchOfflineTranscriptionProvider(
+	settings: EchoNotesSettings,
+	provider: OfflineTranscriptionProviderId
+): void {
+	const profiles = normalizeOfflineTranscriptionProfiles(
+		settings.offlineTranscriptionByProvider,
+		settings.offlineTranscription,
+		settings.mosiSpeakerDiarizationEnabled
+	);
+	settings.offlineTranscription = normalizeOfflineProviderConfig(
+		provider,
+		profiles[provider],
+		settings.mosiSpeakerDiarizationEnabled
+	);
+	settings.offlineTranscriptionByProvider = normalizeOfflineTranscriptionProfiles(
+		profiles,
+		settings.offlineTranscription,
+		settings.mosiSpeakerDiarizationEnabled
+	);
+}
+
+function normalizeOfflineTranscriptionProfiles(
+	value: unknown,
+	current: TranscriptionConfig<OfflineTranscriptionProviderId>,
+	mosiSpeakerDiarizationEnabled: boolean
+): OfflineTranscriptionProfiles {
+	const raw = isRecord(value) ? value : {};
+	// Construct entries explicitly: legacy credentials or unknown nested fields must never be copied.
+	const profiles: Partial<Record<OfflineTranscriptionProviderId, TranscriptionConfig<OfflineTranscriptionProviderId>>> = {};
+	for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
+		if (!isOfflineTranscriptionProviderId(provider)) continue;
+		const saved = raw[provider];
+		if (!isRecord(saved) || (saved.provider !== undefined && saved.provider !== provider)) continue;
+		profiles[provider] = normalizeOfflineProviderConfig(provider, saved, mosiSpeakerDiarizationEnabled);
+	}
+	profiles[current.provider] = normalizeOfflineProviderConfig(current.provider, current, mosiSpeakerDiarizationEnabled);
+	return profiles as OfflineTranscriptionProfiles;
+}
+
+function normalizeOfflineProviderConfig<Provider extends OfflineTranscriptionProviderId>(
+	provider: Provider,
+	value: unknown,
+	mosiSpeakerDiarizationEnabled: boolean
+): TranscriptionConfig<Provider> {
+	const raw = isRecord(value) ? value : {};
+	const defaults = getOfflineTranscriptionProviderDefaults(provider);
+	return {
+		provider,
+		baseUrl: normalizeConfigString(raw.baseUrl, undefined, defaults.baseUrl),
+		model: provider === "mosi"
+			? getMosiTranscriptionModel(mosiSpeakerDiarizationEnabled)
+			: normalizeConfigString(raw.model, undefined, defaults.model),
+		language: normalizeConfigString(raw.language, undefined, defaults.language),
+		...(provider === "aliyun-bailian"
+			? { aliyunFiletrans: normalizeAliyunFiletransSettings(raw.aliyunFiletrans) }
+			: {})
+	};
+}
+
+/** Validate the literal address before URL canonicalization can turn aliases into loopback. */
+export function validateLocalOpenAIBaseUrl(value: string): string | undefined {
+	const address = value.trim();
+	if (!address) return "Base URL 不能为空。";
+	if (!/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?(?:\/[^?#]*)?$/i.test(address) ||
+		address.includes("\\") || [...address].some((character) => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127)) {
+		return "本地模型只支持 http:// 或 https:// 的 localhost、127.0.0.1 或 [::1] 地址，不允许账户、密码、查询参数或片段。";
+	}
+	try {
+		const url = new URL(address);
+		if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+			url.username || url.password || url.search || url.hash) {
+			return "请输入本机回环地址。";
+		}
+		return undefined;
+	} catch {
+		return "请输入有效的本机服务地址和端口。";
+	}
 }
 
 export function isMosiSpeakerDiarizationModel(model: string): boolean {

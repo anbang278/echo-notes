@@ -51,15 +51,16 @@ function options(args) {
 	for (let index = 0; index < args.length;) {
 		const key = args[index];
 		if (key === "--takeover") {
-			if (values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP> [--takeover]");
+			if (values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP> [--takeover | --supersede-authorization <任务内授权文件>]");
 			values[key] = true;
 			index += 1;
 			continue;
 		}
-		if (!["--task", "--zip"].includes(key) || !args[index + 1] || values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP> [--takeover]");
+		if (!["--task", "--zip", "--supersede-authorization"].includes(key) || !args[index + 1] || values[key]) throw new Error("参数格式：deploy --task <任务目录> --zip <ZIP> [--takeover | --supersede-authorization <任务内授权文件>]");
 		values[key] = args[index + 1];
 		index += 2;
 	}
+	if (values["--takeover"] && values["--supersede-authorization"]) throw new Error("两种接管方式不可同时使用");
 	return values;
 }
 try {
@@ -68,10 +69,10 @@ try {
 	if (command === "deploy") {
 		const values = options(args);
 		if (!values["--task"] || !values["--zip"]) throw new Error("deploy 需要 --task 和 --zip");
-		result = await installer.deploy({ project, task: path.resolve(values["--task"]), zip: path.resolve(values["--zip"]), takeover: values["--takeover"] === true });
+		result = await installer.deploy({ project, task: path.resolve(values["--task"]), zip: path.resolve(values["--zip"]), takeover: values["--takeover"] === true, supersedeAuthorization: values["--supersede-authorization"] });
 	} else if (["migrate", "status", "rollback"].includes(command) && args.length === 0) {
 		result = command === "status" ? await installer.status() : await withPausedPlugin(() => installer[command]());
-	} else throw new Error("用法：npm run test-install -- migrate | deploy --task <目录> --zip <ZIP> [--takeover] | status | rollback");
+	} else throw new Error("用法：npm run test-install -- migrate | deploy --task <目录> --zip <ZIP> [--takeover | --supersede-authorization <任务内授权文件>] | status | rollback");
 	console.log(JSON.stringify(result, null, 2));
 } catch (error) {
 	console.error(`测试插件操作失败：${error.message}`);

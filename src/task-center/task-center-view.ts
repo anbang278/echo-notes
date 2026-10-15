@@ -1,3 +1,4 @@
+import { LOCAL_TRANSCRIPT_SAVE_STAGE } from "../providers/local-task-lifecycle";
 import { ItemView, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
 import type EchoNotesPlugin from "../main";
 import { GettingStartedGuide } from "../getting-started/getting-started-guide";
@@ -340,6 +341,11 @@ export class EchoNotesTaskCenterView extends ItemView {
 				void this.plugin.reviewMemoryCandidatePath(task.outputPath!);
 			});
 		}
+		if (task.provider === "local-openai-compatible" && (task.status === "running" || task.status === "paused" || (task.status === "failed" && task.localTask)) && !(task.status === "running" && (task.localTask?.phase === "saving" || task.stage === LOCAL_TRANSCRIPT_SAVE_STAGE))) {
+			this.createTextAction(actionsEl, "square", task.localTask ? "取消本地任务" : "停止本地连接", () => {
+				void this.plugin.cancelTaskCenterLocalTask(task.id).catch(() => new Notice("本地取消状态保存失败，请在任务中心重试。"));
+			});
+		}
 		if (task.status === "running" && task.remoteTask?.status === "PENDING") {
 			this.createTextAction(actionsEl, "cloud-off", "取消云端任务", () => {
 				void this.plugin.cancelTaskCenterRemoteTask(task.id);
@@ -356,7 +362,7 @@ export class EchoNotesTaskCenterView extends ItemView {
 					}
 				});
 			});
-		} else if (task.retry && (task.status === "failed" || (task.status === "running" && task.retry.allowWhileRunning))) {
+		} else if (task.retry && (task.status === "failed" || task.status === "paused" || task.localTask?.phase === "cleanup-pending" || (task.status === "running" && task.retry.allowWhileRunning))) {
 			this.createIconButton(actionsEl, "rotate-ccw", task.retry.label, async () => {
 				const retried = await this.plugin.retryTaskCenterTask(task.id);
 				if (!retried) {

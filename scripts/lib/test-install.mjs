@@ -258,7 +258,7 @@ export function createInstaller({ root, install, legacySource, fault = async () 
 			await fault("current-written");
 		});
 	}
-	async function deploy({ project, task, zip, takeover = false }) {
+	async function deploy({ project, task, zip, takeover = false, supersedeAuthorization }) {
 		project = path.resolve(project); task = path.resolve(task); zip = path.resolve(zip);
 		return locked(async () => {
 			await ordinaryPath(project); await ordinaryPath(task); await ordinaryPath(zip);
@@ -268,12 +268,31 @@ export function createInstaller({ root, install, legacySource, fault = async () 
 			const previous = await loadCurrent();
 			await assertCurrentMatches(previous);
 			let takeoverPrevious;
+			let supersededPrevious;
+			if (supersedeAuthorization) {
+				const authorizationPath = path.resolve(supersedeAuthorization);
+				if (!isWithin(task, authorizationPath)) throw new Error("接管授权必须保存在当前任务目录内");
+				await ordinaryPath(authorizationPath);
+				const authorization = await json(authorizationPath);
+				if (authorization.schemaVersion !== 1 || authorization.previousDeliveryId !== previous.id ||
+					authorization.taskId !== taskInfo.id || !same(authorization.previousFileHashes, previous.fileHashes) ||
+					typeof authorization.authorizedBy !== "string" || !authorization.authorizedBy.trim() ||
+					typeof authorization.userQuote !== "string" || !authorization.userQuote.trim() ||
+					typeof authorization.authorizedAt !== "string" || !Number.isFinite(Date.parse(authorization.authorizedAt))) {
+					throw new Error("接管授权未绑定当前交付 ID、文件哈希、目标任务及用户授权记录");
+				}
+				supersededPrevious = {
+					deliveryId: previous.id, taskId: previous.taskId, fileHashes: previous.fileHashes,
+					authorizedBy: authorization.authorizedBy, authorizedAt: authorization.authorizedAt,
+					userQuote: authorization.userQuote
+				};
+			}
 			if (previous.taskId && previous.taskId !== taskInfo.id) {
 				const release = await optionalJson(path.join(recordPath(previous.id), "release.json"));
 				const approval = await optionalJson(path.join(recordPath(previous.id), "approval.json"));
 				const released = release?.deliveryId === previous.id && release.sourceCommit === previous.sourceCommit && release.tag === previous.version && release.releaseUrl?.startsWith("https://github.com/anbang278/echo-notes/releases/tag/") && release.completedAt && release.reviewStatus;
-				if (!approved(previous, approval) || (!released && !takeover)) throw new Error("其他任务仍占用人工验收目录，不得自动覆盖");
-				if (!released) takeoverPrevious = { deliveryId: previous.id, taskId: previous.taskId, authorizedAt: new Date().toISOString() };
+				if (!supersededPrevious && (!approved(previous, approval) || (!released && !takeover))) throw new Error("其他任务仍占用人工验收目录，不得自动覆盖");
+				if (!released && !supersededPrevious) takeoverPrevious = { deliveryId: previous.id, taskId: previous.taskId, authorizedAt: new Date().toISOString() };
 			}
 			const verificationFile = path.join(path.dirname(zip), "verification.json");
 			const evidenceFile = path.join(path.dirname(zip), "package-evidence.json");
@@ -308,7 +327,7 @@ export function createInstaller({ root, install, legacySource, fault = async () 
 					await copyFile(report, path.join(directory, "reports", `${kind}.json`));
 				}
 			}
-			const record = { id, kind: "delivery", taskId: taskInfo.id, taskPath: task, worktree: project, sourceCommit: source.commit, sourceFingerprint: source.fingerprint, version: manifest.version, zipSha256: zipHash, fileHashes: hashes, installedAt: new Date().toISOString(), previous, ...(takeoverPrevious ? { takeoverPrevious } : {}) };
+			const record = { id, kind: "delivery", taskId: taskInfo.id, taskPath: task, worktree: project, sourceCommit: source.commit, sourceFingerprint: source.fingerprint, version: manifest.version, zipSha256: zipHash, fileHashes: hashes, installedAt: new Date().toISOString(), previous, ...(takeoverPrevious ? { takeoverPrevious } : {}), ...(supersededPrevious ? { supersededPrevious } : {}) };
 			await writeJson(path.join(directory, "delivery.json"), record);
 			// 保存后再次核验来源，防止收集交接工件期间源码被其他进程改动。
 			await validateVerification(project, verification, true);

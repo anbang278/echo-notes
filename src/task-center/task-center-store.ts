@@ -1,5 +1,6 @@
 export type EchoNotesTaskKind = "transcription" | "analysis" | "memory";
-import type { RemoteTranscriptionTaskResume } from "../providers/transcription-provider";
+import { parseLocalTask } from "../providers/local-task-lifecycle";
+import type { LocalTranscriptionTaskResume, RemoteTranscriptionTaskResume } from "../providers/transcription-provider";
 
 export type EchoNotesTaskStatus = "running" | "paused" | "cancelled" | "success" | "failed" | "skipped";
 
@@ -59,6 +60,7 @@ export interface EchoNotesTask {
 	completedAt?: number;
 	recovery?: EchoNotesTaskRecovery;
 	remoteTask?: RemoteTranscriptionTaskResume;
+	localTask?: LocalTranscriptionTaskResume;
 	backlink?: TranscriptBacklinkSummary;
 	retry?: EchoNotesTaskRetry;
 }
@@ -180,7 +182,7 @@ export class TaskCenterStore {
 
 	clearFinishedTasks(): void {
 		for (const [id, task] of this.tasks) {
-			if (task.status !== "running" && task.status !== "paused") {
+			if (task.status !== "running" && task.status !== "paused" && (!task.localTask || task.localTask.phase === "canceled")) {
 				this.tasks.delete(id);
 			}
 		}
@@ -199,7 +201,7 @@ export function createTaskCenterState(tasks: readonly EchoNotesTask[]): TaskCent
 		schemaVersion: 2,
 		tasks: [...tasks]
 			.sort((left, right) => right.updatedAt - left.updatedAt)
-			.slice(0, MAX_PERSISTED_TASKS)
+			.filter((task, index) => index < MAX_PERSISTED_TASKS || Boolean(task.localTask && task.localTask.phase !== "canceled"))
 			.map(({ retry: _retry, ...task }) => {
 				const persisted: PersistedEchoNotesTask = { ...task };
 				if (task.error) {
@@ -213,6 +215,7 @@ export function createTaskCenterState(tasks: readonly EchoNotesTask[]): TaskCent
 				} else {
 					delete persisted.recovery;
 				}
+				persisted.localTask = parseLocalTask(task.localTask);
 				return persisted;
 			})
 	};
@@ -227,7 +230,7 @@ export function normalizeTaskCenterState(value: unknown): TaskCenterState {
 		.map(parsePersistedTask)
 		.filter((task): task is PersistedEchoNotesTask => Boolean(task))
 		.sort((left, right) => right.updatedAt - left.updatedAt)
-		.slice(0, MAX_PERSISTED_TASKS);
+		.filter((task, index) => index < MAX_PERSISTED_TASKS || Boolean(task.localTask && task.localTask.phase !== "canceled"));
 	return { schemaVersion: 2, tasks };
 }
 
@@ -236,14 +239,14 @@ export function markInterruptedTasks(
 	now = Date.now()
 ): PersistedEchoNotesTask[] {
 	return tasks.map((task) => {
-		if (task.status !== "running" || task.remoteTask) {
+		if (task.status !== "running" || task.remoteTask || task.localTask) {
 			return task;
 		}
 		return {
 			...task,
 			status: "failed",
-			stage: "插件重启前任务已中断",
-			error: "任务在 Echo Notes 插件停止或 Obsidian 重启时仍未完成，请确认已有输出后重试。",
+			stage: task.provider === "local-openai-compatible" ? "连接已中断，服务端结果未知" : "插件重启前任务已中断",
+			error: task.provider === "local-openai-compatible" ? "标准接口无法恢复或确认服务端是否继续执行；请先核对服务端，再手动重新上传。" : "任务在 Echo Notes 插件停止或 Obsidian 重启时仍未完成，请确认已有输出后重试。",
 			updatedAt: now,
 			completedAt: now
 		};
@@ -348,6 +351,7 @@ function parsePersistedTask(value: unknown): PersistedEchoNotesTask | null {
 	if (remoteTask) {
 		task.remoteTask = remoteTask;
 	}
+	task.localTask = parseLocalTask(value.localTask);
 	const backlink = parseTranscriptBacklink(value.backlink);
 	if (backlink) {
 		task.backlink = backlink;

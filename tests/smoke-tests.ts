@@ -1,3 +1,4 @@
+import { runLocalOpenAISettingsTests } from "./local-openai-settings-tests";
 import assert from "node:assert/strict";
 import { runRecordingStorageTests } from "./recording-storage-tests";
 import { readFileSync } from "node:fs";
@@ -3661,7 +3662,8 @@ assert.deepEqual(Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS), [
 	"siliconflow",
 	"mosi",
 	"ollama",
-	"lm-studio"
+	"lm-studio",
+	"local-openai-compatible"
 ]);
 assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), [
 	"siliconflow",
@@ -7185,6 +7187,7 @@ assert.equal(reviewV2Approved.reviews["assertion-review-v2"].effectiveTier, unde
 	);
 }
 
+runLocalOpenAISettingsTests();
 await runRecordingStorageTests();
 
 const dualSession = createDualModelProofreadingSession({

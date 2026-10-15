@@ -21,6 +21,6 @@ export function isSupportedAudioFile(file: TFile): boolean {
 	return isSupportedAudioExtension(file.extension);
 }
 
-export function getAudioMimeType(file: TFile): string {
+export function getAudioMimeType(file: Pick<TFile, "extension">): string {
 	return AUDIO_MIME_TYPES[file.extension.toLowerCase()] ?? "application/octet-stream";
 }

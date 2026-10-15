@@ -1,0 +1,40 @@
+"""Produce a source/runtime bundle; no installation or model-cache mutation."""
+import argparse
+import hashlib
+import json
+import shutil
+import subprocess
+import tarfile
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+FILES = ['service.py','job_store.py','bounded_audio.py','bounded_diarization.py',
+         'bounded_worker.py','diarization.py','multipart_stream.py','control.py',
+         'start.sh','stop.sh','status.sh','README.md','DEPLOYMENT.md','deploy_service.py','requirements.lock',
+         'model-manifest.json','diarization-manifest.json','alignment-manifest.json']
+
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--output',type=Path,required=True)
+    opts=parser.parse_args()
+    opts.output.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='asr-package-') as tmp:
+        root=Path(tmp)/'local-mlx-asr'
+        root.mkdir()
+        for name in FILES:shutil.copy2(ROOT/name,root/name)
+        app=root/'MLX ASR 控制台.app'
+        subprocess.run(['sh',str(ROOT/'controller/build.sh'),str(app)],check=True)
+        checksums={str(p.relative_to(root)):hashlib.file_digest(p.open('rb'),'sha256').hexdigest() for p in root.rglob('*') if p.is_file()}
+        manifest={'service_version':'2.0.0','controller_version':'1.2.0','files':checksums,
+                  'requirements':'Existing interpreter matching requirements.lock and pinned model caches are not included'}
+        (root/'bundle-manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2))
+        archive=opts.output/'echo-notes-local-asr-2.0.0.tar.gz'
+        with tarfile.open(archive,'w:gz') as output:output.add(root,arcname='local-mlx-asr')
+        digest=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
+        (opts.output/'service-package-evidence.json').write_text(json.dumps({'path':str(archive),'sha256':digest,'manifest':manifest},ensure_ascii=False,indent=2))
+        print(json.dumps({'path':str(archive),'sha256':digest}))
+
+
+if __name__=='__main__':main()

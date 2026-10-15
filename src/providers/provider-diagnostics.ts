@@ -7,7 +7,8 @@ import {
 	MOSI_TRANSCRIPTION_MODEL,
 	PROVIDER_LABELS,
 	isMosiSpeakerDiarizationModel,
-	isProviderId
+	isProviderId,
+	validateLocalOpenAIBaseUrl
 } from "../settings/settings";
 import { getTranscriptionProviderCapability } from "./provider-capabilities";
 
@@ -44,8 +45,9 @@ export function diagnoseTranscriptionProviderSettings(
 	const trimmedApiKey = apiKey.trim();
 	const trimmedBaseUrl = settings.baseUrl.trim();
 	const trimmedModel = settings.model.trim();
+	const localUrlError = providerId === "local-openai-compatible" ? validateLocalOpenAIBaseUrl(trimmedBaseUrl) : undefined;
 
-	if (!trimmedApiKey) {
+	if (!trimmedApiKey && providerId !== "local-openai-compatible") {
 		items.push({
 			severity: "error",
 			title: "API Key 缺失",
@@ -76,11 +78,38 @@ export function diagnoseTranscriptionProviderSettings(
 		});
 	}
 
+	if (providerId === "local-openai-compatible") {
+		if (options.isMobile) {
+			items.push({
+				severity: "error", title: "本地模型仅支持桌面端",
+				detail: "请在 Obsidian 桌面端使用本机模型转写已有音频。"
+			});
+		}
+		if (options.isFileSystemVault === false) {
+			items.push({
+				severity: "error", title: "本地模型需要本地文件系统 Vault",
+				detail: "当前 Vault 不是 FileSystemAdapter，无法安全地按块读取长音频。"
+			});
+		}
+		if (usage === "realtime") {
+			items.push({
+				severity: "error", title: "本地模型用于已有录音转写",
+				detail: "请使用离线转写入口；流式上传不等于麦克风实时识别。"
+			});
+		}
+	}
+
 	if (!trimmedBaseUrl) {
 		items.push({
 			severity: "error",
 			title: "Base URL 缺失",
 			detail: "请填写当前转写服务商的 Base URL。"
+		});
+	} else if (localUrlError) {
+		items.push({
+			severity: "error",
+			title: "本地服务地址无效",
+			detail: localUrlError
 		});
 	} else if (!isValidProviderUrl(trimmedBaseUrl, capability.endpointShape)) {
 		items.push({
@@ -100,7 +129,7 @@ export function diagnoseTranscriptionProviderSettings(
 			});
 		}
 
-		if (isInsecureRemoteBaseUrl(trimmedBaseUrl)) {
+		if (providerId !== "local-openai-compatible" && isInsecureRemoteBaseUrl(trimmedBaseUrl)) {
 			items.push({
 				severity: "error",
 				title: "Base URL 使用未加密 HTTP",
@@ -207,7 +236,20 @@ export function diagnoseTranscriptionProviderSettings(
 		});
 	}
 
-	if (!capability.supportsChunking) {
+	if (providerId === "local-openai-compatible") {
+		items.push({
+			severity: "info", title: "本地长音频流式上传",
+			detail: "不设置固定 25 MiB 客户端上限。当前 MLX 服务通过能力核验后支持分块上传、任务恢复和最多 1 GiB / 8 小时录音；其他本机服务的容量与取消能力由服务决定。此自检不连接服务。"
+		});
+		if (!trimmedApiKey) {
+			items.push({
+				severity: "info", title: "本地 API Key 可留空",
+				detail: "空值不会发送 Authorization，也不会读取其他服务商的密钥；若本机服务启用了认证，请填写其 API Key。"
+			});
+		}
+	}
+
+	if (!capability.supportsChunking && !capability.supportsStreamingUpload) {
 		items.push({
 			severity: "info",
 			title:

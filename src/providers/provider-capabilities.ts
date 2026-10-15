@@ -1,9 +1,10 @@
 import { isProviderId, type TranscriptionMode, type TranscriptionProviderId } from "../settings/settings";
-import { ALIYUN_FILETRANS_MODEL } from "../settings/settings";
+import { ALIYUN_FILETRANS_MODEL, LOCAL_OPENAI_TRANSCRIPTION_MODEL, LOCAL_OPENAI_DIARIZATION_MODEL } from "../settings/settings";
 import { SILICONFLOW_TRANSCRIPTION_MODELS } from "./siliconflow-model-catalog";
 
 export type ProviderUploadMode =
 	| "multipart"
+	| "streaming-multipart"
 	| "base64-data-url"
 	| "temporary-oss-url"
 	| "websocket-stream";
@@ -24,7 +25,9 @@ export interface ProviderCapability {
 	supportsLanguage: boolean;
 	supportsTimestamp: boolean;
 	supportsSpeakerDiarization: boolean;
+	/** Real-time transcription, independent of how an existing audio file is uploaded. */
 	supportsStreaming: boolean;
+	supportsStreamingUpload?: boolean;
 	supportsAsyncTasks?: boolean;
 	supportsNativeHotwords?: boolean;
 	supportsContextEnhancement?: boolean;
@@ -152,7 +155,25 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 			"官方未公布稳定的文件大小上限；HTTP 500/502/503/504 重试后仍失败、收到 413 或明确过长错误时，只缩小当前失败段。"
 		]
 	},
-	...openAICompatibleCapabilities
+	...openAICompatibleCapabilities,
+	"local-openai-compatible": {
+		maxAudioBytes: null,
+		supportsChunking: false,
+		supportsLanguage: true,
+		supportsTimestamp: false,
+		supportsSpeakerDiarization: false,
+		supportsStreaming: false,
+		supportsStreamingUpload: true,
+		uploadMode: "streaming-multipart",
+		endpointShape: "openai-audio",
+		recommendedModels: [LOCAL_OPENAI_TRANSCRIPTION_MODEL, LOCAL_OPENAI_DIARIZATION_MODEL],
+		notes: [
+			"桌面本机服务通过流式上传处理已有长音频；不设固定 25 MiB 客户端限制，实际容量由服务决定。",
+			"当前 MLX 服务能力核验通过后使用分块上传与可恢复任务，支持单文件 1 GiB、解码时长 8 小时；上传分块不会拆成独立转写。",
+			"普通 OpenAI 兼容服务使用 /audio/transcriptions；不保证断点续传或服务端取消，中断后需核对结果再重试。",
+			"流式上传不是麦克风实时识别；仅支持桌面端、本地文件系统 Vault 与本机回环地址。"
+		]
+	}
 };
 
 export function getTranscriptionProviderCapability(
@@ -164,7 +185,11 @@ export function getTranscriptionProviderCapability(
 	if (normalizedProviderId === "aliyun-bailian" && model && model !== ALIYUN_FILETRANS_MODEL) {
 		return createAliyunLegacyCapability();
 	}
-	return TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
+	const capability = TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
+	if (normalizedProviderId === "local-openai-compatible" && model === LOCAL_OPENAI_DIARIZATION_MODEL) {
+		return { ...capability, supportsTimestamp: true, supportsSpeakerDiarization: true };
+	}
+	return capability;
 }
 
 export function formatProviderCapabilityBytes(bytes: number): string {
@@ -181,9 +206,11 @@ export function getProviderCapabilitySummary(capability: ProviderCapability): st
 	const longAudioSummary =
 		capability.agentPlanConnectionMode === "realtime"
 			? "实时音频：单连接持续发送"
-			: capability.supportsChunking
-				? "长音频分段：支持"
-				: "长音频分段：暂不支持";
+			: capability.supportsStreamingUpload
+				? "长音频：流式上传，容量由本地服务决定"
+				: capability.supportsChunking
+					? "长音频分段：支持"
+					: "长音频分段：暂不支持";
 	const durationLimit =
 		capability.maxAudioDurationSeconds !== undefined
 			? `单次时长上限：${formatDurationLimit(capability.maxAudioDurationSeconds)}`

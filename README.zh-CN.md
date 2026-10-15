@@ -56,7 +56,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 - 在设置页选择“实时转写”或“离线转写”，两种模式使用相互隔离的 Provider 配置。
 - 实时模式由 Echo Notes 独立采集麦克风，立即创建 WebM 录音附件和 `.transcript.md`，并持续写入临时文字、确定分句、说话人和时间范围。
 - AgentPlan 连接失败时继续保存本地录音和已经确定的正文，停止后可在任务中心手动选择“使用离线 Provider 重试”，不会自动产生第二次调用费用。
-- 离线模式支持阿里百炼、硅基流动、MOSI、Ollama 和 LM Studio，用于转写 Vault 中已有音频。
+- 离线模式支持阿里百炼、硅基流动、MOSI、Ollama、LM Studio 和独立的[本地模型（OpenAI 兼容）](docs/local-model-transcription.md)，用于转写 Vault 中已有音频。本地入口支持有界流式上传和 MLX 任务恢复，无 25MiB 客户端限制。
 - 转写当前笔记中选中的音频链接。
 - 扫描并转写当前笔记中的全部支持音频链接。
 - 生成带 source metadata 的 Markdown 转写稿。
