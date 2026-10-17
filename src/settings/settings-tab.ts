@@ -1364,12 +1364,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		});
 
 		const commandFields = fieldsEl.createDiv({ cls: "echo-notes-local-asr-command-group" });
-		const workingDirectoryDefault = "";
 		const values = {
 			startCommand: profile.startCommand,
 			stopCommand: profile.stopCommand,
-			workingDirectory: profile.workingDirectory || workingDirectoryDefault,
-			readinessUrl: profile.readinessUrl,
+			workingDirectory: profile.workingDirectory,
+			// 空就绪地址以 Base URL 派生默认值参与展示与启用校验（原型同语义）。
+			readinessUrl: profile.readinessUrl || defaultLocalAsrReadinessUrl(config.baseUrl),
 			startupTimeoutSeconds: String(profile.startupTimeoutSeconds),
 			idleTimeoutSeconds: String(profile.idleTimeoutSeconds),
 			shutdownTimeoutSeconds: String(profile.shutdownTimeoutSeconds)
@@ -1488,7 +1488,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				const candidate = normalizeLocalAsrLifecycleSettings({ ...loadProfile(), ...values, enabled });
 				const error = enabled ? validateLocalAsrLifecycleForEnable(candidate, config.baseUrl) : undefined;
 				if (error) {
-					toggle.setValue(false);
+					// 校验失败：回退开关（立即复位输入并在点击链结束后同步组件内部状态），
+					// 展示错误并展开配置。
+					const toggleInput = toggle.toggleEl.querySelector("input[type=\"checkbox\"]");
+					if (toggleInput instanceof HTMLInputElement) toggleInput.checked = false;
+					window.setTimeout(() => { toggle.setValue(false); }, 0);
 					validationErrorEl.setText(error);
 					validationErrorEl.show();
 					setConfigOpen(true);

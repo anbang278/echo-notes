@@ -3527,8 +3527,13 @@ export default class EchoNotesPlugin extends Plugin {
 		// 批次懒获取 reservation：整批均复用已有稿时不启动服务；
 		// 第一个真实转写 acquire 后持续持有到批次遍历结束（design.md）。
 		const batchLeaseSlot: { lease: Awaited<ReturnType<EchoNotesPlugin["acquireLocalAsrLifecycleLease"]>> } = { lease: null };
+		const batchNeedsRealTranscription = audioTasks.some((task) => {
+			if (this.processingAudio.has(task.audioFile.path)) return false;
+			if (!this.settings.skipExistingTranscript || !this.transcriptService.getTranscriptFile(task.audioFile)) return true;
+			return false;
+		});
 		const ensureBatchLocalAsrLease = async (): Promise<void> => {
-			if (batchLeaseSlot.lease || !this.localAsrLifecycle || Platform.isMobile) return;
+			if (batchLeaseSlot.lease || !batchNeedsRealTranscription || !this.localAsrLifecycle || Platform.isMobile) return;
 			if (batchConfig.provider !== "local-openai-compatible" || !batchConfig.baseUrl.trim()) return;
 			const profile = readLocalAsrProfile(createAppLocalStorageStore(this.app), batchConfig.provider, batchConfig.baseUrl);
 			if (!profile.enabled || validateLocalAsrLifecycleForEnable(profile, batchConfig.baseUrl)) return;

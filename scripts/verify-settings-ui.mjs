@@ -3305,6 +3305,10 @@ async function verifyLocalOpenAISettings(page) {
 			"重载设置后各服务商的地址、模型、语言或 Key 隔离不正确");
 
 		// T19: 本地服务自动管理分组：仅本地 Provider 展示；启用校验失败回退并展开；保存不执行命令；配置入 localStorage。
+		// 服务商切换会重绘面板并折叠高级配置，先确保高级 details 展开。
+		if (await advanced.getAttribute("open") === null) {
+			await advanced.locator("summary").click();
+		}
 		const asrBlock = advanced.locator(".echo-notes-local-asr-service-block");
 		await asrBlock.waitFor({ state: "visible" });
 		assert((await asrBlock.locator("[role=\"status\"]").textContent()).includes("自动管理已关闭"), "本地服务自动管理应显示关闭状态");
@@ -3327,6 +3331,7 @@ async function verifyLocalOpenAISettings(page) {
 		const validationError = asrBlock.locator("[role=\"alert\"]");
 		await validationError.waitFor({ state: "visible" });
 		assert((await validationError.textContent()).includes("请先填写启动命令和关闭命令。"), "未配置命令时启用应被拒绝");
+		await page.waitForFunction((toggle) => !toggle.checked, await asrToggle.elementHandle());
 		assert(!(await asrToggle.isChecked()), "启用失败后开关应回退为关闭");
 		assert((await asrToggleButton.getAttribute("aria-expanded")) === "true", "启用失败应展开配置");
 		const commandInputs = asrBlock.locator(".echo-notes-local-asr-command-input");
