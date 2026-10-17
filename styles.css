@@ -5880,3 +5880,111 @@ button.echo-notes-memory-tool:hover {
 		width: 100%;
 	}
 }
+
+/* 本地服务自动管理（原型 v0.2.0 布局C 摘要优先） */
+.echo-notes-local-asr-service-block {
+	margin-top: 18px;
+	padding-top: 4px;
+}
+
+.echo-notes-local-asr-heading {
+	margin-bottom: 4px;
+}
+
+.echo-notes-local-asr-mobile-message {
+	padding: 12px 0;
+}
+
+.echo-notes-local-asr-mobile-message strong {
+	display: block;
+}
+
+.echo-notes-local-asr-desc {
+	margin: 4px 0 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-local-asr-toggle-row {
+	display: flex;
+	gap: 16px;
+	justify-content: space-between;
+	align-items: center;
+	padding: 12px 0;
+}
+
+.echo-notes-local-asr-setting-name {
+	font-weight: 550;
+}
+
+.echo-notes-local-asr-toggle-control {
+	justify-content: flex-end;
+}
+
+.echo-notes-local-asr-error {
+	margin: 8px 0;
+	color: var(--text-normal);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+}
+
+.echo-notes-local-asr-status {
+	margin: 12px 0 6px;
+	padding: 12px 14px;
+	border-left: 3px solid var(--interactive-accent);
+	border-radius: 0 4px 4px 0;
+	background: var(--background-secondary);
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-local-asr-summary {
+	margin: 10px 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-local-asr-config-details > summary {
+	padding: 10px 0;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.echo-notes-local-asr-config-details .echo-notes-local-asr-command-group,
+.echo-notes-local-asr-config-details .echo-notes-local-asr-behavior-group {
+	padding-top: 4px;
+}
+
+.echo-notes-local-asr-command-input {
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-local-asr-parameter-grid {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 0 20px;
+}
+
+.echo-notes-local-asr-note {
+	margin-top: 16px;
+	padding-top: 14px;
+	border-top: 1px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+@media (width <= 620px) {
+	.echo-notes-local-asr-toggle-row {
+		flex-direction: column;
+		align-items: stretch;
+		gap: 8px;
+	}
+
+	.echo-notes-local-asr-toggle-control {
+		justify-content: flex-start;
+	}
+
+	.echo-notes-local-asr-parameter-grid {
+		grid-template-columns: 1fr;
+	}
+}

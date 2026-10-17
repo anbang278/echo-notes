@@ -15,7 +15,8 @@ const PROJECT_BRANDS = [
 	"Base URL",
 	"Vault",
 	"Dataview",
-	"LinkOnly"
+	"LinkOnly",
+	"ASR"
 ];
 
 export default [

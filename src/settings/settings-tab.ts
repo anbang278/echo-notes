@@ -89,6 +89,15 @@ import {
 	type RecordingStorageStrategy,
 	type TranscriptionConfig
 } from "./settings";
+import {
+	createAppLocalStorageStore,
+	defaultLocalAsrReadinessUrl,
+	normalizeLocalAsrLifecycleSettings,
+	readLocalAsrProfile,
+	saveLocalAsrProfile,
+	validateLocalAsrLifecycleForEnable,
+	type LocalAsrLifecycleSettings
+} from "../local-asr";
 
 type SettingsStage = "transcription" | "analysis" | "memory";
 
@@ -1025,7 +1034,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (!isRealtime && config.provider === "aliyun-bailian") {
 			new Setting(containerEl)
 				.setName("转写模型")
-				.setDesc("新模型使用临时对象存储与异步 HTTP；旧 qwen3-asr-flash 保留原有兼容链路。")
+				.setDesc("新模型使用临时对象存储与异步 HTTP；旧 qwen3-ASR-Flash 保留原有兼容链路。")
 				.addDropdown((dropdown) => {
 					for (const model of ALIYUN_TRANSCRIPTION_MODELS) {
 						dropdown.addOption(
@@ -1233,6 +1242,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			});
 		}
 
+		if (isLocalOpenAI) {
+			this.renderLocalAsrLifecycleSection(advancedEl, config);
+		}
+
 		if (isRealtime) {
 			this.renderBasicHeading(containerEl, "录音与输入");
 			containerEl.createDiv({
@@ -1282,6 +1295,210 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				return text;
 			});
 		}
+	}
+
+	/** 本地服务自动管理分组：按已批准原型 v0.2.0（布局C 摘要优先）还原。 */
+	private renderLocalAsrLifecycleSection(containerEl: HTMLElement, config: TranscriptionConfig): void {
+		const serviceBlock = containerEl.createDiv({ cls: "echo-notes-local-asr-service-block" });
+		new Setting(serviceBlock)
+			.setName("本地服务自动管理")
+			.setHeading();
+		if (Platform.isMobile) {
+			const mobileMessage = serviceBlock.createDiv({ cls: "echo-notes-local-asr-mobile-message" });
+			mobileMessage.createEl("strong", { text: "仅桌面端支持自动启停" });
+			mobileMessage.createEl("p", {
+				cls: "echo-notes-local-asr-desc",
+				text: "请在运行本地 ASR 的电脑上配置。当前设备不会执行命令。"
+			});
+			return;
+		}
+		const store = createAppLocalStorageStore(this.plugin.app);
+		const loadProfile = (): LocalAsrLifecycleSettings =>
+			readLocalAsrProfile(store, "local-openai-compatible", config.baseUrl);
+		const profile = loadProfile();
+
+		const toggleRow = serviceBlock.createDiv({ cls: "echo-notes-local-asr-toggle-row" });
+		const toggleLabel = toggleRow.createDiv();
+		toggleLabel.createEl("label", {
+			text: "自动管理本地服务",
+			cls: "echo-notes-local-asr-setting-name",
+			attr: { for: "echo-notes-local-asr-enabled" }
+		});
+		toggleLabel.createEl("p", {
+			cls: "echo-notes-local-asr-desc",
+			text: "转写前按需启动，只关闭本次由 Echo Notes 启动的服务。"
+		});
+		const validationErrorEl = serviceBlock.createEl("p", {
+			cls: "echo-notes-local-asr-error",
+			attr: { role: "alert" }
+		});
+		validationErrorEl.hide();
+		const statusEl = serviceBlock.createDiv({ cls: "echo-notes-local-asr-status", attr: { role: "status", "aria-live": "polite" } });
+		const statusTitleEl = statusEl.createEl("strong", { text: "自动管理已关闭" });
+		const statusDetailEl = statusEl.createEl("p", {
+			cls: "echo-notes-local-asr-desc",
+			text: "先配置启停命令。启用后，在下一次实际转写时启动服务。"
+		});
+		const summaryEl = serviceBlock.createEl("p", { cls: "echo-notes-local-asr-summary" });
+
+		const detailsEl = serviceBlock.createEl("details", { cls: "echo-notes-local-asr-config-details" });
+		detailsEl.createEl("summary", { text: "编辑启停配置" });
+		const fieldsEl = detailsEl.createDiv({ cls: "echo-notes-local-asr-fields" });
+
+		const commandFields = fieldsEl.createDiv({ cls: "echo-notes-local-asr-command-group" });
+		const workingDirectoryDefault = "";
+		const values = {
+			startCommand: profile.startCommand,
+			stopCommand: profile.stopCommand,
+			workingDirectory: profile.workingDirectory || workingDirectoryDefault,
+			readinessUrl: profile.readinessUrl,
+			startupTimeoutSeconds: String(profile.startupTimeoutSeconds),
+			idleTimeoutSeconds: String(profile.idleTimeoutSeconds),
+			shutdownTimeoutSeconds: String(profile.shutdownTimeoutSeconds)
+		};
+
+		const renderSummary = (): void => {
+			const configured = values.startCommand.trim() && values.stopCommand.trim();
+			summaryEl.setText(`${configured ? "已配置启动与关闭命令" : "尚未配置启停命令"} · 空闲 ${values.idleTimeoutSeconds || "0"} 秒后关闭`);
+		};
+
+		const renderStatus = (enabled: boolean): void => {
+			if (!enabled) {
+				statusTitleEl.setText("自动管理已关闭");
+				statusDetailEl.setText("先配置启停命令。启用后，在下一次实际转写时启动服务。");
+				return;
+			}
+			statusTitleEl.setText("已启用，等待转写");
+			statusDetailEl.setText("保存与启用不会启动服务。下一次需要转写时按需启动。");
+		};
+
+		const saveProfile = (patch: Partial<LocalAsrLifecycleSettings>): LocalAsrLifecycleSettings => {
+			const currentConfig = this.getSelectedTranscriptionConfig();
+			if (currentConfig.provider !== config.provider || currentConfig.baseUrl !== config.baseUrl) return profile;
+			const next = normalizeLocalAsrLifecycleSettings({ ...loadProfile(), ...patch });
+			saveLocalAsrProfile(store, "local-openai-compatible", currentConfig.baseUrl, next);
+			return next;
+		};
+
+		const startCommandSetting = new Setting(commandFields).setName("启动命令").setClass("echo-notes-local-asr-field");
+		startCommandSetting.addText((text) => {
+			text.setPlaceholder("填写本机服务的启动命令")
+				.setValue(values.startCommand)
+				.onChange((value) => {
+					values.startCommand = value;
+					renderSummary();
+					saveProfile({ startCommand: value });
+				});
+			text.inputEl.setAttribute("spellcheck", "false");
+			text.inputEl.setAttribute("autocomplete", "off");
+			text.inputEl.addClass("echo-notes-local-asr-command-input");
+			return text;
+		});
+		startCommandSetting.setDesc("支持启动脚本或持续运行的服务命令。");
+
+		const stopCommandSetting = new Setting(commandFields).setName("关闭命令").setClass("echo-notes-local-asr-field");
+		stopCommandSetting.addText((text) => {
+			text.setPlaceholder("填写对应服务的关闭命令")
+				.setValue(values.stopCommand)
+				.onChange((value) => {
+					values.stopCommand = value;
+					renderSummary();
+					saveProfile({ stopCommand: value });
+				});
+			text.inputEl.setAttribute("spellcheck", "false");
+			text.inputEl.setAttribute("autocomplete", "off");
+			text.inputEl.addClass("echo-notes-local-asr-command-input");
+			return text;
+		});
+		stopCommandSetting.setDesc("仅停止这组命令管理的 ASR 服务。");
+
+		const workingDirectorySetting = new Setting(commandFields).setName("工作目录").setClass("echo-notes-local-asr-field");
+		workingDirectorySetting.addText((text) => {
+			text.setPlaceholder("留空使用用户主目录")
+				.setValue(values.workingDirectory)
+				.onChange((value) => {
+					values.workingDirectory = value;
+					saveProfile({ workingDirectory: value });
+				});
+			text.inputEl.setAttribute("spellcheck", "false");
+			text.inputEl.setAttribute("autocomplete", "off");
+			text.inputEl.addClass("echo-notes-local-asr-command-input");
+			return text;
+		});
+
+		const behaviorFields = fieldsEl.createDiv({ cls: "echo-notes-local-asr-behavior-group" });
+		const readinessDefault = defaultLocalAsrReadinessUrl(config.baseUrl);
+		const readinessSetting = new Setting(behaviorFields).setName("就绪检查地址").setClass("echo-notes-local-asr-field");
+		readinessSetting.addText((text) => {
+			text.setPlaceholder(readinessDefault)
+				.setValue(values.readinessUrl || readinessDefault)
+				.onChange((value) => {
+					values.readinessUrl = value;
+					saveProfile({ readinessUrl: value });
+				});
+			text.inputEl.setAttribute("spellcheck", "false");
+			text.inputEl.setAttribute("autocomplete", "off");
+			text.inputEl.addClass("echo-notes-local-asr-command-input");
+			return text;
+		});
+		readinessSetting.setDesc("模型就绪后才上传音频；请使用当前服务的就绪接口。");
+
+		const parameterGrid = behaviorFields.createDiv({ cls: "echo-notes-local-asr-parameter-grid" });
+		const numberSetting = (name: string, key: "startupTimeoutSeconds" | "idleTimeoutSeconds" | "shutdownTimeoutSeconds", minimum: number, description?: string): void => {
+			const setting = new Setting(parameterGrid).setName(name).setClass("echo-notes-local-asr-field");
+			setting.addText((text) => {
+				text.inputEl.type = "number";
+				text.inputEl.min = String(minimum);
+				text.inputEl.step = "1";
+				text.setValue(values[key]).onChange((value) => {
+					values[key] = value;
+					if (key === "idleTimeoutSeconds") renderSummary();
+					saveProfile({ [key]: Number(value) || 0 });
+				});
+				return text;
+			});
+			if (description) setting.setDesc(description);
+		};
+		numberSetting("启动等待时间（秒）", "startupTimeoutSeconds", 1);
+		numberSetting("空闲关闭时间（秒）", "idleTimeoutSeconds", 0, "全部转写结束后计时；0 表示立即关闭。");
+		numberSetting("关闭等待时间（秒）", "shutdownTimeoutSeconds", 1);
+
+		const toggleSetting = new Setting(toggleRow).setClass("echo-notes-local-asr-toggle-control");
+		toggleSetting.controlEl.addClass("echo-notes-local-asr-toggle-control");
+		toggleSetting.addToggle((toggle) => {
+			toggle.setValue(profile.enabled).onChange((enabled) => {
+				const candidate = normalizeLocalAsrLifecycleSettings({ ...loadProfile(), ...values, enabled });
+				const error = enabled ? validateLocalAsrLifecycleForEnable(candidate, config.baseUrl) : undefined;
+				if (error) {
+					toggle.setValue(false);
+					validationErrorEl.setText(error);
+					validationErrorEl.show();
+					detailsEl.open = true;
+					return;
+				}
+				validationErrorEl.hide();
+				saveProfile({
+					enabled,
+					startCommand: values.startCommand,
+					stopCommand: values.stopCommand,
+					workingDirectory: values.workingDirectory,
+					readinessUrl: values.readinessUrl,
+					startupTimeoutSeconds: Number(values.startupTimeoutSeconds) || 0,
+					idleTimeoutSeconds: Number(values.idleTimeoutSeconds) || 0,
+					shutdownTimeoutSeconds: Number(values.shutdownTimeoutSeconds) || 0
+				});
+				renderStatus(enabled);
+			});
+			toggle.toggleEl.id = "echo-notes-local-asr-enabled";
+		});
+
+		serviceBlock.createEl("p", {
+			cls: "echo-notes-local-asr-note",
+			text: "配置仅保存在当前设备、当前 Vault。命令以当前用户权限执行；保存配置不会执行命令。建议用于专门的 ASR 服务。"
+		});
+
+		renderSummary();
+		renderStatus(profile.enabled);
 	}
 
 	private async saveLocalOpenAIModel(value: string): Promise<void> {
