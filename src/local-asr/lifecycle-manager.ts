@@ -131,7 +131,7 @@ export class LocalAsrLifecycleManager {
 
 	get isDisposed(): boolean { return this.disposed; }
 
-	private createRuntime(origin: string, spec: LocalAsrCommandSpec): ServiceRuntime {
+	private createRuntime(origin: string, _spec: LocalAsrCommandSpec): ServiceRuntime {
 		return {
 			origin,
 			state: "unmanaged",
@@ -220,25 +220,28 @@ export class LocalAsrLifecycleManager {
 	}
 
 	private createLease(runtime: ServiceRuntime, token: LeaseToken): LocalAsrLease {
-		const manager = this;
+		const services = this.services;
+		const acquisitions = this.acquisitions;
+		const notify = this.deps.notify;
+		const recheckIdle = (target: ServiceRuntime) => this.recheckIdle(target);
 		return {
 			origin: runtime.origin,
 			generation: token.generation,
 			async release(outcome) {
 				if (token.released) return;
 				token.released = true;
-				const current = manager.services.get(runtime.origin);
+				const current = services.get(runtime.origin);
 				if (!current || current.generation !== token.generation) return;
 				current.leases.delete(token);
-				manager.acquisitions.set(current.origin, current.leases.size);
+				acquisitions.set(current.origin, current.leases.size);
 				if (outcome !== "safe-terminal") {
 					// server-work-pending / result-unknown：保持阻塞，不进入空闲计时。
 					current.state = current.session?.external ? "external"
 						: current.waiters.length > 0 ? "in-use" : "blocked";
-					manager.deps.notify?.notify(current.state === "blocked" ? "blocked" : current.state === "in-use" ? "in-use" : "external-service");
+					notify?.notify(current.state === "blocked" ? "blocked" : current.state === "in-use" ? "in-use" : "external-service");
 					return;
 				}
-				manager.recheckIdle(current);
+				recheckIdle(current);
 			}
 		};
 	}

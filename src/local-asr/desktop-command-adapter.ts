@@ -32,7 +32,8 @@ function spawnManaged(
 ): LocalAsrCommandHandle {
 	const platform = (window as Window & { activeWindow?: { process?: { platform?: unknown } } }).activeWindow?.process?.platform;
 	const isWindows = platform === "win32";
-	const shell = isWindows ? (process.env.ComSpec || "cmd.exe") : "/bin/sh";
+	const comSpec = (window as Window & { activeWindow?: { process?: { env?: { ComSpec?: unknown } } } }).activeWindow?.process?.env?.ComSpec;
+	const shell = isWindows ? (typeof comSpec === "string" && comSpec.trim() ? comSpec : "cmd.exe") : "/bin/sh";
 	const args = isWindows ? ["/d", "/s", "/c", spec.command] : ["-c", spec.command];
 	const child = childProcess.spawn(shell, args, {
 		cwd: spec.workingDirectory.trim() || os.homedir(),
@@ -41,23 +42,17 @@ function spawnManaged(
 		windowsHide: true
 	});
 	let settled = false;
-	let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+	const timeoutHandle = registerCommandTimeout(child, isWindows, spec.timeoutMs);
 	const exited = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
 		const finish = (code: number | null, signal: string | null) => {
 			if (settled) return;
 			settled = true;
-			if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+			window.clearTimeout(timeoutHandle);
 			resolve({ code, signal });
 		};
 		child.once("error", () => finish(null, null));
 		child.once("exit", (code, signal) => finish(code, signal));
 	});
-	// 超时只终止本次启动命令句柄；无 broad kill。
-	timeoutHandle = setTimeout(() => {
-		if (!settled) {
-			try { child.kill(isWindows ? undefined : "SIGTERM"); } catch { /* already exited */ }
-		}
-	}, spec.timeoutMs);
 	const abort = () => {
 		if (!settled) {
 			try { child.kill(isWindows ? undefined : "SIGTERM"); } catch { /* already exited */ }
@@ -66,4 +61,15 @@ function spawnManaged(
 	spec.signal?.addEventListener("abort", abort, { once: true });
 	void exited.finally(() => spec.signal?.removeEventListener("abort", abort));
 	return { cancel: abort, exited };
+}
+
+/** 超时只终止本次启动命令句柄；无 broad kill。 */
+function registerCommandTimeout(
+	child: import("child_process").ChildProcess,
+	isWindows: boolean,
+	timeoutMs: number
+): number {
+	return window.setTimeout(() => {
+		try { child.kill(isWindows ? undefined : "SIGTERM"); } catch { /* already exited */ }
+	}, timeoutMs);
 }

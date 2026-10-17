@@ -193,6 +193,17 @@ import {
 import { normalizeAgentPlanError } from "./providers/volcengine-agentplan-client";
 import { loadAgentPlanSocketFactory } from "./providers/volcengine-agentplan-socket";
 import {
+	LocalAsrAcquireError,
+	LocalAsrLifecycleManager,
+	createAppLocalStorageStore,
+	createDesktopCommandRunner,
+	createLocalAsrProbe,
+	defaultLocalAsrReadinessUrl,
+	readLocalAsrProfile,
+	validateLocalAsrLifecycleForEnable,
+	type LocalAsrLeaseOutcome
+} from "./local-asr";
+import {
 	ALIYUN_FILETRANS_MODEL,
 	cloneHotkey,
 	formatHotkey,
@@ -441,10 +452,20 @@ export default class EchoNotesPlugin extends Plugin {
 	private gettingStartedKnownAudioPaths = new Set<string>();
 	private loadedAt = Date.now();
 	private unloading = false;
+	private localAsrLifecycle: LocalAsrLifecycleManager | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.refreshServices();
+		this.localAsrLifecycle = new LocalAsrLifecycleManager({
+			probe: createLocalAsrProbe(),
+			runCommand: createDesktopCommandRunner(),
+			clock: { now: () => Date.now() },
+			timers: {
+				setTimeout: (handler, delayMs) => window.setTimeout(handler, delayMs),
+				clearTimeout: (handle) => window.clearTimeout(handle as number)
+			}
+		});
 		this.diagnosticFiles = new FileService(this.app);
 		this.recordingStorage = new RecordingStorageService(this.app, (path) => this.diagnosticFiles.ensureFolder(path));
 		this.coreRecordingStorageAdapter = new CoreRecordingStorageAdapter({
@@ -556,6 +577,13 @@ export default class EchoNotesPlugin extends Plugin {
 			task.controller.abort(new Error("Echo Notes 插件已停用。"));
 		}
 		this.activeMemoryTasks.clear();
+		const localAsrLifecycle = this.localAsrLifecycle;
+		if (localAsrLifecycle) {
+			this.localAsrLifecycle = null;
+			void localAsrLifecycle.dispose().catch((error) => {
+				this.log("本地 ASR 服务生命周期卸载清理失败", error);
+			});
+		}
 	}
 
 	async loadSettings(): Promise<void> {
@@ -2927,6 +2955,49 @@ export default class EchoNotesPlugin extends Plugin {
 		this.memoryService = new MemoryService(this.app);
 	}
 
+	/**
+	 * 本机 OpenAI 兼容 ASR 自动启停入口。仅桌面端、当前设备配置已启用且校验通过时返回租约；
+	 * 其余情况返回 null，转写按原流程直接执行（不因生命周期配置问题阻塞转写本身）。
+	 * 命令与原始输出不进入诊断或日志（I08）。
+	 */
+	private async acquireLocalAsrLifecycleLease(
+		transcriptionConfig: EchoNotesSettings["offlineTranscription"],
+		signal: AbortSignal,
+		onStage?: (stage: string) => void
+	): Promise<{ release: (outcome: LocalAsrLeaseOutcome) => Promise<void> } | null> {
+		const manager = this.localAsrLifecycle;
+		if (!manager || Platform.isMobile || this.unloading) return null;
+		if (transcriptionConfig.provider !== "local-openai-compatible") return null;
+		if (!transcriptionConfig.baseUrl.trim()) return null;
+		const profile = readLocalAsrProfile(
+			createAppLocalStorageStore(this.app),
+			transcriptionConfig.provider,
+			transcriptionConfig.baseUrl
+		);
+		if (!profile.enabled) return null;
+		if (validateLocalAsrLifecycleForEnable(profile, transcriptionConfig.baseUrl)) return null;
+		const spec = {
+			provider: transcriptionConfig.provider,
+			baseUrl: transcriptionConfig.baseUrl,
+			readinessUrl: profile.readinessUrl.trim() || defaultLocalAsrReadinessUrl(transcriptionConfig.baseUrl),
+			startCommand: profile.startCommand,
+			stopCommand: profile.stopCommand,
+			workingDirectory: profile.workingDirectory,
+			startupTimeoutSeconds: profile.startupTimeoutSeconds,
+			idleTimeoutSeconds: profile.idleTimeoutSeconds,
+			shutdownTimeoutSeconds: profile.shutdownTimeoutSeconds
+		};
+		try {
+			const lease = await manager.acquire(spec, signal, onStage);
+			return { release: (outcome) => lease.release(outcome) };
+		} catch (error) {
+			if (error instanceof LocalAsrAcquireError && error.kind === "aborted") throw error;
+			// 启动失败/超时/配置冲突：不吞掉转写流程，按无服务继续（provider 会给出网络错误）。
+			new Notice(`本地 ASR 服务自动启动未完成：${error instanceof Error ? error.message : "未知错误"}`);
+			return null;
+		}
+	}
+
 	private registerCommands(): void {
 		this.removeRegisteredCommands();
 
@@ -3453,7 +3524,23 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 		}
 
+		// 批次懒获取 reservation：整批均复用已有稿时不启动服务；
+		// 第一个真实转写 acquire 后持续持有到批次遍历结束（design.md）。
+		const batchLeaseSlot: { lease: Awaited<ReturnType<EchoNotesPlugin["acquireLocalAsrLifecycleLease"]>> } = { lease: null };
+		const ensureBatchLocalAsrLease = async (): Promise<void> => {
+			if (batchLeaseSlot.lease || !this.localAsrLifecycle || Platform.isMobile) return;
+			if (batchConfig.provider !== "local-openai-compatible" || !batchConfig.baseUrl.trim()) return;
+			const profile = readLocalAsrProfile(createAppLocalStorageStore(this.app), batchConfig.provider, batchConfig.baseUrl);
+			if (!profile.enabled || validateLocalAsrLifecycleForEnable(profile, batchConfig.baseUrl)) return;
+			batchLeaseSlot.lease = await this.acquireLocalAsrLifecycleLease(batchConfig, new AbortController().signal);
+		};
+		const releaseBatchLocalAsrLease = async (): Promise<void> => {
+			const lease = batchLeaseSlot.lease;
+			batchLeaseSlot.lease = null;
+			await lease?.release("safe-terminal");
+		};
 		for (const task of [...audioTasks].reverse()) {
+			await ensureBatchLocalAsrLease();
 			const result = await this.processAudioToTranscript(task.audioFile, sourceNote, {
 				audioLinkPath: task.audioMatch.linkPath,
 				siliconFlowUpgradeDecision: batchUpgradeDecision,
@@ -3472,6 +3559,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			completed += 1;
 		}
+		await releaseBatchLocalAsrLease();
 
 		const linked = Array.from(linkResults.values());
 		const inserted = linked.filter((result) => result.status === "inserted").length;
@@ -3846,6 +3934,7 @@ export default class EchoNotesPlugin extends Plugin {
 		let enhancement: TranscriptionEnhancementSnapshot | undefined;
 		let enhancementWarning: string | undefined;
 		let diagnosticsPassed = false;
+		let localAsrLease: Awaited<ReturnType<EchoNotesPlugin["acquireLocalAsrLifecycleLease"]>> = null;
 		let longAudioNotice: Notice | null = null;
 		const updateLongAudioNotice = (message: string): void => {
 			if (!longAudioNotice) {
@@ -3914,6 +4003,10 @@ export default class EchoNotesPlugin extends Plugin {
 				transcriptionConfig,
 				apiKeySnapshot
 			);
+			// 规则1：真实转写前 acquire；失败不阻塞转写（按无服务继续）。
+			localAsrLease = await this.acquireLocalAsrLifecycleLease(transcriptionConfig, transcriptionController.signal, (stage) => {
+				this.taskCenter.updateTask(transcriptionTaskId, { stage });
+			});
 			completedSegments = await this.transcriptService.getResumableTranscriptionSegments(
 				audioFile,
 				checkpointIdentity
@@ -4273,6 +4366,7 @@ export default class EchoNotesPlugin extends Plugin {
 				await this.persistPersistentState();
 				await this.cleanupLocalTranscriptionResult(transcriptionTaskId);
 			}
+			await localAsrLease?.release("safe-terminal");
 			this.activeTranscriptionControllers.delete(transcriptionTaskId);
 			if (transcriptionController.signal.aborted) return null;
 			this.diagnostics.complete(diagnostic.id, "success", {
@@ -4285,6 +4379,15 @@ export default class EchoNotesPlugin extends Plugin {
 		} catch (error) {
 			hideLongAudioNotice();
 			this.activeTranscriptionControllers.delete(transcriptionTaskId);
+			// 租约释放映射（design.md）：本地任务保留/取消待确认/保存失败 → 服务保持阻塞；
+			// 标准接口断线等服务端确认 → 结果未知；用户主动暂停且无本地任务 → 安全终态。
+			const releaseLocalAsrLease = async (outcome: LocalAsrLeaseOutcome): Promise<void> => {
+				try {
+					await localAsrLease?.release(outcome);
+				} catch (releaseError) {
+					this.log("本地 ASR 服务租约释放失败", releaseError);
+				}
+			};
 			if (transcriptionConfig.provider === "local-openai-compatible") {
 				const current = this.taskCenter.getTask(transcriptionTaskId)!;
 				if (error instanceof TranscriptionError && error.code === "source_changed" && current.localTask) {
@@ -4296,6 +4399,7 @@ export default class EchoNotesPlugin extends Plugin {
 					});
 					await this.persistPersistentState();
 					this.diagnostics.complete(diagnostic.id, "skipped", { reason: "local-source-changed" });
+					await releaseLocalAsrLease("result-unknown");
 					return null;
 				}
 				const expired = error instanceof TranscriptionError && error.code === "local_task_expired";
@@ -4311,6 +4415,7 @@ export default class EchoNotesPlugin extends Plugin {
 				await this.persistPersistentState();
 				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "local-task-interrupted", error: getErrorMessage(error) });
 				if (!this.unloading) new Notice(localTask ? "本地任务已保留，可在任务中心继续或取消。" : getErrorMessage(error));
+				await releaseLocalAsrLease(localTask ? "server-work-pending" : "safe-terminal");
 				return null;
 			}
 			if (error instanceof TranscriptionSuspendedError) {
@@ -4318,6 +4423,7 @@ export default class EchoNotesPlugin extends Plugin {
 					reason: error.kind,
 					remoteTaskPresent: Boolean(this.taskCenter.getTask(transcriptionTaskId)?.remoteTask)
 				});
+				await releaseLocalAsrLease("safe-terminal");
 				return null;
 			}
 			const message = getErrorMessage(error);
@@ -4337,6 +4443,7 @@ export default class EchoNotesPlugin extends Plugin {
 			await this.markGettingStartedFailure("transcription", audioFile.path, transcriptionTaskId);
 			new Notice(getTaskFailureNotice("transcription", message));
 			this.log("转写失败", error);
+			await releaseLocalAsrLease("safe-terminal");
 
 			if (
 				diagnosticsPassed &&
