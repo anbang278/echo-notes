@@ -3303,6 +3303,45 @@ async function verifyLocalOpenAISettings(page) {
 			restored.local.language === "fr" && restored.lm.model === "lm/immediate-switch" &&
 			restored.lm.baseUrl === "http://localhost:1234/custom" && restored.lm.language === "yue" && restored.keyIsolated,
 			"重载设置后各服务商的地址、模型、语言或 Key 隔离不正确");
+
+		// T19: 本地服务自动管理分组：仅本地 Provider 展示；启用校验失败回退并展开；保存不执行命令；配置入 localStorage。
+		const asrBlock = advanced.locator(".echo-notes-local-asr-service-block");
+		await asrBlock.waitFor({ state: "visible" });
+		assert((await asrBlock.locator("[role=\"status\"]").textContent()).includes("自动管理已关闭"), "本地服务自动管理应显示关闭状态");
+		assert((await asrBlock.locator(".echo-notes-local-asr-summary").textContent()).includes("尚未配置启停命令"), "摘要行应反映未配置状态");
+		const asrToggleButton = asrBlock.locator(".echo-notes-local-asr-config-toggle");
+		assert((await asrToggleButton.getAttribute("aria-expanded")) === "false", "启停配置默认折叠");
+		const asrToggle = asrBlock.locator('input[type="checkbox"]').last();
+		const spawnedCommands = await page.evaluate((pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			const calls = [];
+			const manager = plugin.localAsrLifecycle;
+			if (manager) {
+				// 借用运行中的管理器：设置页保存不得触发任何 acquire/probe 命令。
+				manager.getState("http://127.0.0.1:23456/v1");
+			}
+			return calls;
+		}, PLUGIN_ID);
+		assert(Array.isArray(spawnedCommands) && spawnedCommands.length === 0, "设置页操作不应触发命令");
+		await asrToggle.click();
+		const validationError = asrBlock.locator("[role=\"alert\"]");
+		await validationError.waitFor({ state: "visible" });
+		assert((await validationError.textContent()).includes("请先填写启动命令和关闭命令。"), "未配置命令时启用应被拒绝");
+		assert(!(await asrToggle.isChecked()), "启用失败后开关应回退为关闭");
+		assert((await asrToggleButton.getAttribute("aria-expanded")) === "true", "启用失败应展开配置");
+		const commandInputs = asrBlock.locator(".echo-notes-local-asr-command-input");
+		await commandInputs.nth(0).fill("/opt/asr/start.sh");
+		await commandInputs.nth(1).fill("/opt/asr/stop.sh");
+		await asrBlock.locator(".echo-notes-local-asr-summary").waitFor();
+		assert((await asrBlock.locator(".echo-notes-local-asr-summary").textContent()).includes("已配置启动与关闭命令"), "填写命令后摘要应更新");
+		await asrToggle.click();
+		await validationError.waitFor({ state: "hidden" });
+		assert(await asrToggle.isChecked(), "配置完整后启用应成功");
+		assert((await asrBlock.locator("[role=\"status\"]").textContent()).includes("已启用，等待转写"), "启用后状态应更新");
+		const persistedProfile = await page.evaluate(() => window.app.loadLocalStorage("echo-notes:local-asr-lifecycle:v1"));
+		assert(typeof persistedProfile === "string" && persistedProfile.includes("/opt/asr/start.sh"), "配置应保存到设备级 localStorage");
+		assert((await page.evaluate((pluginId) => JSON.stringify(window.app.plugins.plugins[pluginId].settings), PLUGIN_ID)).indexOf("/opt/asr/start.sh") === -1,
+			"命令不得写入 data.json 同步设置");
 		return { defaults: true, presets: true, optionalKey: true, diagnostics: true, providerDraftFlush: true, persistedProfiles: true };
 	} finally {
 		await page.evaluate(async ({ pluginId, previous }) => {
@@ -3318,6 +3357,7 @@ async function verifyLocalOpenAISettings(page) {
 			plugin.settingTab.activeAnalysisSettingsSection = previous.analysisSection;
 			plugin.settingTab.activeTranscriptionCapability = previous.capability;
 			plugin.settingTab.refreshSettings();
+			try { window.app.saveLocalStorage("echo-notes:local-asr-lifecycle:v1", "{}"); } catch { /* absent is fine */ }
 		}, { pluginId: PLUGIN_ID, previous: snapshot });
 	}
 }

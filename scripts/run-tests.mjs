@@ -23,7 +23,7 @@ for (const name of ["local-mlx-jobs-tests", "local-streaming-tests", "local-task
 	if (name === "local-task-lifecycle-tests") {
 		execFileSync(process.execPath, ["--input-type=module", "-e", "const tests = await import(process.argv[1]); await tests.runLocalTaskLifecycleTests();", pathToFileURL(`${process.cwd()}/.tmp/${name}.mjs`).href], { stdio: "inherit" });
 	} else if (name === "local-asr-lifecycle-tests") {
-		execFileSync(process.execPath, ["--input-type=module", "-e", "const tests = await import(process.argv[1]); tests.runLocalAsrSettingsTests(); await tests.runLocalAsrManagerTests(); console.log('Local ASR lifecycle tests passed.');", pathToFileURL(`${process.cwd()}/.tmp/${name}.mjs`).href], { stdio: "inherit" });
+		execFileSync(process.execPath, ["--input-type=module", "-e", "const tests = await import(process.argv[1]); tests.runLocalAsrSettingsTests(); await tests.runLocalAsrManagerTests(); await tests.runLocalAsrMobileSafetyTests(); console.log('Local ASR lifecycle tests passed.');", pathToFileURL(`${process.cwd()}/.tmp/${name}.mjs`).href], { stdio: "inherit" });
 	} else {
 		execFileSync(process.execPath, ["--test", `.tmp/${name}.mjs`], { stdio: "inherit" });
 	}

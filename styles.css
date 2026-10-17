@@ -5943,8 +5943,13 @@ button.echo-notes-memory-tool:hover {
 	font-size: var(--font-ui-smaller);
 }
 
-.echo-notes-local-asr-config-details > summary {
-	padding: 10px 0;
+.echo-notes-local-asr-config-details .echo-notes-local-asr-config-toggle {
+	margin: 8px 0 4px;
+	padding: 8px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	color: var(--text-normal);
 	font-weight: 600;
 	cursor: pointer;
 }

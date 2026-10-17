@@ -1341,9 +1341,27 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		});
 		const summaryEl = serviceBlock.createEl("p", { cls: "echo-notes-local-asr-summary" });
 
-		const detailsEl = serviceBlock.createEl("details", { cls: "echo-notes-local-asr-config-details" });
-		detailsEl.createEl("summary", { text: "编辑启停配置" });
-		const fieldsEl = detailsEl.createDiv({ cls: "echo-notes-local-asr-fields" });
+		// 原型折叠区：Obsidian 原生按钮实现（不嵌套 <summary>，避免破坏
+		// .echo-notes-settings-advanced 单 summary 的既有验证语义）。
+		const configDisclosureEl = serviceBlock.createDiv({ cls: "echo-notes-local-asr-config-details" });
+		const configToggleButton = configDisclosureEl.createEl("button", {
+			text: "编辑启停配置",
+			cls: "echo-notes-local-asr-config-toggle",
+			attr: { type: "button", "aria-expanded": "false", "aria-controls": "echo-notes-local-asr-config-fields" }
+		});
+		const fieldsEl = configDisclosureEl.createDiv({
+			cls: "echo-notes-local-asr-fields",
+			attr: { id: "echo-notes-local-asr-config-fields", role: "group", "aria-label": "启停配置" }
+		});
+		fieldsEl.hide();
+		const setConfigOpen = (open: boolean): void => {
+			configToggleButton.setAttribute("aria-expanded", String(open));
+			if (open) fieldsEl.show();
+			else fieldsEl.hide();
+		};
+		configToggleButton.addEventListener("click", () => {
+			setConfigOpen(configToggleButton.getAttribute("aria-expanded") !== "true");
+		});
 
 		const commandFields = fieldsEl.createDiv({ cls: "echo-notes-local-asr-command-group" });
 		const workingDirectoryDefault = "";
@@ -1473,7 +1491,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					toggle.setValue(false);
 					validationErrorEl.setText(error);
 					validationErrorEl.show();
-					detailsEl.open = true;
+					setConfigOpen(true);
 					return;
 				}
 				validationErrorEl.hide();

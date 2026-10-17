@@ -414,6 +414,62 @@ export async function runLocalAsrManagerTests(): Promise<void> {
 		await stopping;
 		assert.equal(harness.manager.getState(BASE_SPEC.baseUrl), "unmanaged");
 	}
+	// T11: 扩展 job 的运行/paused/取消待确认/保存中/cleanup-pending 均为 server-work-pending，阻止关闭。
+	{
+		const harness = createHarness([{ kind: "connection-refused" }, { kind: "ready" }]);
+		const lease = await acquireStarted(harness);
+		await lease.release("server-work-pending");
+		assert.equal(harness.manager.getState(BASE_SPEC.baseUrl), "blocked", "服务端工作未确认时保持阻塞");
+		await harness.timers.runUntilIdleOr(120_000);
+		assert.equal(harness.commands.length, 1, "server-work-pending 不执行停止命令");
+	}
+	// T13: 关闭前实例变化 → 解除托管为外部服务，不停止他人的服务。
+	{
+		const harness = createHarness([{ kind: "connection-refused" }, { kind: "ready", instanceId: "inst-a" }]);
+		const lease = await acquireStarted(harness);
+		await lease.release("safe-terminal");
+		// 空闲触发停止：关闭前复核实例，发现已换成 inst-b。
+		harness.probes.push({ kind: "ready", instanceId: "inst-b" });
+		await harness.timers.runUntilIdleOr(60_000);
+		assert.equal(harness.manager.getState(BASE_SPEC.baseUrl), "external", "实例变化后视为外部服务");
+		assert.equal(harness.commands.length, 1, "不停止非本次启动的实例");
+	}
+	// T13: 同实例确认 → 正常执行关闭命令。
+	{
+		const harness = createHarness([{ kind: "connection-refused" }, { kind: "ready", instanceId: "inst-a" }]);
+		const lease = await acquireStarted(harness);
+		await lease.release("safe-terminal");
+		harness.probes.push({ kind: "ready", instanceId: "inst-a" });
+		await harness.timers.runUntilIdleOr(60_000);
+		assert.equal(harness.commands.length, 2, "实例一致时执行关闭");
+		harness.commands[1].handle.exit(0);
+		harness.probes.push({ kind: "connection-refused" });
+		await harness.timers.runUntilIdleOr(60_000);
+		assert.equal(harness.manager.getState(BASE_SPEC.baseUrl), "unmanaged");
+	}
+	// T10: 重复 release 幂等；晚到的空闲 timer 不重复触发关闭。
+	{
+		const harness = createHarness([{ kind: "connection-refused" }, { kind: "ready" }]);
+		const lease = await acquireStarted(harness);
+		await lease.release("safe-terminal");
+		await lease.release("safe-terminal");
+		await harness.timers.runUntilIdleOr(60_000);
+		assert.equal(harness.commands.length, 2, "重复 release 只触发一次关闭");
+		harness.commands[1].handle.exit(0);
+		harness.probes.push({ kind: "connection-refused" });
+		await harness.timers.runUntilIdleOr(60_000);
+		assert.equal(harness.manager.getState(BASE_SPEC.baseUrl), "unmanaged");
+	}
+}
+
+/** T18: 无 window.require 环境可导入执行模块且不触发 child_process 加载；移动端调用返回受控错误。 */
+export async function runLocalAsrMobileSafetyTests(): Promise<void> {
+	const { createDesktopCommandRunner } = await import("../src/local-asr/desktop-command-adapter");
+	const globalWindow = (globalThis as { window?: unknown }).window;
+	assert.equal(globalWindow, undefined, "Node 测试环境不应有 window");
+	await assert.rejects(createDesktopCommandRunner()({
+		command: "start.sh", workingDirectory: "", timeoutMs: 1000
+	}), /仅桌面版支持本地服务命令执行。/, "无 window.require 时不执行命令并给出受控错误");
 }
 
 async function acquireStarted(harness: Harness, spec: LocalAsrCommandSpec = BASE_SPEC): Promise<Awaited<ReturnType<LocalAsrLifecycleManager["acquire"]>>> {

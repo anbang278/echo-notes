@@ -55,6 +55,16 @@ The real goal is not to help you write a few fewer meeting notes. It is to conti
 
 Choose **Local models (OpenAI compatible)** in the offline transcription settings. The dedicated desktop provider streams existing Vault audio to a loopback service without a 25 MiB client limit. Its address, model, language and optional API key are isolated from other providers. The bundled MLX service supports resumable jobs up to 1 GiB / 8 decoded hours; standard OpenAI-compatible servers use streaming multipart without automatic resubmission. See [local model setup and recovery](docs/local-model-transcription.md).
 
+## Local service lifecycle (desktop)
+
+**Local service auto management** starts your own ASR service on demand and stops what it started. It runs on Obsidian desktop only.
+
+- **Device-scoped configuration.** Start command, stop command, working directory, readiness URL, and timeout values are stored per device and per Vault in Obsidian `localStorage`; they never enter `data.json` and are never synced. Saving the settings never executes any command.
+- **When commands run.** Right before a real transcription request, Echo Notes probes the readiness URL. Only an explicit connection-refused result triggers your start command; an already-answering service is reused as-is and is never stopped by this feature. Readiness must be confirmed (HTTP 2xx on the same origin) before any audio is uploaded. After the last transcription finishes and the idle timeout (default 30 s, configurable, 0 = close immediately) expires, your stop command runs, and shutdown is only confirmed after the port actually refuses connections.
+- **Dedicated ASR service.** This feature is designed for a service dedicated to ASR. Any custom script you register is your responsibility: commands run verbatim under your current user, in the configured working directory (or your home directory when empty), via the system shell — `/bin/sh -c` on macOS/Linux, `cmd.exe /d /s /c` on Windows (call PowerShell explicitly inside your command if you need it). Echo Notes never interpolates audio, text, or model values into commands and never logs command text or raw output.
+- **Cancellation and unknown results keep the service running.** Transcriptions that pause, await server-side cancellation confirmation, or lose their connection with an unknown server outcome keep the service alive so results can be recovered; the idle countdown only starts from a safe terminal state.
+- **Stop-failure troubleshooting.** If the stop command exits non-zero, or exits 0 while the port still answers, the state is reported as stop-failed and the service is left running; check your stop script and service state, then retry. Disabling the toggle only stops future auto-starts — it never kills a running service. After a plugin reload, an already-running service is treated as an external service and reused, not adopted or stopped.
+
 ## Features
 
 - Choose **Real-time transcription** or **Offline transcription** above the Provider setting. Each mode keeps an isolated provider configuration.
