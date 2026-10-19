@@ -28,3 +28,5 @@ for (const name of ["local-mlx-jobs-tests", "local-streaming-tests", "local-task
 		execFileSync(process.execPath, ["--test", `.tmp/${name}.mjs`], { stdio: "inherit" });
 	}
 }
+
+await import(pathToFileURL(`${process.cwd()}/tests/local-asr-mobile-settings-tests.mjs`).href);

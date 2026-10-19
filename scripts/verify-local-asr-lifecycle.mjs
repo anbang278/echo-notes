@@ -203,7 +203,10 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 		for (const viewport of matrix) {
 			for (const theme of themes) {
 				await setViewportMode(page, viewport, theme);
-				if (viewport.narrowPanel) await page.addStyleTag({ content: ".echo-notes-settings-panel { width:600px !important; max-width:600px !important; }", id: "echo-asr-narrow-test" });
+				if (viewport.narrowPanel) {
+					const style = await page.addStyleTag({ content: ".echo-notes-settings-panel { width:600px !important; max-width:600px !important; }" });
+					await style.evaluate((el) => { el.id = "echo-asr-narrow-test"; });
+				}
 				try {
 					await open();
 					await block().locator(".echo-notes-local-asr-config-toggle").focus();
@@ -257,10 +260,11 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 					await page.locator(".modal.mod-settings").screenshot({ path: path.join(outputDir, parameterFileName) });
 					layouts.push({ viewport: viewport.name, theme, fileName, parameterFileName, ...metrics });
 				} finally {
-					if (viewport.narrowPanel) await page.locator("style").filter({ hasText: ".echo-notes-settings-panel { width:600px !important;" }).evaluateAll((els) => els.forEach((el) => el.remove()));
+					if (viewport.narrowPanel) await page.locator("#echo-asr-narrow-test").evaluateAll((els) => els.forEach((el) => el.remove()));
 				}
 			}
 		}
+		assert.equal(await page.locator("#echo-asr-narrow-test").count(), 0, "窄面板测试样式未清理");
 		const counts = await page.evaluate(() => ({ ...window.__echoAsrVerification.counts }));
 		assert.deepEqual(counts, { acquire: 0, probe: 0, command: 0 }, "编辑/保存/启用触发了服务执行");
 		// Persistence across an actual plugin unload/load, using only the isolated Vault.
