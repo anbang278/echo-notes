@@ -5966,8 +5966,70 @@ button.echo-notes-memory-tool:hover {
 
 .echo-notes-local-asr-parameter-grid {
 	display: grid;
-	grid-template-columns: 1fr 1fr;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 0 20px;
+}
+
+/* Local form cells use the approved label-above-input layout, independent of
+ * the 320px controls used by the rest of the settings page. */
+.echo-notes-settings-section-panel .echo-notes-local-asr-field.setting-item {
+	min-width: 0;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+}
+
+.echo-notes-settings-section-panel .echo-notes-local-asr-field.setting-item > .setting-item-info,
+.echo-notes-settings-section-panel .echo-notes-local-asr-field.setting-item > .setting-item-control {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	flex: 0 0 auto;
+}
+
+.echo-notes-settings-panel .echo-notes-local-asr-field .setting-item-control > input.echo-notes-settings-field {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	height: 44px;
+	min-height: 44px;
+	max-height: 44px;
+	box-sizing: border-box;
+}
+
+.echo-notes-local-asr-command-group,
+.echo-notes-local-asr-behavior-group,
+.echo-notes-local-asr-fields {
+	min-width: 0;
+}
+
+.echo-notes-local-asr-toggle-row > div:first-child {
+	min-width: 0;
+}
+
+.echo-notes-settings-section-panel .echo-notes-local-asr-toggle-control.setting-item {
+	width: auto;
+	min-width: 44px;
+	flex: 0 0 auto;
+	padding: 0;
+	border: 0;
+}
+
+.echo-notes-settings-section-panel .echo-notes-local-asr-toggle-control.setting-item > .setting-item-control {
+	width: auto;
+	min-width: 44px;
+	min-height: 44px;
+	flex: 0 0 auto;
+}
+
+.echo-notes-local-asr-config-details .echo-notes-local-asr-config-toggle {
+	min-height: 44px;
+}
+
+@container echo-notes-settings-panel (max-width: 620px) {
+	.echo-notes-local-asr-parameter-grid {
+		grid-template-columns: minmax(0, 1fr);
+	}
 }
 
 .echo-notes-local-asr-note {

@@ -104,14 +104,34 @@ export function normalizeLocalAsrLifecycleSettings(raw: unknown): LocalAsrLifecy
 
 /** Validation used by the settings UI before enabling; mirrors the approved prototype errors. */
 export function validateLocalAsrLifecycleForEnable(settings: LocalAsrLifecycleSettings, baseUrl: string): string | undefined {
-	if (!settings.startCommand || !settings.stopCommand) return "请先填写启动命令和关闭命令。";
+	if (!settings.startCommand.trim() || !settings.stopCommand.trim()) return "请先填写启动命令和关闭命令。";
 	for (const field of POSITIVE_SECONDS_FIELDS) {
-		if (!Number.isSafeInteger(settings[field]) || settings[field] < 1) return "请填写有效的等待时间和空闲时间。";
+		if (!Number.isSafeInteger(settings[field]) || settings[field] < 1 || settings[field] > 86400) return "请填写有效的等待时间和空闲时间。";
 	}
 	for (const field of NON_NEGATIVE_SECONDS_FIELDS) {
-		if (!Number.isSafeInteger(settings[field]) || settings[field] < 0) return "请填写有效的等待时间和空闲时间。";
+		if (!Number.isSafeInteger(settings[field]) || settings[field] < 0 || settings[field] > 86400) return "请填写有效的等待时间和空闲时间。";
 	}
 	return validateLocalAsrReadinessUrl(settings.readinessUrl, baseUrl);
+}
+
+export type LocalAsrLifecycleDraft = {
+	[Key in Exclude<keyof LocalAsrLifecycleSettings, "enabled">]: string;
+};
+
+export function validateLocalAsrLifecycleDraft(
+	draft: LocalAsrLifecycleDraft, baseUrl: string, enabled: boolean
+): { field: keyof LocalAsrLifecycleDraft; message: string } | undefined {
+	if (enabled && !draft.startCommand.trim()) return { field: "startCommand", message: "请先填写启动命令和关闭命令。" };
+	if (enabled && !draft.stopCommand.trim()) return { field: "stopCommand", message: "请先填写启动命令和关闭命令。" };
+	for (const field of [...POSITIVE_SECONDS_FIELDS, ...NON_NEGATIVE_SECONDS_FIELDS]) {
+		const value = Number(draft[field]);
+		const minimum = field === "idleTimeoutSeconds" ? 0 : 1;
+		if (!draft[field].trim() || !Number.isSafeInteger(value) || value < minimum || value > 86400) {
+			return { field, message: minimum === 0 ? "空闲关闭时间请输入0～86400的整数。" : "等待时间请输入1～86400的整数。" };
+		}
+	}
+	const error = validateLocalAsrReadinessUrl(draft.readinessUrl, baseUrl);
+	return error ? { field: "readinessUrl", message: error } : undefined;
 }
 
 export interface LocalAsrProfileMap {
@@ -163,14 +183,14 @@ export function readLocalAsrProfile(
 		?? normalizeLocalAsrLifecycleSettings(undefined);
 }
 
-/** App-local storage adapter: same device, same Vault, absent from data.json sync. */
+/** App-local storage adapter: failures remain observable without exposing commands. */
 export function createAppLocalStorageStore(app: { loadLocalStorage(key: string): string | null; saveLocalStorage(key: string, value: string): void }): LocalAsrSettingsStore {
 	return {
 		load: (key) => {
-			try { return app.loadLocalStorage(key); } catch { return null; }
+			try { return app.loadLocalStorage(key); } catch { throw new Error("无法读取本机配置，请重开设置后重试。"); }
 		},
 		save: (key, value) => {
-			try { app.saveLocalStorage(key, value); } catch { /* storage unavailable: settings stay in memory only */ }
+			try { app.saveLocalStorage(key, value); } catch { throw new Error("无法保存本机配置，请重试。当前修改未生效。"); }
 		}
 	};
 }

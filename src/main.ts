@@ -2969,11 +2969,13 @@ export default class EchoNotesPlugin extends Plugin {
 		if (!manager || Platform.isMobile || this.unloading) return null;
 		if (transcriptionConfig.provider !== "local-openai-compatible") return null;
 		if (!transcriptionConfig.baseUrl.trim()) return null;
-		const profile = readLocalAsrProfile(
-			createAppLocalStorageStore(this.app),
-			transcriptionConfig.provider,
-			transcriptionConfig.baseUrl
-		);
+		let profile;
+		try {
+			profile = readLocalAsrProfile(createAppLocalStorageStore(this.app), transcriptionConfig.provider, transcriptionConfig.baseUrl);
+		} catch {
+			new Notice("无法读取本机服务配置，本次转写按手动启停方式执行。请重开设置检查。");
+			return null;
+		}
 		if (!profile.enabled) return null;
 		if (validateLocalAsrLifecycleForEnable(profile, transcriptionConfig.baseUrl)) return null;
 		const spec = {
@@ -3535,8 +3537,6 @@ export default class EchoNotesPlugin extends Plugin {
 		const ensureBatchLocalAsrLease = async (): Promise<void> => {
 			if (batchLeaseSlot.lease || !batchNeedsRealTranscription || !this.localAsrLifecycle || Platform.isMobile) return;
 			if (batchConfig.provider !== "local-openai-compatible" || !batchConfig.baseUrl.trim()) return;
-			const profile = readLocalAsrProfile(createAppLocalStorageStore(this.app), batchConfig.provider, batchConfig.baseUrl);
-			if (!profile.enabled || validateLocalAsrLifecycleForEnable(profile, batchConfig.baseUrl)) return;
 			batchLeaseSlot.lease = await this.acquireLocalAsrLifecycleLease(batchConfig, new AbortController().signal);
 		};
 		const releaseBatchLocalAsrLease = async (): Promise<void> => {

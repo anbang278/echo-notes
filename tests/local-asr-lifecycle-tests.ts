@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
 	LOCAL_ASR_LIFECYCLE_DEFAULTS,
+	createAppLocalStorageStore,
 	defaultLocalAsrReadinessUrl,
 	normalizeLocalAsrLifecycleSettings,
 	normalizeLocalAsrServiceKey,
@@ -8,6 +9,7 @@ import {
 	readLocalAsrProfiles,
 	saveLocalAsrProfile,
 	validateLocalAsrLifecycleForEnable,
+	validateLocalAsrLifecycleDraft,
 	validateLocalAsrReadinessUrl,
 	writeLocalAsrProfiles,
 	type LocalAsrSettingsStore
@@ -34,6 +36,26 @@ function memoryStore(initial: Record<string, string> = {}): LocalAsrSettingsStor
 }
 
 export function runLocalAsrSettingsTests(): void {
+	const valid = { ...LOCAL_ASR_LIFECYCLE_DEFAULTS, startCommand: "start", stopCommand: "stop", readinessUrl: "http://127.0.0.1:9000/health" };
+	assert.ok(validateLocalAsrLifecycleForEnable({ ...valid, startupTimeoutSeconds: 86401 }, "http://127.0.0.1:9000/v1"), "超范围输入不得被接受");
+	const draft = { startCommand: "start", stopCommand: "stop", workingDirectory: "", readinessUrl: valid.readinessUrl,
+		startupTimeoutSeconds: "180", idleTimeoutSeconds: "30", shutdownTimeoutSeconds: "30" };
+	for (const field of ["startupTimeoutSeconds", "idleTimeoutSeconds", "shutdownTimeoutSeconds"] as const) {
+		for (const value of ["", " ", "-1", "1.5", "NaN", "86401"]) {
+			assert.equal(validateLocalAsrLifecycleDraft({ ...draft, [field]: value }, "http://127.0.0.1:9000/v1", true)?.field, field);
+		}
+		assert.equal(validateLocalAsrLifecycleDraft({ ...draft, [field]: "86400" }, "http://127.0.0.1:9000/v1", true), undefined);
+	}
+	assert.equal(validateLocalAsrLifecycleDraft({ ...draft, idleTimeoutSeconds: "0" }, "http://127.0.0.1:9000/v1", true), undefined);
+	assert.equal(validateLocalAsrLifecycleDraft({ ...draft, startupTimeoutSeconds: "0" }, "http://127.0.0.1:9000/v1", true)?.field, "startupTimeoutSeconds");
+	assert.equal(validateLocalAsrLifecycleDraft({ ...draft, stopCommand: " " }, "http://127.0.0.1:9000/v1", true)?.field, "stopCommand");
+	assert.equal(validateLocalAsrLifecycleDraft({ ...draft, startCommand: "", stopCommand: "" }, "http://127.0.0.1:9000/v1", false), undefined);
+	const failedStore = createAppLocalStorageStore({
+		loadLocalStorage: () => { throw new Error("private storage failure"); },
+		saveLocalStorage: () => { throw new Error("private write failure"); }
+	});
+	assert.throws(() => readLocalAsrProfiles(failedStore), /本机配置/, "读取失败不能伪装成没有配置");
+	assert.throws(() => failedStore.save("test", "{}"), /本机配置/, "保存失败不能伪装成成功");
 	// T01: 默认、归一化与非法值回退。
 	assert.deepEqual(normalizeLocalAsrLifecycleSettings(undefined), LOCAL_ASR_LIFECYCLE_DEFAULTS);
 	assert.deepEqual(normalizeLocalAsrLifecycleSettings(null), LOCAL_ASR_LIFECYCLE_DEFAULTS);

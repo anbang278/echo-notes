@@ -18,6 +18,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { verifyLocalAsrLifecycle } from "./verify-local-asr-lifecycle.mjs";
 import { verifyCoreRecordingStorage, verifyRecordingStorageSettings } from "./verify-recording-storage.mjs";
 
 // 该脚本只用于本地验收，通过隔离的 Obsidian renderer 调用内部 API，不进入插件运行时代码。
@@ -3311,22 +3312,19 @@ async function verifyLocalOpenAISettings(page) {
 		}
 		const asrBlock = advanced.locator(".echo-notes-local-asr-service-block");
 		await asrBlock.waitFor({ state: "visible" });
+		await asrBlock.locator(".echo-notes-local-asr-config-toggle").click();
+		const beforeRepairLayout = await asrBlock.locator(".echo-notes-local-asr-parameter-grid").evaluate((grid) => {
+			const bounds = grid.getBoundingClientRect();
+			return [...grid.querySelectorAll("input")].every((input) => input.getBoundingClientRect().right <= bounds.right + 1);
+		});
+		assert(beforeRepairLayout, "本地 ASR 时间输入越出参数区");
+		await asrBlock.locator(".echo-notes-local-asr-config-toggle").click();
 		assert((await asrBlock.locator("[role=\"status\"]").textContent()).includes("自动管理已关闭"), "本地服务自动管理应显示关闭状态");
 		assert((await asrBlock.locator(".echo-notes-local-asr-summary").textContent()).includes("尚未配置启停命令"), "摘要行应反映未配置状态");
 		const asrToggleButton = asrBlock.locator(".echo-notes-local-asr-config-toggle");
 		assert((await asrToggleButton.getAttribute("aria-expanded")) === "false", "启停配置默认折叠");
 		const asrToggle = asrBlock.locator('input[type="checkbox"]').last();
-		const spawnedCommands = await page.evaluate((pluginId) => {
-			const plugin = window.app.plugins.plugins[pluginId];
-			const calls = [];
-			const manager = plugin.localAsrLifecycle;
-			if (manager) {
-				// 借用运行中的管理器：设置页保存不得触发任何 acquire/probe 命令。
-				manager.getState("http://127.0.0.1:23456/v1");
-			}
-			return calls;
-		}, PLUGIN_ID);
-		assert(Array.isArray(spawnedCommands) && spawnedCommands.length === 0, "设置页操作不应触发命令");
+
 		await asrToggle.click();
 		const validationError = asrBlock.locator("[role=\"alert\"]");
 		await validationError.waitFor({ state: "visible" });
@@ -3337,6 +3335,7 @@ async function verifyLocalOpenAISettings(page) {
 		const commandInputs = asrBlock.locator(".echo-notes-local-asr-command-input");
 		await commandInputs.nth(0).fill("/opt/asr/start.sh");
 		await commandInputs.nth(1).fill("/opt/asr/stop.sh");
+		await commandInputs.nth(1).blur();
 		await asrBlock.locator(".echo-notes-local-asr-summary").waitFor();
 		assert((await asrBlock.locator(".echo-notes-local-asr-summary").textContent()).includes("已配置启动与关闭命令"), "填写命令后摘要应更新");
 		await asrToggle.click();
@@ -5582,6 +5581,7 @@ async function inspectActiveSectionFields(page) {
 				return {
 					name: settingItem?.querySelector(".setting-item-name")?.textContent?.trim() ?? "未命名字段",
 					recordingTouchField: Boolean(settingItem?.classList.contains("echo-notes-recording-storage-setting")),
+					localAsrField: Boolean(settingItem?.classList.contains("echo-notes-local-asr-field")),
 					tag: field.tagName,
 					type: field instanceof HTMLInputElement ? field.type : null,
 					hasUniformFieldClass: field.classList.contains("echo-notes-settings-field"),
@@ -5620,7 +5620,7 @@ async function verifyAllCategorizedFields(page) {
 				for (const field of metrics.fields) {
 					assert(field.hasUniformFieldClass, `${context}/${field.name} 缺少统一字段 class`);
 					const recordingTouchTarget = field.recordingTouchField && metrics.panelWidth <= 560;
-					const expectedHeight = recordingTouchTarget ? Math.max(44, metrics.expectedFieldHeight) : metrics.expectedFieldHeight;
+					const expectedHeight = recordingTouchTarget || field.localAsrField ? Math.max(44, metrics.expectedFieldHeight) : metrics.expectedFieldHeight;
 					assert(
 						Math.abs(field.fieldHeight - expectedHeight) <= 1,
 						`${context}/${field.name} 字段高度异常：${field.fieldHeight}`
@@ -5630,14 +5630,14 @@ async function verifyAllCategorizedFields(page) {
 						Math.abs(field.leftDelta) <= 1.5 && Math.abs(field.rightDelta) <= 1.5,
 						`${context}/${field.name} 未占满控制区：${JSON.stringify(field)}`
 					);
-					if (metrics.panelWidth > 561) {
+					if (metrics.panelWidth > 561 && !field.localAsrField) {
 						assert(
 							Math.abs(field.fieldWidth - 320) <= 1.5,
 							`${context}/${field.name} 宽屏字段不是 320px：${field.fieldWidth}`
 						);
 					}
 					// 新录音控件在窄屏具有明确的 44px 触控契约，其他字段继续检验统一原生高度。
-					if (!recordingTouchTarget) viewportHeights.push(field.fieldHeight);
+					if (!recordingTouchTarget && !field.localAsrField) viewportHeights.push(field.fieldHeight);
 				}
 				results.push({ viewport: viewport.name, stage: stage.id, section: sectionName, ...metrics });
 			}
@@ -6263,11 +6263,24 @@ try {
 			audioWorkletNodeAvailable
 		};
 	}, PLUGIN_ID);
+	assert(await page.evaluate((vaultPath) => window.app.vault.adapter.getBasePath() === vaultPath, isolated.validationVault), "隔离Vault路径与预期不一致");
 	assert(runtimeState.pluginEnabled, `测试 vault 中 ${PLUGIN_ID} 未加载`);
 	assert(runtimeState.pluginVersion === manifest.version, `宿主插件版本不匹配：${runtimeState.pluginVersion ?? "未找到"}`);
 	assert(runtimeState.audioWorkletAvailable, "Obsidian 宿主的 AudioContext.audioWorklet 不可用");
 	assert(runtimeState.audioWorkletNodeAvailable, "Obsidian 宿主的 AudioWorkletNode 不可用");
-	if (process.env.ECHO_NOTES_VERIFY_RECORDING_ONLY === "1") {
+	if (process.argv.includes("--local-asr-only")) {
+		await setViewportMode(page, VIEWPORTS[0], "light");
+		await openSettings(page);
+		const localAsrLifecycle = await verifyLocalAsrLifecycle(page, {
+			pluginId: PLUGIN_ID, getActiveSetting, getActivePanel, setViewportMode,
+			viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR
+		});
+		assert(pageErrors.length === 0, "本地ASR配置验收出现运行时错误");
+		await writeFile(path.join(OUTPUT_DIR, "local-asr-summary.json"), JSON.stringify({
+			validationScope: "local-asr-only", pluginVersion: manifest.version, localAsrLifecycle, runtimeErrors: pageErrors
+		}, null, "\t"));
+		console.log("本地ASR配置定向验证通过；交付仍须运行完整package。");
+	} else if (process.env.ECHO_NOTES_VERIFY_RECORDING_ONLY === "1") {
 		await setViewportMode(page, VIEWPORTS[0], "light");
 		await openSettings(page);
 		const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
@@ -6292,6 +6305,8 @@ try {
 	await verifySettingsSurface(page);
 	await verifyIntroduction(page);
 	await verifyTabs(page);
+	await reopenSettings(page);
+	const localAsrLifecycle = await verifyLocalAsrLifecycle(page, { pluginId: PLUGIN_ID, getActiveSetting, getActivePanel, setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR });
 	const localOpenAISettings = await verifyLocalOpenAISettings(page);
 	await verifySiliconFlowUpgradeModal(page);
 	const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
@@ -6333,6 +6348,7 @@ try {
 		durationMs: Date.now() - verificationStartedAt,
 		semanticChecks: {
 			localOpenAISettings: true,
+			localAsrLifecycle: true,
 			recordingStorageSettings: true,
 			recordingStorageIntegration: true,
 			audioWorkletSupport: true,
@@ -6373,6 +6389,7 @@ try {
 		recordingStorageIntegration,
 		siliconFlowMockChain,
 		localOpenAISettings,
+		localAsrLifecycle,
 		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,
 		realtimeStatusLayout,
