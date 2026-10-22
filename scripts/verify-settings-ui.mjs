@@ -3310,7 +3310,7 @@ async function verifyLocalOpenAISettings(page) {
 		if (await advanced.getAttribute("open") === null) {
 			await advanced.locator("summary").click();
 		}
-		assert.equal(await advanced.locator(".echo-notes-local-asr-service-block").count(), 0, "服务页不再内嵌启停配置");
+		assert(await advanced.locator(".echo-notes-local-asr-service-block").count() === 0, "服务页不再内嵌启停配置");
 		await advanced.locator(".echo-notes-local-asr-jump button").click();
 		const asrBlock = getActivePanel(page).locator(".echo-notes-local-asr-service-block");
 		await asrBlock.waitFor({ state: "visible" });
