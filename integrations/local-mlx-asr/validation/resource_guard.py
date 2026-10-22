@@ -186,7 +186,9 @@ def configure_mlx_limits(mx):
 
 def save_report(path, result):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with path.open('x') as stream:
+    # Set report permissions atomically without changing the command's umask.
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, 'w') as stream:
         json.dump(result, stream, indent=2)
         stream.write('\n')
     path.chmod(0o600)
@@ -203,7 +205,6 @@ def main():
         parser.error('Provide a command after -- and a timeout in (0, 1800]')
     if args.report.exists():
         parser.error('Use a fresh report path; previous evidence is preserved')
-    os.umask(0o077)
     result = supervise(command, timeout=args.timeout)
     save_report(args.report, result)
     print(json.dumps(result), flush=True)

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class ResourceGuardTests(unittest.TestCase):
@@ -98,6 +99,25 @@ class ResourceGuardTests(unittest.TestCase):
         self.assertGreater(value['available_bytes'], 0)
         self.assertIn(value['pressure'], (1, 2, 4))
         self.assertGreater(self.guard.process_footprint(os.getpid()), 0)
+
+    def test_report_is_private_without_changing_build_file_permissions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report, artifact = root/'guard.json', root/'build-artifact'
+            run = self.guard.supervise
+            def healthy_run(command, **kwargs):
+                return run(command, snapshot=lambda group: self.healthy(), interval=0.01)
+            argv = ['resource_guard.py', '--report', str(report), '--', sys.executable,
+                    '-c', 'from pathlib import Path; Path(__import__("sys").argv[1]).touch()', str(artifact)]
+            old = os.umask(0o022)
+            try:
+                with patch.object(sys, 'argv', argv), patch.object(self.guard, 'supervise', healthy_run):
+                    self.assertEqual(self.guard.main(), 0)
+                self.assertEqual(artifact.stat().st_mode & 0o777, 0o644)
+                self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(os.umask(0o022), 0o022)
+            finally:
+                os.umask(old)
 
 
 if __name__ == '__main__':
