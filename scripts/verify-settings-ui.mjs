@@ -3305,12 +3305,14 @@ async function verifyLocalOpenAISettings(page) {
 			restored.lm.baseUrl === "http://localhost:1234/custom" && restored.lm.language === "yue" && restored.keyIsolated,
 			"重载设置后各服务商的地址、模型、语言或 Key 隔离不正确");
 
-		// T19: 本地服务自动管理分组：仅本地 Provider 展示；启用校验失败回退并展开；保存不执行命令；配置入 localStorage。
+		// T19: 通过本地 Provider 的服务页入口进入能力增强；校验、草稿及本机存储保持有效。
 		// 服务商切换会重绘面板并折叠高级配置，先确保高级 details 展开。
 		if (await advanced.getAttribute("open") === null) {
 			await advanced.locator("summary").click();
 		}
-		const asrBlock = advanced.locator(".echo-notes-local-asr-service-block");
+		assert.equal(await advanced.locator(".echo-notes-local-asr-service-block").count(), 0, "服务页不再内嵌启停配置");
+		await advanced.locator(".echo-notes-local-asr-jump button").click();
+		const asrBlock = getActivePanel(page).locator(".echo-notes-local-asr-service-block");
 		await asrBlock.waitFor({ state: "visible" });
 		await asrBlock.locator(".echo-notes-local-asr-config-toggle").click();
 		const beforeRepairLayout = await asrBlock.locator(".echo-notes-local-asr-parameter-grid").evaluate((grid) => {
@@ -3319,7 +3321,7 @@ async function verifyLocalOpenAISettings(page) {
 		});
 		assert(beforeRepairLayout, "本地 ASR 时间输入越出参数区");
 		await asrBlock.locator(".echo-notes-local-asr-config-toggle").click();
-		assert((await asrBlock.locator("[role=\"status\"]").textContent()).includes("自动管理已关闭"), "本地服务自动管理应显示关闭状态");
+		assert((await asrBlock.locator(".echo-notes-local-asr-status").textContent()).includes("自动管理已关闭"), "本地服务自动管理应显示关闭状态");
 		assert((await asrBlock.locator(".echo-notes-local-asr-summary").textContent()).includes("尚未配置启停命令"), "摘要行应反映未配置状态");
 		const asrToggleButton = asrBlock.locator(".echo-notes-local-asr-config-toggle");
 		assert((await asrToggleButton.getAttribute("aria-expanded")) === "false", "启停配置默认折叠");
@@ -3341,7 +3343,7 @@ async function verifyLocalOpenAISettings(page) {
 		await asrToggle.click();
 		await validationError.waitFor({ state: "hidden" });
 		assert(await asrToggle.isChecked(), "配置完整后启用应成功");
-		assert((await asrBlock.locator("[role=\"status\"]").textContent()).includes("已启用，等待转写"), "启用后状态应更新");
+		assert((await asrBlock.locator(".echo-notes-local-asr-status").textContent()).includes("已启用，等待转写"), "启用后状态应更新");
 		const persistedProfile = await page.evaluate(() => window.app.loadLocalStorage("echo-notes:local-asr-lifecycle:v1"));
 		assert(typeof persistedProfile === "string" && persistedProfile.includes("/opt/asr/start.sh"), "配置应保存到设备级 localStorage");
 		assert((await page.evaluate((pluginId) => JSON.stringify(window.app.plugins.plugins[pluginId].settings), PLUGIN_ID)).indexOf("/opt/asr/start.sh") === -1,
