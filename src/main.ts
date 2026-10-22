@@ -5879,6 +5879,8 @@ function getSettingsDestinationLabel(destination: EchoNotesSettingsDestination):
 			return "Echo Memory → 模型配置";
 		case "memory-center":
 			return "Echo Memory → 记忆中心";
+		case "transcription-local-asr":
+			return "录音转写 → 能力增强 → 本地服务自动启停";
 		case "transcription-recording":
 			return "录音转写 → 能力增强 → 快捷键配置";
 	}

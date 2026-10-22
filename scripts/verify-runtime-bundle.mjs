@@ -14,9 +14,9 @@ if (nodeDynamicImports.length > 0) throw new Error(`运行时产物仍包含 Nod
 // Preserve the mobile/module-load boundary: no top-level fs import or other fs access path.
 const fsPattern = /\b(?:require|import)\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)/g;
 const filesystemLoads = Array.from(source.matchAll(fsPattern));
-if (filesystemLoads.length !== 1) throw new Error(`运行时应只有一个桌面本地流式读盘入口，实际 ${filesystemLoads.length}`);
+if (filesystemLoads.length !== 2) throw new Error(`运行时应只有流式读盘与ASR识别两个惰性文件系统入口，实际 ${filesystemLoads.length}`);
 
-// The local ASR lifecycle adapter is the single allowed lazy child_process/os entry.
+// Only the lifecycle command adapter may load child_process; discovery may load os lazily.
 // Everything else must stay off Node process-spawning paths in the shipped bundle.
 const childProcessPattern = /\brequire\(\s*["']child_process["']\s*\)/g;
 const childProcessLoads = Array.from(source.matchAll(childProcessPattern));
@@ -34,13 +34,19 @@ for (const file of files) {
 		if (specifier && ts.isStringLiteral(specifier) && /^(?:node:)?fs(?:\/promises)?$/.test(specifier.text)) {
 			let scope = node.parent;
 			while (scope && !ts.isFunctionDeclaration(scope)) scope = scope.parent;
-			if (!file.endsWith("/src/network/local-desktop-files.ts") || !ts.isCallExpression(node) || scope?.name?.text !== "createDesktopFiles") {
+			if (!ts.isCallExpression(node) || !(
+				(file.endsWith("/src/network/local-desktop-files.ts") && scope?.name?.text === "createDesktopFiles") ||
+				(file.endsWith("/src/local-asr/desktop-discovery-adapter.ts") && scope?.name?.text === "createDesktopAsrDiscovery")
+			)) {
 				throw new Error(`文件系统能力越过桌面流式适配器边界：${file}`);
 			}
 			approvedLoads++;
 		}
 		if (specifier && ts.isStringLiteral(specifier) && (specifier.text === "child_process" || specifier.text === "os")) {
-			if (!file.endsWith("/src/local-asr/desktop-command-adapter.ts") || !ts.isCallExpression(node)) {
+			let scope = node.parent;
+			while (scope && !ts.isFunctionDeclaration(scope)) scope = scope.parent;
+			if (!ts.isCallExpression(node) || !((file.endsWith("/src/local-asr/desktop-command-adapter.ts") && scope?.name?.text === "createDesktopCommandRunner") ||
+				(specifier.text === "os" && file.endsWith("/src/local-asr/desktop-discovery-adapter.ts") && scope?.name?.text === "createDesktopAsrDiscovery"))) {
 				throw new Error(`进程能力越过本地 ASR 命令适配器边界：${file}`);
 			}
 			approvedCommandLoads++;
@@ -49,6 +55,6 @@ for (const file of files) {
 	}
 	visit(ast);
 }
-if (approvedLoads !== 1) throw new Error("缺少唯一明确的桌面文件系统入口");
-if (approvedCommandLoads < 2) throw new Error("缺少本地 ASR 命令适配器的 child_process/os 惰性入口");
-console.log(`运行时模块检查通过：一个惰性桌面流式读盘入口与本地 ASR 命令适配器，无 Node 动态 import：${bundlePath}`);
+if (approvedLoads !== 2) throw new Error("缺少精确约束的两个桌面文件系统入口");
+if (approvedCommandLoads !== 3) throw new Error("缺少本地 ASR 命令适配器的 child_process/os 惰性入口");
+console.log(`运行时模块检查通过：两个惰性只读文件系统入口与唯一本地 ASR 命令适配器，无 Node 动态 import：${bundlePath}`);

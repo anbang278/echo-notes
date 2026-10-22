@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { verifyAsrDiscovery } from "./verify-asr-discovery.mjs";
 
 const STORAGE_KEY = "echo-notes:local-asr-lifecycle:v1";
 const A = "http://127.0.0.1:29181/v1";
@@ -13,8 +14,11 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 	const error = () => block().locator('[role="alert"]');
 	const toggle = () => block().locator(".checkbox-container");
 	const open = async () => {
-		const advanced = block().locator("xpath=ancestor::details[1]");
-		await advanced.evaluate((el) => { el.open = true; });
+		if (!await block().isVisible()) {
+			const advanced = getActivePanel(page).locator("details.echo-notes-settings-advanced");
+			if (await advanced.count()) await advanced.evaluate(el => { el.open = true; });
+			await page.locator(".echo-notes-local-asr-jump button").click();
+		}
 		const button = block().locator(".echo-notes-local-asr-config-toggle");
 		if (await button.getAttribute("aria-expanded") !== "true") await button.click();
 	};
@@ -35,12 +39,12 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 		await setValue("stopCommand", "/opt/isolated-asr/stop.sh");
 	};
 	const changeUrl = async (url) => {
+		await page.getByRole("tab", { name: "转写服务", exact: true }).click();
+		await getActivePanel(page).locator("details.echo-notes-settings-advanced").evaluate(el => { el.open = true; });
 		const input = (await getActiveSetting(page, "Base URL")).locator('input[type="text"]');
-		await input.fill(url);
-		await input.blur();
-		await (await getActiveSetting(page, "Base URL")).getByText("已保存", { exact: true }).waitFor({ state: "visible" });
+		await input.fill(url); await input.blur();
 		await page.waitForFunction(({ id, url }) => window.app.plugins.plugins[id].settings.offlineTranscription.baseUrl === url, { id: pluginId, url });
-
+		await open();
 	};
 	const snapshot = await page.evaluate(async ({ id, key, baseUrl }) => {
 		const plugin = window.app.plugins.plugins[id];
@@ -137,6 +141,8 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 		await setValue("readinessUrl", "http://127.0.0.1:29181/health");
 
 		// FT04: old config object, repeated saves, profile aliases, unsaved address.
+		await page.getByRole("tab", { name: "转写服务", exact: true }).click();
+		await getActivePanel(page).locator("details.echo-notes-settings-advanced").evaluate(el => { el.open = true; });
 		await (await getActiveSetting(page, "默认转写语言")).locator('select:not([aria-hidden="true"])').selectOption("en");
 		await changeUrl(B);
 		assert.equal(await field("startCommand").inputValue(), "");
@@ -154,9 +160,11 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 		await changeUrl("http://localhost:29181/v1/");
 		assert.equal(await field("startCommand").inputValue(), "/opt/isolated-asr/start.sh");
 		await changeUrl(A);
+		await page.getByRole("tab", { name: "转写服务", exact: true }).click();
+		await getActivePanel(page).locator("details.echo-notes-settings-advanced").evaluate(el => { el.open = true; });
 		const pendingAddress = (await getActiveSetting(page, "Base URL")).locator('input[type="text"]');
 		await pendingAddress.fill(B);
-		await toggle().locator("input").evaluate((el) => el.click());
+		await open();
 		await page.waitForFunction((id) => window.app.plugins.plugins[id].settings.offlineTranscription.baseUrl.endsWith("29182/v1"), pluginId);
 		assert.equal((await saved(A)).startCommand, "/opt/isolated-asr/start.sh");
 		await changeUrl(A);
@@ -197,6 +205,8 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 		await open();
 		assert.equal(await toggle().getAttribute("aria-checked"), "true", "重新打开设置后启用状态丢失");
 
+		const discovery = await verifyAsrDiscovery(page, { block, setValue, open, setEnabled, saved, readProfiles, pluginId, outputDir });
+
 		// FT07/08: measure the actual expanded conditional group in every container.
 		const layouts = [];
 		const matrix = [...viewports, { name: "wide-window-narrow-panel", width: 1280, height: 900, mobileShell: false, narrowPanel: true }];
@@ -236,6 +246,7 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 							textCount: inputs.filter((n) => n.type === "text").length, numberCount: inputs.filter((n) => n.type === "number").length,
 							overflow: el.scrollWidth - el.clientWidth,
 							toggleFits: fit(el.querySelector(".checkbox-container"), el),
+							discoveryFits: fit(el.querySelector("#echo-notes-asr-directory"), el),
 							toggleBounds: { left: el.querySelector(".checkbox-container").getBoundingClientRect().left - bounds.left, right: el.querySelector(".checkbox-container").getBoundingClientRect().right - bounds.left },
 							cellsFit: cells.every((n) => fit(n, el)),
 							inputsFit: inputs.every((n) => fit(n, n.closest(".setting-item"))),
@@ -249,7 +260,7 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 					assert.equal(metrics.fieldCount, 7);
 					assert.equal(metrics.textCount, 4);
 					assert.equal(metrics.numberCount, 3);
-					assert(metrics.overflow <= 1 && metrics.cellsFit && metrics.inputsFit && metrics.labelsAbove && metrics.toggleFits, JSON.stringify(metrics));
+					assert(metrics.overflow <= 1 && metrics.cellsFit && metrics.inputsFit && metrics.labelsAbove && metrics.toggleFits && metrics.discoveryFits, JSON.stringify(metrics));
 					assert(metrics.inputHeight >= 44 && metrics.buttonHeight >= 44 && metrics.labelsNamed);
 					assert.equal(metrics.columns, metrics.panelWidth <= 620 ? 1 : 2);
 					const fileName = `settings-local-asr-${viewport.name}-${theme}.png`;
@@ -287,7 +298,7 @@ export async function verifyLocalAsrLifecycle(page, helpers) {
 		assert.equal(await toggle().getAttribute("aria-checked"), "true");
 		assert.equal((await saved()).enabled, true);
 		assert.equal(await field("startCommand").inputValue(), "/opt/isolated-asr/start.sh");
-		return { scenarios: ["FT01", "FT02", "FT03", "FT04", "FT05", "FT06", "FT07", "FT08"], layouts, noExecution: counts };
+		return { scenarios: ["FT01", "FT02", "FT03", "FT04", "FT05", "FT06", "FT07", "FT08"], layouts, discovery, noExecution: counts };
 	} finally {
 		await page.evaluate(async ({ id, key, previous, spyInstalled }) => {
 			if (spyInstalled && window.__echoAsrVerification) {

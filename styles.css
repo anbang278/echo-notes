@@ -6055,3 +6055,219 @@ button.echo-notes-memory-tool:hover {
 		grid-template-columns: 1fr;
 	}
 }
+
+/* Local ASR discovery: native settings and bounded, device-local preview. */
+.echo-notes-local-asr-jump button,
+.echo-notes-asr-actions button,
+.echo-notes-asr-path-row button,
+.echo-notes-asr-preview-apply,
+.echo-notes-asr-directory-list button {
+	min-height: 44px;
+	white-space: normal;
+}
+
+.echo-notes-asr-discovery {
+	margin-top: 22px;
+	min-width: 0;
+}
+
+.echo-notes-asr-discovery h3 {
+	margin: 0 0 8px;
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+}
+
+.echo-notes-asr-directory-label {
+	display: block;
+	margin-top: 14px;
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-asr-path-row {
+	display: flex;
+	gap: 8px;
+	margin: 8px 0 10px;
+}
+
+.echo-notes-asr-path-row input {
+	flex: 1;
+	width: 100%;
+	min-width: 0;
+	min-height: 44px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-asr-path-row button {
+	flex-shrink: 0;
+}
+
+.echo-notes-asr-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 14px 0 8px;
+}
+
+.echo-notes-asr-results {
+	border-top: 1px solid var(--background-modifier-border);
+	margin-top: 20px;
+	padding-top: 18px;
+	min-width: 0;
+}
+
+.echo-notes-asr-candidate {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 12px 14px;
+	margin: 10px 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	cursor: pointer;
+}
+
+.echo-notes-asr-candidate.is-selected {
+	border-color: var(--interactive-accent);
+}
+
+.echo-notes-asr-candidate input {
+	flex-shrink: 0;
+	margin-top: 4px;
+}
+
+.echo-notes-asr-directory-value {
+	margin: 5px 0 0;
+	color: var(--text-muted);
+	font: var(--font-ui-smaller)/1.6 var(--font-monospace);
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-asr-candidate-preview {
+	margin-top: 18px;
+}
+
+.echo-notes-asr-candidate-field {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.echo-notes-asr-value-heading {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 12px;
+}
+
+.echo-notes-asr-value-heading strong {
+	font-weight: 550;
+}
+
+.echo-notes-asr-candidate-preview code,
+.echo-notes-asr-comparison code {
+	display: block;
+	background: transparent;
+	padding: 0;
+	margin: 8px 0;
+	font: var(--font-ui-smaller)/1.7 var(--font-monospace);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-asr-candidate-preview summary {
+	cursor: pointer;
+	min-height: 44px;
+	padding: 12px 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+}
+
+.echo-notes-asr-directory-field.setting-item {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
+}
+
+.echo-notes-asr-directory-field .setting-item-control {
+	width: 100%;
+}
+
+.echo-notes-asr-directory-field input {
+	width: 100%;
+	min-height: 44px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-asr-directory-list {
+	max-height: 280px;
+	overflow: auto;
+	border-block: 1px solid var(--background-modifier-border);
+	padding: 8px 0;
+	margin: 12px 0;
+}
+
+.echo-notes-asr-directory-list button {
+	display: block;
+	width: 100%;
+	text-align: left;
+	box-shadow: none;
+	border: 0;
+	background: transparent;
+}
+
+.echo-notes-asr-directory-list button:hover {
+	background: var(--background-secondary);
+}
+
+.echo-notes-asr-comparison-row {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 16px;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.echo-notes-asr-confirm-check {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	min-height: 44px;
+	margin: 14px 0;
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-asr-confirm-check input {
+	flex-shrink: 0;
+}
+
+.echo-notes-settings-capability-tab-title {
+	min-width: 0;
+}
+
+.echo-notes-settings-capability-tab-title > span {
+	min-width: 0;
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+@container echo-notes-settings-panel (max-width: 620px) {
+	.echo-notes-settings-capability-tabs {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+	.echo-notes-asr-path-row {
+	flex-direction: column;
+}
+
+	.echo-notes-asr-path-row button {
+	align-self: flex-start;
+}
+}
+
+@media (width <= 620px) {
+	.echo-notes-asr-comparison-row {
+	grid-template-columns: minmax(0, 1fr);
+}
+}

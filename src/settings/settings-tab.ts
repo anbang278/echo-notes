@@ -1,3 +1,4 @@
+import { mountAsrDiscovery, type AsrDiscoveryDraft, type AsrDiscoveryHandle } from "../local-asr/discovery-ui";
 import {
 	App,
 	FileSystemAdapter,
@@ -111,7 +112,8 @@ export type EchoNotesSettingsDestination =
 	| "analysis-model"
 	| "memory-model"
 	| "memory-center"
-	| "transcription-recording";
+	| "transcription-recording"
+	| "transcription-local-asr";
 
 export type EchoNotesSettingsGuide = "provider-api-key";
 
@@ -135,7 +137,7 @@ type SettingsSectionDefinition<T extends string> = {
 
 type TranscriptionCapabilityState = "enabled" | "disabled" | "fixed" | "blocked" | "unsupported";
 
-type TranscriptionCapabilityId = "shortcuts" | "fusion" | "speaker" | "hotwords" | "context";
+type TranscriptionCapabilityId = "shortcuts" | "fusion" | "speaker" | "hotwords" | "context" | "local-asr";
 
 type TranscriptionCapabilityView = {
 	id: "speaker" | "timestamp" | "hotwords" | "context" | "chunking" | "streaming";
@@ -183,6 +185,8 @@ const MEMORY_SETTINGS_SECTIONS: readonly SettingsSectionDefinition<MemorySetting
 export class EchoNotesSettingTab extends PluginSettingTab {
 	private localAsrDrafts = new Map<string, LocalAsrLifecycleDraft>();
 	private localAsrConfigOpen = false;
+	private localAsrDiscoveryDrafts = new Map<string, AsrDiscoveryDraft>();
+	private localAsrDiscoveryHandle?: AsrDiscoveryHandle;
 	private siliconFlowModelWriteGeneration = 0;
 	private plugin: EchoNotesPlugin;
 	private settingsContainerEl: HTMLElement | null = null;
@@ -254,6 +258,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	hide(): void {
+		this.localAsrDiscoveryHandle?.dispose();
 		this.closeSettingsGuide(true);
 		this.stopActiveHotkeyCapture?.();
 		this.clearDeferredSaveTimers();
@@ -283,6 +288,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				this.activeMemorySettingsSection = "config";
 				void this.plugin.openMemoryCenter(options.memoryCenterTab ?? "overview");
 				break;
+			case "transcription-local-asr":
+				this.activeSettingsStage = "transcription";
+				this.activeTranscriptionSettingsSection = "advanced";
+				this.activeTranscriptionCapability = "local-asr";
+				break;
 			case "transcription-recording":
 				this.activeSettingsStage = "transcription";
 				this.activeTranscriptionSettingsSection = "advanced";
@@ -291,6 +301,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 		if (options.guide === "provider-api-key" &&
 			destination !== "transcription-recording" &&
+			destination !== "transcription-local-asr" &&
 			destination !== "memory-center") {
 			this.activeSettingsGuide = {
 				destination,
@@ -322,6 +333,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private renderSettings(containerEl: HTMLElement): void {
+		this.localAsrDiscoveryHandle?.dispose();
+		this.localAsrDiscoveryHandle = undefined;
 		this.stopActiveHotkeyCapture?.();
 		// Memory settings views are recreated on each render; no persistent subviews to destroy.
 		this.settingsContainerEl = containerEl;
@@ -533,6 +546,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		moveFocus = true
 	): void {
 		this.activeSettingsStage = stage;
+		if (stage !== "transcription") this.localAsrDiscoveryHandle?.cancel();
 		for (const candidate of ENABLED_SETTINGS_STAGES) {
 			const isActive = candidate === stage;
 			const buttonEl = workflowEl.querySelector<HTMLButtonElement>(
@@ -956,6 +970,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			},
 			(section) => {
 				this.activeTranscriptionSettingsSection = section;
+				if (section !== "advanced") this.localAsrDiscoveryHandle?.cancel();
 			}
 		);
 	}
@@ -1191,10 +1206,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					async (value) => {
 						this.plugin.settings.offlineTranscription.baseUrl = value;
 						await this.plugin.saveSettings();
-						if (isLocalOpenAI) {
-							advancedEl.querySelector(".echo-notes-local-asr-service-block")?.remove();
-							this.renderLocalAsrLifecycleSection(advancedEl, this.getSelectedTranscriptionConfig());
-							this.markUniformSettingsFields(advancedEl);
+						if (isLocalOpenAI && containerEl.isConnected) {
+							// Refresh the destination without detaching the source field or jump button on blur.
+							const panel = this.settingsContainerEl?.querySelector<HTMLElement>('.echo-notes-settings-section-panel[id$="-transcription-advanced"]');
+							if (panel) {
+								this.localAsrDiscoveryHandle?.dispose();
+								panel.empty();
+								this.renderTranscriptionAdvancedSettings(panel);
+								this.markUniformSettingsFields(panel);
+							}
 						}
 					},
 					(value) => isLocalOpenAI ? validateLocalOpenAIBaseUrl(value) : validateBaseUrl(value)
@@ -1251,7 +1271,15 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		}
 
 		if (isLocalOpenAI) {
-			this.renderLocalAsrLifecycleSection(advancedEl, config);
+			new Setting(advancedEl).setName("本地服务自动启停")
+				.setDesc("高级能力：识别安装目录并配置按需启停，在「能力增强」中管理。")
+				.setClass("echo-notes-local-asr-jump")
+				.addButton(button => button.setButtonText("前往能力增强 →").onClick(async () => {
+					if (!await this.flushDeferredTranscriptionSaves()) return;
+					this.showDestination("transcription-local-asr");
+					this.settingsContainerEl?.querySelector<HTMLElement>('[data-capability-tab="local-asr"]')?.focus({ preventScroll: true });
+					this.settingsContainerEl?.querySelector('[aria-label="录音转写配置分类"]')?.scrollIntoView({ block: "start" });
+				}));
 		}
 
 		if (isRealtime) {
@@ -1308,11 +1336,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	/** Device-local form: drafts never replace an enabled, valid profile until committed. */
 	private renderLocalAsrLifecycleSection(containerEl: HTMLElement, config: TranscriptionConfig): void {
 		const serviceBlock = containerEl.createDiv({ cls: "echo-notes-local-asr-service-block" });
-		new Setting(serviceBlock).setName("本地服务自动管理").setHeading();
+		new Setting(serviceBlock).setName("本地服务自动启停").setHeading();
 		if (Platform.isMobile) {
 			const message = serviceBlock.createDiv({ cls: "echo-notes-local-asr-mobile-message" });
-			message.createEl("strong", { text: "仅桌面端支持自动启停" });
-			message.createEl("p", { text: "请在运行本地 ASR 的电脑上配置。当前设备不会执行命令。", cls: "echo-notes-local-asr-desc" });
+			message.createEl("strong", { text: "仅桌面端支持目录识别与自动启停" });
+			message.createEl("p", { text: "请在安装 ASR 服务的电脑上配置。当前设备不会读取目录或执行命令。", cls: "echo-notes-local-asr-desc" });
 			return;
 		}
 		const baseUrl = config.baseUrl;
@@ -1340,9 +1368,11 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const title = statusEl.createEl("strong");
 		const detail = statusEl.createEl("p", { cls: "echo-notes-local-asr-desc" });
 		const summary = serviceBlock.createEl("p", { cls: "echo-notes-local-asr-summary" });
+		const discoveryHost = serviceBlock.createDiv();
+		let synchronizeToggle = (): void => {};
 		const disclosure = serviceBlock.createDiv({ cls: "echo-notes-local-asr-config-details" });
 		const button = disclosure.createEl("button", {
-			text: "编辑启停配置", cls: "echo-notes-local-asr-config-toggle",
+			text: "手动配置与高级参数", cls: "echo-notes-local-asr-config-toggle",
 			attr: { type: "button", "aria-controls": "echo-notes-local-asr-config-fields" }
 		});
 		const fields = disclosure.createDiv({
@@ -1360,7 +1390,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			title.setText(loadError ? "本机配置读取失败" : saved.enabled ? "已启用，等待转写" : "自动管理已关闭");
 			detail.setText(saved.enabled
 				? "保存与启用不会启动服务。下一次需要转写时按需启动。"
-				: "先配置启停命令。启用后，在下一次实际转写时启动服务。");
+				: "从安装目录识别启停配置，确认后再启用；保存配置不会执行命令。");
 			summary.setText(`${saved.startCommand && saved.stopCommand ? "已配置启动与关闭命令" : "尚未配置启停命令"} · 空闲 ${saved.idleTimeoutSeconds} 秒后关闭`);
 		};
 		const showError = (message?: string, field?: keyof LocalAsrLifecycleDraft, focus = false): void => {
@@ -1459,6 +1489,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				synchronizing = false;
 				toggle.toggleEl.setAttribute("aria-checked", String(saved.enabled));
 			};
+			synchronizeToggle = syncToggle;
 			toggle.onChange(async (enabled) => {
 				if (synchronizing) return;
 				// Flush an address edit before binding this action to its service. Await the native click.
@@ -1476,6 +1507,34 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		serviceBlock.createEl("p", {
 			cls: "echo-notes-local-asr-note",
 			text: "配置仅保存在当前设备、当前 Vault。命令以当前用户权限执行；保存配置不会执行命令。建议用于专门的 ASR 服务。"
+		});
+		const discoveryState = this.localAsrDiscoveryDrafts.get(serviceKey) ?? { directory: saved.workingDirectory };
+		this.localAsrDiscoveryDrafts.set(serviceKey, discoveryState);
+		this.localAsrDiscoveryHandle = mountAsrDiscovery(discoveryHost, {
+			app: this.app, baseUrl, state: discoveryState,
+			isCurrent: () => {
+				const current = this.getSelectedTranscriptionConfig();
+				return serviceBlock.isConnected && this.activeSettingsStage === "transcription" && this.activeTranscriptionSettingsSection === "advanced" &&
+					this.activeTranscriptionCapability === "local-asr" && current.provider === "local-openai-compatible" &&
+					normalizeLocalAsrServiceKey(current.provider, current.baseUrl) === serviceKey;
+			},
+			getValues: () => values,
+			hasEdits: () => this.localAsrDrafts.has(serviceKey),
+			openManual: () => setOpen(true),
+			apply: (patch) => {
+				if (loadError) return "无法读取本机配置，请重开设置后重试。";
+				const draft = { ...values, ...patch };
+				const error = validateLocalAsrLifecycleDraft(draft, baseUrl, false);
+				if (error) return error.message;
+				const next = normalizeLocalAsrLifecycleSettings({ ...draft, enabled: false });
+				try { saveLocalAsrProfile(store, "local-openai-compatible", baseUrl, next); }
+				catch { return "无法保存本机配置，当前配置与草稿已保留，请重试。"; }
+				Object.assign(values, draft); saved = next;
+				this.localAsrDrafts.set(serviceKey, values);
+				for (const [key, input] of inputs) input.value = values[key];
+				showError(); synchronizeToggle(); renderSaved();
+				return undefined;
+			}
 		});
 		renderSaved();
 		const initialError = validateLocalAsrLifecycleDraft(values, baseUrl, saved.enabled);
@@ -1548,7 +1607,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			.setClass("echo-notes-settings-capabilities-title")
 			.setHeading();
 		headingCopyEl.createEl("p", { text: "选择一项能力查看和调整配置；选择卡片不会启用能力或保存设置。" });
-		headingEl.createSpan({ cls: "echo-notes-settings-capabilities-count", text: "5 项能力" });
+		const capabilityCount = headingEl.createSpan({ cls: "echo-notes-settings-capabilities-count" });
 
 		const definitions: ReadonlyArray<{ id: TranscriptionCapabilityId; label: string; description: string; state: string }> = [
 			{
@@ -1580,8 +1639,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				label: "上下文增强",
 				description: "发送已批准的上下文提示",
 				state: this.getCapabilityStateLabel(capabilityViews.find((item) => item.id === "context"))
-			}
+			},
+			...(config.provider === "local-openai-compatible" && mode === "offline" ? [{
+				id: "local-asr" as const, label: "本地服务自动启停", description: "识别安装目录并配置按需启停", state: "本机配置"
+			}] : [])
 		];
+		capabilityCount.setText(`${definitions.length} 项能力`);
+		if (!definitions.some(item => item.id === this.activeTranscriptionCapability)) this.activeTranscriptionCapability = "shortcuts";
 
 		const tabsEl = containerEl.createDiv({ cls: "echo-notes-settings-capability-tabs" });
 		tabsEl.setAttribute("role", "tablist");
@@ -1590,6 +1654,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			if (id === this.activeTranscriptionCapability) return;
 			const commitActivation = (): void => {
 				this.stopActiveHotkeyCapture?.();
+				this.localAsrDiscoveryHandle?.dispose();
+				this.localAsrDiscoveryHandle = undefined;
 				this.activeTranscriptionCapability = id;
 				const panelEl = containerEl.querySelector<HTMLElement>(".echo-notes-settings-capability-panel:not([hidden])");
 				if (!panelEl) {
@@ -1682,6 +1748,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		capability: ReturnType<typeof getTranscriptionProviderCapability>
 	): void {
 		switch (id) {
+			case "local-asr": this.renderLocalAsrLifecycleSection(containerEl, config); break;
 			case "shortcuts": this.renderQuickRecordingPanel(containerEl); break;
 			case "fusion": this.renderFusionTranscriptionPanel(containerEl); break;
 			case "speaker": this.renderSpeakerCapabilityPanel(containerEl, config, capability); break;
