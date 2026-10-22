@@ -120,6 +120,41 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.delete(f'/v1/local-asr/jobs/{job}')).status_code,204)
         self.assertEqual((await self.client.get(f'/v1/local-asr/jobs/{job}')).status_code,410)
 
+    async def test_model_capabilities_and_enhancement_job_roundtrip(self):
+        caps=(await self.client.get('/v1/local-asr/capabilities')).json()
+        model_caps=caps.get('model_capabilities', {})
+        self.assertIn(service.MODEL_ID, model_caps, 'Service must advertise model enhancement capabilities')
+        self.assertEqual(model_caps[service.MODEL_ID]['enhancement']['transports'], ['jobs'])
+        payload={'client_request_id':'enhanced-request','model':service.DIAR_MODEL_ID,'language':'zh','total_bytes':4,'media_type':'audio/wav',
+                 'enhancement':{'version':1,'hotwords':['示例词'],'context_text':'会议背景'}}
+        response=await self.client.post('/v1/local-asr/jobs',json=payload)
+        self.assertEqual(response.status_code,201,response.text)
+        job=self.store.get(response.json()['job_id'])
+        self.assertEqual(job.enhancement['hotwords'],['示例词'])
+        payload['enhancement']['hotwords']=['different']
+        self.assertEqual((await self.client.post('/v1/local-asr/jobs',json=payload)).status_code,409)
+
+    async def test_invalid_enhancement_is_rejected_before_upload(self):
+        payload={'client_request_id':'invalid-enhancement','model':service.MODEL_ID,'language':'zh','total_bytes':4,'media_type':'audio/wav',
+                 'enhancement':{'version':1,'context_text':'x'*401}}
+        response=await self.client.post('/v1/local-asr/jobs',json=payload)
+        self.assertEqual(response.status_code,422)
+        self.assertIsNone(self.store.active_job())
+
+    async def test_engine_uses_native_prompt_and_preserves_disabled_kwargs(self):
+        from types import SimpleNamespace as NS
+        captured=[]
+        engine=service.Engine()
+        engine.model=NS(generate=lambda audio, **kwargs: (captured.append(kwargs) or NS(text='fixture',generation_tokens=1)))
+        engine.generate_text([1],'Chinese')
+        self.assertNotIn('hotwords',captured[-1])
+        self.assertNotIn('system_prompt',captured[-1])
+        self.assertIn('enhancement', __import__('inspect').signature(engine.generate_text).parameters,
+                      'Engine must accept the frozen enhancement snapshot')
+        engine.generate_text([1],'Chinese',{'version':1,'hotwords':['术语'],'context_text':'人工背景'})
+        self.assertEqual(captured[-1]['hotwords'],['术语'])
+        self.assertEqual(captured[-1]['system_prompt'],'人工背景')
+
     async def test_host_and_origin_guards(self):
         self.assertEqual((await self.client.get('/health',headers={'Host':'evil.example'})).status_code,403)
         self.assertEqual((await self.client.get('/health',headers={'Origin':'https://evil.example'})).status_code,403)

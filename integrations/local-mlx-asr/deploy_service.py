@@ -14,7 +14,7 @@ from pathlib import Path
 
 APP = 'MLX ASR 控制台.app'
 REQUIRED_EXECUTABLES = {'start.sh','stop.sh','status.sh',APP+'/Contents/MacOS/ASRControl'}
-RUNTIME_FILES = {'service.py','job_store.py','bounded_audio.py','bounded_diarization.py',
+RUNTIME_FILES = {'service.py','enhancement.py','job_store.py','bounded_audio.py','bounded_diarization.py',
                  'bounded_worker.py','diarization.py','multipart_stream.py','control.py',
                  'start.sh','stop.sh','status.sh','README.md','DEPLOYMENT.md','deploy_service.py',
                  'requirements.lock','model-manifest.json','diarization-manifest.json','alignment-manifest.json'}

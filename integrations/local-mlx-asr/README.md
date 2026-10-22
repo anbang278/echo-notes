@@ -71,3 +71,19 @@ real model validation is separate under `validation/quality.py` and
 fixture paths, save evidence outside this source tree and never read a private
 Vault. `validation/long_audio.py` labels repeated public speech as a constructed
 pressure fixture, not a natural two-hour meeting.
+
+## Local enhancement (service 2.1.0)
+
+Protocol 1 jobs accept an optional `enhancement` snapshot:
+
+```json
+{"enhancement":{"version":1,"hotwords":["example term"],"context_text":"Human-approved meeting background"}}
+```
+
+Use `model_capabilities[model].enhancement` from `/v1/local-asr/capabilities` before enabling it. The limits are 100 distinct hotwords, 1,000 combined Unicode code points, and 400 background code points. Whitespace is trimmed, empty terms removed, and exact duplicates kept once. Invalid or over-budget input is rejected, never silently truncated. The snapshot is frozen per job and included in idempotency; reusing a request ID with different enhancement returns 409. Standard multipart remains unchanged and does not provide this enhancement contract.
+
+Both ordinary and speaker-labelled inference pass the snapshot to Qwen's native prompting fields, including bounded retries. This is vocabulary/context bias, not weighted acoustic decoding or guaranteed word substitution. It must not be used to inject a reference transcript. No automatic correction or cloud fallback is added. Existing callers that omit enhancement keep their original model arguments.
+
+Stage timings and retry counters are written to the private job metrics file, including failures. CPU process RSS is a process-lifetime high-water mark, separate from MLX peak memory. Prompts and raw transcripts are excluded from metrics and logs; private task metadata follows the existing permissions and TTL.
+
+`validation/meeting_quality.py` is a local-only evaluation entry point with an explicit input manifest, output root, run identity, and optional approved terms. It never scans a Vault. Model-generated reference text is a comparison reference, not ground truth: reports preserve unknown end times and mark DER unavailable. Approved human spellings take precedence over reference spellings; raw reference differences and approved-term occurrences are reported separately.

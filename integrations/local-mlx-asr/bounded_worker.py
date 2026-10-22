@@ -23,7 +23,7 @@ import numpy as np
 import bounded_audio as ba
 import bounded_diarization as bd
 from diarization import align_text_to_speakers, build_turns, format_segment
-from job_store import Job, JobStore
+from job_store import Job, JobStore, atomic_write_json
 
 log = logging.getLogger("echonotes-asr")
 
@@ -45,10 +45,28 @@ class InferenceFailure(Exception):
 class Worker:
     """Wraps the existing Engine model handles with a bounded pipeline."""
 
-    def __init__(self, engine, store: JobStore):
+    def __init__(self, engine, store: JobStore, observer=None):
         self.engine = engine  # provides load/load_diarizer/load_aligner/generate_text
         self.store = store
+        self.observer = observer  # explicit local evaluation only; never enabled by HTTP
         self._watchdog_stop = threading.Event()
+
+    def _timed(self, job, stage, operation, *args, **kwargs):
+        started = time.monotonic()
+        try:
+            return operation(*args, **kwargs)
+        finally:
+            job.stage_seconds[stage] = job.stage_seconds.get(stage, 0.0) + time.monotonic() - started
+
+    def _generate(self, job, chunk, start, end, sr):
+        args = (chunk, language_for(job.language))
+        if job.enhancement is not None:
+            args += (job.enhancement,)
+        result = self._timed(job, "asr", self.engine.generate_text, *args)
+        if self.observer:
+            self.observer({"event": "raw_asr", "start": start / sr, "end": end / sr,
+                           "text": result.text, "language": getattr(result, "language", None)})
+        return result
 
     def cancel_check(self, job: Job):
         if job.started_monotonic is not None and time.monotonic() - job.started_monotonic > WATCHDOG_SECONDS:
@@ -58,6 +76,7 @@ class Worker:
 
     # -- entry point -------------------------------------------------------
     def run(self, job: Job):
+        decoded = None
         started = time.monotonic()
         job.started_monotonic = started
         try:
@@ -78,7 +97,7 @@ class Worker:
                 self.store.update_progress(job, processed_seconds=float(seconds))
 
             self.cancel_check(job)
-            decoded = ba.decode_to_disk(
+            decoded = self._timed(job, "decode", ba.decode_to_disk,
                 source, work,
                 max_duration_seconds=8 * 3600,
                 progress=progress,
@@ -94,7 +113,6 @@ class Worker:
             finally:
                 audio._mmap.close()  # noqa: SLF001 - release mapping before cleanup
             self.cancel_check(job)
-            self.record_metrics(job, decoded, started)
             self.store.store_result(job, payload)
         except (InferenceFailure, ba.DecodeFailure) as exc:
             if exc.code == "cancelled":
@@ -111,6 +129,10 @@ class Worker:
             raise
         finally:
             self.store.cleanup_terminal(job)
+            try:
+                self.record_metrics(job, decoded, started)
+            except OSError:
+                log.warning("job=%s metrics could not be saved", job.id)
 
     # -- plain mode ----------------------------------------------------------
     def _run_plain(self, job: Job, audio: np.memmap, decoded, started) -> str:
@@ -148,12 +170,13 @@ class Worker:
             chunk = np.array(audio[start:end])
             if len(chunk) < sr:
                 chunk = np.pad(chunk, (0, sr - len(chunk)))
-            return self.engine.generate_text(chunk, language_for(job.language)).text.strip()
+            return self._generate(job, chunk, start, end, sr).text.strip()
         except Exception as exc:
             if not self._is_token_exhaustion(exc):
                 raise
             if depth >= 2 or (end - start) / sr <= MIN_RETRY_SECONDS:
                 raise  # already minimal; the failure is real
+            job.inference_counters["asr_retries"] = job.inference_counters.get("asr_retries", 0) + 1
             window = np.asarray(audio[start:end])
             sub_boundaries = list(ba.plan_chunks(window, sr, chunk_seconds=retry_seconds))
             texts = []
@@ -195,19 +218,19 @@ class Worker:
         self.store.transition(job, "running", stage="diarizing")
         self.cancel_check(job)
         try:
-            self.engine.load_diarizer()
+            self._timed(job, "diarizer_load", self.engine.load_diarizer)
         except Exception as exc:
             raise InferenceFailure("diarization_unavailable",
                                    "Speaker model failed to load; ordinary transcription remains available") from exc
         self.cancel_check(job)
         self.store.update_progress(job, stage="diarizing")
-        raw = bd.diarize_stream(self.engine.diarizer, audio, sr,
+        raw = self._timed(job, "diarization", bd.diarize_stream, self.engine.diarizer, audio, sr,
                                 cancel=lambda: self.cancel_check(job))
         turns, mapping = build_turns(raw, len(audio), sr)
         self.store.transition(job, "running", stage="aligning")
         self.cancel_check(job)
         try:
-            self.engine.load_aligner()
+            self._timed(job, "aligner_load", self.engine.load_aligner)
         except Exception as exc:
             raise InferenceFailure("alignment_unavailable",
                                    "Alignment model failed to load") from exc
@@ -216,7 +239,6 @@ class Worker:
         total = len(boundaries)
         self.store.update_progress(job, segment_total=total)
         covered = 0
-        align_seconds = 0.0
         for index, (start, end) in enumerate(boundaries):
             self.cancel_check(job)
             self.store.update_progress(job, stage="transcribing",
@@ -255,14 +277,15 @@ class Worker:
             return [], [], set()
         if len(chunk) < sr:
             chunk = np.pad(chunk, (0, sr - len(chunk)))
+        text = None
         try:
             self.store.update_progress(job, stage="transcribing")
-            result = self.engine.generate_text(chunk, language_for(job.language))
+            result = self._generate(job, chunk, start, end, sr)
             text = result.text.strip()
             if not text:
                 return [], [], set()
             self.cancel_check(job)
-            assigned, warnings, _ = self._align_window(
+            assigned, warnings, _ = self._timed(job, "alignment", self._align_window,
                 job, chunk, text, turns, sr, start, (end-start)/sr,
                 self._resolve_align_language(job.language, result))
             return assigned, [text], warnings
@@ -271,6 +294,7 @@ class Worker:
                 isinstance(exc, InferenceFailure) and exc.code == "alignment_failed")
             if not retryable or depth >= 2 or (end-start)/sr <= MIN_RETRY_SECONDS:
                 raise
+            job.inference_counters["alignment_retries"] = job.inference_counters.get("alignment_retries", 0) + 1
             target = min(DIAR_RETRY_CHUNK_SECONDS / (2 ** depth), (end-start)/sr/2)
             boundaries = list(ba.plan_chunks(np.asarray(audio[start:end]), sr,
                                             chunk_seconds=target, search_seconds=min(1.0, target/4)))
@@ -292,6 +316,11 @@ class Worker:
                 covered = right
             if covered != end-start:
                 raise InferenceFailure("coverage_error", "Retry windows lost the audio tail")
+            if text is not None and text != "".join(texts):
+                job.inference_counters["retranscription_text_changed"] = job.inference_counters.get("retranscription_text_changed", 0) + 1
+                if self.observer:
+                    self.observer({"event": "retranscription_changed", "start": start/sr, "end": end/sr,
+                                   "before": text, "after": "".join(texts)})
             return segments, texts, warnings
 
     def _align_window(self, job: Job, chunk: np.ndarray, text: str, turns, sr: int,
@@ -330,19 +359,26 @@ class Worker:
             mlx_peak = mlx_active = None
         metrics = {
             "job_id": job.id,
+            "state": job.state,
+            "stage_seconds": {key: round(value, 6) for key, value in job.stage_seconds.items()},
+            "counters": dict(job.inference_counters),
+            "enhancement_fingerprint": job.enhancement_fingerprint,
+            "hotword_count": len(job.enhancement["hotwords"]) if job.enhancement else 0,
+            "context_characters": len(job.enhancement["context_text"]) if job.enhancement else 0,
+            "process_rss_scope": "process_lifetime_high_watermark",
             "segments": job.segment_total or 0,
             "mode": "diarized" if job.model.endswith("sortformer-4spk") else "plain",
-            "duration_seconds": decoded.duration_seconds,
+            "duration_seconds": decoded.duration_seconds if decoded is not None else None,
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "mlx_peak_bytes": mlx_peak,
             "mlx_active_bytes": mlx_active,
             "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024),
         }
-        log.info("job=%s completed duration=%.3f elapsed=%.3f mlx_peak=%s rss=%s",
-                 job.id, decoded.duration_seconds, metrics["elapsed_seconds"],
+        log.info("job=%s finished state=%s duration=%s elapsed=%.3f mlx_peak=%s rss=%s",
+                 job.id, job.state, metrics["duration_seconds"], metrics["elapsed_seconds"],
                  mlx_peak, metrics["process_peak_rss_bytes"])
         self.engine.last_request = metrics
-        (self.store.jobs_dir / job.id / "metrics.json").write_text(json.dumps(metrics))
+        atomic_write_json(self.store.jobs_dir / job.id / "metrics.json", metrics)
 
 
 def language_for(language: str):

@@ -27,6 +27,7 @@ os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from enhancement import SERVICE_VERSION, model_capabilities
 from bounded_worker import Worker
 from multipart_stream import MultipartAudio
 from job_store import CHUNK_BYTES, MAX_DURATION_SECONDS, MAX_FILE_BYTES, JobError, JobStore
@@ -129,9 +130,12 @@ class Engine:
         if cancel.is_set():
             raise TranscriptionFailure("cancelled", "Client disconnected", 499)
 
-    def generate_text(self, chunk, language):
+    def generate_text(self, chunk, language, enhancement=None):
+        kwargs = {}
+        if enhancement is not None:
+            kwargs = {"hotwords": list(enhancement["hotwords"]), "system_prompt": enhancement["context_text"] or None}
         result = self.model.generate(chunk, language=language, max_tokens=TOKEN_BUDGET,
-                                     temperature=0.0, stream=False, verbose=False)
+                                     temperature=0.0, stream=False, verbose=False, **kwargs)
         if result.generation_tokens >= TOKEN_BUDGET:
             raise TranscriptionFailure("token_budget_exhausted", "A segment reached its output limit; no partial transcript returned", 500)
         if not isinstance(result.text, str):
@@ -249,8 +253,9 @@ async def capabilities():
         "service": "echonotes-mlx-asr",
         "protocol": PROTOCOL,
         "instance_id": INSTANCE_ID,
-        "version": "2.0.0",
+        "version": SERVICE_VERSION,
         "models": [MODEL_ID, DIAR_MODEL_ID],
+        "model_capabilities": model_capabilities([MODEL_ID, DIAR_MODEL_ID]),
         "max_file_bytes": MAX_FILE_BYTES,
         "max_duration_seconds": MAX_DURATION_SECONDS,
         "chunk_bytes": CHUNK_BYTES,
@@ -264,7 +269,7 @@ async def create_job(request: Request):
         raise JobError(503, "not_ready", "Model is not ready; check /health")
     job = await asyncio.to_thread(
         store.create, body.get("client_request_id"), body.get("model"),
-        body.get("language") or "auto", body.get("total_bytes"), body.get("media_type"))
+        body.get("language") or "auto", body.get("total_bytes"), body.get("media_type"), body.get("enhancement"))
     return JSONResponse(status_code=201, content={
         "job_id": job.id, "instance_id": job.instance_id, "state": job.state,
         "next_offset": job.received_bytes, "chunk_bytes": CHUNK_BYTES,

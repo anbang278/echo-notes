@@ -11,6 +11,8 @@ import time
 import uuid
 from pathlib import Path
 
+from enhancement import normalize_enhancement, enhancement_fingerprint
+
 CHUNK_BYTES = 4 * 1024 * 1024
 UPLOAD_TTL_SECONDS = 30 * 60
 RESULT_TTL_SECONDS = 60 * 60
@@ -34,10 +36,14 @@ class JobError(Exception):
 
 
 class Job:
-    def __init__(self, job_id, client_request_id, model, language, total_bytes, media_type, instance_id):
+    def __init__(self, job_id, client_request_id, model, language, total_bytes, media_type, instance_id, enhancement=None):
         self.id, self.client_request_id = job_id, client_request_id
         self.model, self.language, self.total_bytes, self.media_type = model, language, total_bytes, media_type
         self.instance_id = instance_id
+        self.enhancement = normalize_enhancement(enhancement)
+        self.enhancement_fingerprint = enhancement_fingerprint(self.enhancement)
+        self.stage_seconds = {}
+        self.inference_counters = {}
         self.state = self.stage = "uploading"
         self.received_bytes = 0
         self.duration_seconds = None
@@ -51,14 +57,14 @@ class Job:
         self.started_monotonic = None
 
     def to_meta(self):
-        return {k: v for k, v in vars(self).items() if k not in {"started_monotonic", "scheduled"}}
+        return {k: v for k, v in vars(self).items() if k not in {"started_monotonic", "scheduled", "stage_seconds", "inference_counters"}}
 
     @staticmethod
     def from_meta(meta, jobs_dir):
         job = Job(meta["id"], meta["client_request_id"], meta["model"], meta["language"],
-                  meta["total_bytes"], meta["media_type"], meta["instance_id"])
+                  meta["total_bytes"], meta["media_type"], meta["instance_id"], meta.get("enhancement"))
         for key in job.to_meta():
-            if key in meta:
+            if key in meta and key not in {"enhancement", "enhancement_fingerprint"}:
                 setattr(job, key, meta[key])
         return job
 
@@ -160,7 +166,12 @@ class JobStore:
         if required > MAX_JOB_DISK_BYTES or shutil.disk_usage(self.jobs_dir).free < required:
             raise JobError(507, "disk_quota", "Insufficient temporary disk space")
 
-    def create(self, client_request_id, model, language, total_bytes, media_type):
+    def create(self, client_request_id, model, language, total_bytes, media_type, enhancement=None):
+        try:
+            enhancement = normalize_enhancement(enhancement)
+        except ValueError as exc:
+            raise JobError(422, "invalid_enhancement", str(exc)) from exc
+        fingerprint = enhancement_fingerprint(enhancement)
         validate_client_request_id(client_request_id)
         if model not in self.models:
             raise JobError(404, "unknown_model", "Only the configured local models are available")
@@ -176,13 +187,13 @@ class JobStore:
             self.prune_expired()
             for job in self.jobs.values():
                 if job.client_request_id == client_request_id:
-                    if (job.model, job.language, job.total_bytes, job.media_type) != (model, language, total_bytes, media_type):
+                    if (job.model, job.language, job.total_bytes, job.media_type, job.enhancement_fingerprint) != (model, language, total_bytes, media_type, fingerprint):
                         raise JobError(409, "request_conflict", "Request id was used with different parameters")
                     return job
             if self.active_job():
                 raise JobError(429, "busy", "Another recording is uploading or being processed")
             self.check_disk(total_bytes)
-            job = Job(uuid.uuid4().hex, client_request_id, model, language, total_bytes, media_type, self.instance_id)
+            job = Job(uuid.uuid4().hex, client_request_id, model, language, total_bytes, media_type, self.instance_id, enhancement)
             (self.jobs_dir / job.id).mkdir(mode=0o700)
             self._save(job)
             self.jobs[job.id] = job

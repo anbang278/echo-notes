@@ -80,6 +80,18 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(''.join(s['text'] for s in result),''.join(texts))
             self.assertTrue(all(a['end']==b['start'] for a,b in zip(result,result[1:])))
 
+    def test_decode_failure_retains_sanitized_stage_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store,job=self.prepare(Path(tmp))
+            (store.jobs_dir/job.id/'audio.bin').write_bytes(b'not audio')
+            with self.assertRaises(Exception): Worker(NS(),store).run(job)
+            path=store.jobs_dir/job.id/'metrics.json'
+            self.assertTrue(path.is_file(),'Failed jobs need stage diagnostics too')
+            metrics=json.loads(path.read_text())
+            self.assertEqual(metrics['state'],'failed')
+            self.assertGreaterEqual(metrics['stage_seconds']['decode'],0)
+            self.assertNotIn('audio.bin',json.dumps(metrics))
+
     def test_cancel_before_scheduling_releases_slot(self):
         with tempfile.TemporaryDirectory() as tmp:
             store,job=self.prepare(Path(tmp))
