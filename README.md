@@ -14,6 +14,8 @@ The workflow is simple: insert or link an audio file in a Markdown note, run a t
 
 Local prompting (0.4.44 test delivery): companion service 2.1.0 accepts approved manual hotwords and meeting context for both existing Qwen modes. The independent switches default to off. Local budgets are 100 terms / 1,000 Unicode code points and 400 context code points. The existing preview shows omissions; weights only prioritize selection. Automatic Memory and reference transcripts are excluded. Unsupported services fail explicitly and changed hints invalidate resume. Production cutover and acoustic quality acceptance remain pending.
 
+Development status: Qwen baseline, manual hotword/context and speaker-labelled meeting evaluations have local evidence. Candidate model acceptance remains incomplete after resource pressure interrupted Fun-ASR. Meeting evaluation now uses independent resource admission and termination; long candidate runs stay deferred until short smoke tests and machine headroom permit them. Service unit tests pass; complete package verification and test installation are tracked in the active task.
+
 ## Why Echo Notes
 
 ### Different recordings need different analysis structures

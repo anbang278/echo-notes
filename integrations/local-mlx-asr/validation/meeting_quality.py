@@ -297,6 +297,9 @@ def run(opts):
         thread.start()
         started = time.monotonic()
         try:
+            from validation.resource_guard import configure_mlx_limits
+            import mlx.core as mx
+            configure_mlx_limits(mx)
             engine.load()
             record['load_seconds'] = time.monotonic()-started
             worker = Worker(engine, store, **({'observer': observe} if 'observer' in inspect.signature(Worker).parameters else {}))
@@ -323,7 +326,32 @@ def run(opts):
             print(json.dumps({k:record.get(k) for k in ('run_id','state','elapsed_seconds','character_difference_rate')}), flush=True)
 
 
-def main():
+def run_guarded(opts, argv, supervisor=None):
+    # Validate only the output allowlist in the supervisor; model loading and
+    # private audio/reference reads occur in the admitted child process.
+    from validation.resource_guard import save_report, supervise
+    approved = Path(json.loads(opts.inputs.read_text())['output_root']).resolve()
+    output = opts.output.resolve()
+    if not output.is_relative_to(approved) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,80}', opts.run_id):
+        raise ValueError('Output must stay in the explicit evaluation directory')
+    environment = os.environ.copy()
+    environment['ECHONOTES_EVAL_SUPERVISOR'] = str(os.getpid())
+    result = (supervisor or supervise)([sys.executable, str(Path(__file__).resolve()), *argv], env=environment)
+    report = output/f'{opts.run_id}.resource-guard-{time.time_ns()}.json'
+    save_report(report, result)
+    if result['state'] == 'stopped':
+        record_path = output/opts.run_id/'run.json'
+        if record_path.is_file():
+            record = json.loads(record_path.read_text())
+            if record.get('state') not in {'succeeded', 'failed'}:
+                record.update(state='failed', error_type='ResourceGuardStop', job_error=result['reason'])
+                write_json(record_path, record)
+    print(json.dumps({'run_id': opts.run_id, 'guard_state': result['state'],
+                      'reason': result.get('reason')}), flush=True)
+    return result['exit_code']
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--inputs', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
@@ -334,8 +362,15 @@ def main():
     parser.add_argument('--enhancement', type=Path)
     parser.add_argument('--candidate-manifest', type=Path)
     parser.add_argument('--approved-terms', type=Path, help='Scoring-only approved spelling list; never implicitly sent to ASR')
-    run(parser.parse_args())
+    arguments = sys.argv[1:] if argv is None else argv
+    opts = parser.parse_args(arguments)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    os.umask(0o077)
+    if os.environ.pop('ECHONOTES_EVAL_SUPERVISOR', None) == str(os.getppid()):
+        run(opts)
+        return 0
+    return run_guarded(opts, arguments)
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

@@ -64,6 +64,26 @@ class MeetingQualityTests(unittest.TestCase):
         engine.model=NS(generate=lambda *args,**kwargs:NS(text='fixture',tokens=[1,2],language='zh'))
         with self.assertRaises(Failure):engine.generate_text([1],'Chinese')
 
+    def test_evaluation_uses_supervisor_and_retains_resource_stop_evidence(self):
+        from types import SimpleNamespace as NS
+        guarded = getattr(self.module, 'run_guarded', None)
+        self.assertTrue(callable(guarded), 'Direct meeting evaluation must have resource admission')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inputs = root/'inputs.json'
+            inputs.write_text(json.dumps({'output_root': str(root)}))
+            opts = NS(inputs=inputs, output=root, run_id='fixture')
+            result = {'state': 'stopped', 'exit_code': 124, 'reason': 'process_memory'}
+            calls = []
+            def supervise(command, **kwargs):
+                calls.append((command, kwargs))
+                return result
+            self.assertEqual(guarded(opts, ['--run-id', 'fixture'], supervisor=supervise), 124)
+            self.assertEqual(len(calls), 1)
+            reports = list(root.glob('fixture.resource-guard-*.json'))
+            self.assertEqual(json.loads(reports[0].read_text())['reason'], 'process_memory')
+            self.assertFalse((root/'fixture'/'run.json').exists())
+
     def test_candidate_requires_verified_local_files_before_loading(self):
         verify=getattr(self.module,'load_candidate_manifest',None)
         self.assertTrue(callable(verify),'Candidate assets must be verified before model import')

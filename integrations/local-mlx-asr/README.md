@@ -91,3 +91,38 @@ Stage timings and retry counters are written to the private job metrics file, in
 Creating an enhanced job freezes its normalized hint snapshot. Services advertise `request_lookup: true`; `GET /v1/local-asr/requests/{client_request_id}` recovers the public job identity after a lost creation acknowledgment without resending private hints or creating work. Expired requests return 410. The existing loopback and origin guards apply.
 
 Local meeting evaluation also writes `full-comparison.md` and `speaker-review.{md,json}`. Speaker review lists observed output near each reference start anchor (±2 seconds); anonymous labels are independent, reference ends remain unknown, and this is not DER. Raw private material stays outside source and release packages.
+
+### Protect the working Mac during evaluation
+
+Direct `validation/meeting_quality.py` runs now start an independent supervisor.
+Admission requires normal macOS memory pressure, at least 3 GiB of estimated
+reclaimable pages, no more than 1 GiB of existing swap, and an estimated CPU load
+below 70%. The estimate uses process CPU accounting and free/inactive/speculative
+pages; it is not a temperature measurement or a promise of available capacity.
+Every 0.5 seconds plus sampling time, the supervisor checks system pressure and
+the physical footprint of its own process group, including compressed memory.
+It stops that group if pressure rises, footprint exceeds 4 GiB, swap grows by
+256 MiB, estimated headroom falls below 512 MiB, CPU stays above 90% for 5 sampled
+seconds, monitoring fails, or the 15-minute deadline is reached. It requests
+cancellation, then escalates termination only within the group it created.
+
+MLX receives a 3 GiB allocation guideline and a 64 MiB cache limit. The allocation
+guideline is **not** a hard memory cap; the independent supervisor is necessary.
+These settings protect evaluations and do not change the installed service.
+Resource reports contain counters and reason codes, without command arguments,
+environment values, audio, hints or transcripts. A refused or stopped evaluation
+is never a passing model result. Stop an experiment matrix on any nonzero exit;
+do not automatically move on to another model or retry a failed long recording.
+New candidates must first pass a short, non-sensitive smoke test. Full recordings
+run serially under the existing MLX lock only when resources permit.
+
+Other test commands can use the same supervisor with a fresh private report:
+
+```sh
+python3 validation/resource_guard.py --report /explicit/private/guard.json -- \
+  python -m unittest discover -s tests -v
+```
+
+The supervisor returns 75 when admission is refused, 124 when a resource/deadline
+stop is required, 130 for interruption, or the child command's failure code. It
+does not schedule retries or start another test automatically.
