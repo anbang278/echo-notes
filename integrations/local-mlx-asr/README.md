@@ -87,3 +87,7 @@ Both ordinary and speaker-labelled inference pass the snapshot to Qwen's native 
 Stage timings and retry counters are written to the private job metrics file, including failures. CPU process RSS is a process-lifetime high-water mark, separate from MLX peak memory. Prompts and raw transcripts are excluded from metrics and logs; private task metadata follows the existing permissions and TTL.
 
 `validation/meeting_quality.py` is a local-only evaluation entry point with an explicit input manifest, output root, run identity, and optional approved terms. It never scans a Vault. Model-generated reference text is a comparison reference, not ground truth: reports preserve unknown end times and mark DER unavailable. Approved human spellings take precedence over reference spellings; raw reference differences and approved-term occurrences are reported separately.
+
+Creating an enhanced job freezes its normalized hint snapshot. Services advertise `request_lookup: true`; `GET /v1/local-asr/requests/{client_request_id}` recovers the public job identity after a lost creation acknowledgment without resending private hints or creating work. Expired requests return 410. The existing loopback and origin guards apply.
+
+Local meeting evaluation also writes `full-comparison.md` and `speaker-review.{md,json}`. Speaker review lists observed output near each reference start anchor (±2 seconds); anonymous labels are independent, reference ends remain unknown, and this is not DER. Raw private material stays outside source and release packages.

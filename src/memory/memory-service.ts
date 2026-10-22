@@ -942,14 +942,14 @@ export class MemoryService {
 		return (await this.ensureTranscriptionEnhancementFiles(manifest)).candidateFile;
 	}
 
-	async getTranscriptionEnhancementDocuments(settings: EchoNotesSettings): Promise<TranscriptionEnhancementDocuments> {
+	async getTranscriptionEnhancementDocuments(settings: EchoNotesSettings, localOnly = false): Promise<TranscriptionEnhancementDocuments> {
 		const manifest = await this.readManifest(settings);
 		const { manualFile, candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
 		const manual = parseManualTranscriptionEnhancementDocument(
 			await this.app.vault.cachedRead(manualFile),
 			manualFile.path
 		);
-		const candidates = parseTranscriptionEnhancementCandidateDocument(
+		const candidates = localOnly ? createTranscriptionEnhancementStore() : parseTranscriptionEnhancementCandidateDocument(
 			await this.app.vault.cachedRead(candidateFile),
 			candidateFile.path
 		);
@@ -1012,12 +1012,12 @@ export class MemoryService {
 	async buildTranscriptionEnhancement(
 		settings: EchoNotesSettings,
 		sourceNote?: TFile,
-		options: { enableHotwords?: boolean; enableContext?: boolean } = {}
+		options: { enableHotwords?: boolean; enableContext?: boolean; localOnly?: boolean } = {}
 	): Promise<TranscriptionEnhancementSnapshot> {
 		const manifest = await this.readManifest(settings);
 		const { manualFile, candidateFile } = await this.ensureTranscriptionEnhancementFiles(manifest);
 		const manual = parseManualTranscriptionEnhancementDocument(await this.app.vault.cachedRead(manualFile), manualFile.path);
-		const candidates = parseTranscriptionEnhancementCandidateDocument(await this.app.vault.cachedRead(candidateFile), candidateFile.path);
+		const candidates = options.localOnly ? createTranscriptionEnhancementStore() : parseTranscriptionEnhancementCandidateDocument(await this.app.vault.cachedRead(candidateFile), candidateFile.path);
 		const store = mergeTranscriptionEnhancementStores(manual, candidates);
 		const frontmatter = sourceNote ? this.app.metadataCache.getFileCache(sourceNote)?.frontmatter : undefined;
 		const scopes = normalizeTranscriptionEnhancementScopes({
@@ -1025,21 +1025,24 @@ export class MemoryService {
 			people: frontmatter?.echo_notes_memory_people,
 			organizations: frontmatter?.echo_notes_memory_organizations
 		});
-		const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
-		const relationStore = await this.readMemoryRelationStore(manifest);
-		const memoryAssertions = this.createCurrentMemoryEntries(packages, relationStore).map(({ assertion }) => ({
-			id: assertion.id,
-			text: `${assertion.predicate}：${assertion.value}`,
-			observedAt: assertion.observedAt,
-			subjectType: assertion.subjectType,
-			subjectName: assertion.subjectName
-		}));
+		const memoryAssertions = options.localOnly ? [] : await (async () => {
+			const packages = await this.collectCandidatePackages(manifest, undefined, "read-only");
+			const relationStore = await this.readMemoryRelationStore(manifest);
+			return this.createCurrentMemoryEntries(packages, relationStore).map(({ assertion }) => ({
+				id: assertion.id,
+				text: `${assertion.predicate}：${assertion.value}`,
+				observedAt: assertion.observedAt,
+				subjectType: assertion.subjectType,
+				subjectName: assertion.subjectName
+			}));
+		})();
 		return buildTranscriptionEnhancementSnapshot({
 			store,
 			scopes,
 			memoryAssertions,
 			enableHotwords: options.enableHotwords,
-			enableContext: options.enableContext
+			enableContext: options.enableContext,
+			localOnly: options.localOnly
 		});
 	}
 

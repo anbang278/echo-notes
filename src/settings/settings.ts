@@ -74,12 +74,18 @@ export interface AliyunFileTranscriptionSettings {
 	memoryEnhancementEnabled: boolean;
 }
 
+export interface LocalTranscriptionEnhancementSettings {
+	hotwordEnhancementEnabled: boolean;
+	contextEnhancementEnabled: boolean;
+}
+
 export interface TranscriptionConfig<TProvider extends TranscriptionProviderId = TranscriptionProviderId> {
 	provider: TProvider;
 	baseUrl: string;
 	model: string;
 	language: string;
 	aliyunFiletrans?: AliyunFileTranscriptionSettings;
+	localEnhancement?: LocalTranscriptionEnhancementSettings;
 }
 
 /** Persist only non-secret configuration; the selected config remains authoritative. */
@@ -338,7 +344,8 @@ export const PROVIDER_DEFAULTS: Record<TranscriptionProviderId, Omit<Transcripti
 	"local-openai-compatible": {
 		baseUrl: LOCAL_OPENAI_BASE_URL,
 		model: LOCAL_OPENAI_TRANSCRIPTION_MODEL,
-		language: "auto"
+		language: "auto",
+		localEnhancement: { hotwordEnhancementEnabled: false, contextEnhancementEnabled: false }
 	}
 };
 
@@ -1321,7 +1328,9 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 			: offlineDefaults.language,
 		...(offlineProvider === "aliyun-bailian"
 			? { aliyunFiletrans: normalizeAliyunFiletransSettings(nestedOffline.aliyunFiletrans) }
-			: {})
+			: {}),
+		...(offlineProvider === "local-openai-compatible"
+			? { localEnhancement: normalizeLocalEnhancementSettings(nestedOffline.localEnhancement) } : {})
 	};
 	settings.offlineTranscriptionByProvider = normalizeOfflineTranscriptionProfiles(
 		raw.offlineTranscriptionByProvider,
@@ -1567,7 +1576,8 @@ export function getOfflineTranscriptionProviderDefaults(
 	const defaults = PROVIDER_DEFAULTS[provider];
 	return {
 		...defaults,
-		...(defaults.aliyunFiletrans ? { aliyunFiletrans: { ...defaults.aliyunFiletrans } } : {})
+		...(defaults.aliyunFiletrans ? { aliyunFiletrans: { ...defaults.aliyunFiletrans } } : {}),
+		...(defaults.localEnhancement ? { localEnhancement: { ...defaults.localEnhancement } } : {})
 	};
 }
 
@@ -1627,7 +1637,9 @@ function normalizeOfflineProviderConfig<Provider extends OfflineTranscriptionPro
 		language: normalizeConfigString(raw.language, undefined, defaults.language),
 		...(provider === "aliyun-bailian"
 			? { aliyunFiletrans: normalizeAliyunFiletransSettings(raw.aliyunFiletrans) }
-			: {})
+			: {}),
+		...(provider === "local-openai-compatible"
+			? { localEnhancement: normalizeLocalEnhancementSettings(raw.localEnhancement) } : {})
 	};
 }
 
@@ -2053,4 +2065,9 @@ function normalizeHotkeyKey(value: string): string {
 	}
 
 	return "";
+}
+
+function normalizeLocalEnhancementSettings(value: unknown): LocalTranscriptionEnhancementSettings {
+	const raw = isRecord(value) ? value : {};
+	return { hotwordEnhancementEnabled: raw.hotwordEnhancementEnabled === true, contextEnhancementEnabled: raw.contextEnhancementEnabled === true };
 }

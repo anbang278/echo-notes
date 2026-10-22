@@ -12,6 +12,8 @@ The workflow is simple: insert or link an audio file in a Markdown note, run a t
 
 > Privacy notice: Echo Notes makes network requests only when you start real-time transcription, transcribe an existing file, trigger AI analysis, or enable automatic Echo Memory extraction. Real-time mode continuously sends microphone PCM to Volcengine AgentPlan. Offline mode sends the selected audio to the configured offline provider. AI analysis sends final transcript text to the configured analysis provider. Memory extraction sends transcript text and the successful analyses selected for that run to a separately configured memory provider. Do not process content that should not be sent to external services.
 
+Local prompting (0.4.44 test delivery): companion service 2.1.0 accepts approved manual hotwords and meeting context for both existing Qwen modes. The independent switches default to off. Local budgets are 100 terms / 1,000 Unicode code points and 400 context code points. The existing preview shows omissions; weights only prioritize selection. Automatic Memory and reference transcripts are excluded. Unsupported services fail explicitly and changed hints invalidate resume. Production cutover and acoustic quality acceptance remain pending.
+
 ## Why Echo Notes
 
 ### Different recordings need different analysis structures

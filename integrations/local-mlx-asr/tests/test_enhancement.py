@@ -71,6 +71,21 @@ class EnhancementTests(unittest.TestCase):
             self.assertGreater(len(calls),1)
             self.assertTrue(all(call[2]==job.enhancement for call in calls))
 
+    def test_diarized_token_exhaustion_is_not_counted_as_alignment_failure(self):
+        self.normalize(None)
+        import numpy as np
+        with tempfile.TemporaryDirectory() as tmp:
+            store=JobStore(Path(tmp),'test',['model'])
+            job=store.create('request-123','model','zh',4,'audio/wav')
+            def generate(audio, language):
+                if len(audio)>12*16000:raise RuntimeError('token exhausted')
+                return NS(text='词',language='Chinese')
+            worker=Worker(NS(generate_text=generate),store)
+            worker._align_window=lambda *args: ([{'text':'词'}],set(),0)
+            worker._diarize_window(job,np.ones(20*16000,dtype=np.float32),0,20*16000,16000,[])
+            self.assertEqual(job.inference_counters.get('token_budget_retries'),1)
+            self.assertEqual(job.inference_counters.get('alignment_retries',0),0)
+
     def test_diarized_worker_passes_enhancement_and_reports_stage_timings(self):
         self.normalize(None)
         import numpy as np

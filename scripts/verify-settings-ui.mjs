@@ -3217,6 +3217,7 @@ async function verifyLocalOpenAISettings(page) {
 		const plugin = window.app.plugins.plugins[pluginId];
 		const previous = {
 			offline: structuredClone(plugin.settings.offlineTranscription),
+			memoryInitialized: plugin.settings.memoryInitialized,
 			profiles: structuredClone(plugin.settings.offlineTranscriptionByProvider),
 			mode: plugin.settings.transcriptionMode,
 			stage: plugin.settingTab.activeSettingsStage,
@@ -3266,6 +3267,26 @@ async function verifyLocalOpenAISettings(page) {
 		await getActivePanel(page).locator('[data-capability-tab="speaker"]').click();
 		assert((await getActivePanel(page).textContent()).includes("随模型启用"), "本地分说话人模型未正确显示已启用状态");
 		assert(!(await (await getActiveSetting(page, "说话人标签样式")).locator('select:not([aria-hidden="true"])').isDisabled()), "本地分说话人模型无法设置标签样式");
+		assert(localDefaults.localEnhancement?.hotwordEnhancementEnabled === false && localDefaults.localEnhancement?.contextEnhancementEnabled === false,
+			"本地增强必须默认关闭");
+		await page.evaluate((pluginId) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			plugin.settings.memoryInitialized = true;
+			plugin.settingTab.refreshSettings();
+		}, PLUGIN_ID);
+		await getActivePanel(page).locator('[data-capability-tab="hotwords"]').click();
+		assert((await getActivePanel(page).textContent()).includes("合计 1000 字"), "本地热词预算未展示");
+		assert(!(await getActivePanel(page).textContent()).includes("审核候选"), "本地增强不得自动使用 AI 候选");
+		await setSettingToggle(page, "热词增强", true);
+		assert(!(await (await getActiveSetting(page, "人工术语")).getByRole("button").isDisabled()), "本地人工词库入口未启用");
+		await getActivePanel(page).locator('[data-capability-tab="context"]').click();
+		assert((await getActivePanel(page).textContent()).includes("不会自动加入 Memory"), "本地背景缺少人工来源说明");
+		await setSettingToggle(page, "会议背景", true);
+		const localFlags = await page.evaluate((pluginId) => window.app.plugins.plugins[pluginId].settings.offlineTranscription.localEnhancement, PLUGIN_ID);
+		assert(localFlags.hotwordEnhancementEnabled && localFlags.contextEnhancementEnabled, "本地两个增强开关未独立保存");
+		await setSettingToggle(page, "会议背景", false);
+		await getActivePanel(page).locator('[data-capability-tab="hotwords"]').click();
+		await setSettingToggle(page, "热词增强", false);
 		await getActivePanel(page).getByRole("tab", { name: "转写服务", exact: true }).click();
 		await selectSettingOption(page, "转写模型", "__custom__");
 		await (await getActiveSetting(page, "自定义转写模型")).locator('input[type="text"]').fill("custom/immediate-local");
@@ -3353,6 +3374,7 @@ async function verifyLocalOpenAISettings(page) {
 		await page.evaluate(async ({ pluginId, previous }) => {
 			const plugin = window.app.plugins.plugins[pluginId];
 			plugin.settings.offlineTranscription = previous.offline;
+			plugin.settings.memoryInitialized = previous.memoryInitialized;
 			plugin.settings.offlineTranscriptionByProvider = previous.profiles;
 			plugin.settings.transcriptionMode = previous.mode;
 			await plugin.saveApiKey("lm-studio", previous.lmKey);

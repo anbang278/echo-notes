@@ -1226,7 +1226,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		new Setting(advancedEl)
 			.setName("默认转写语言")
 			.setDesc(
-				isAgentPlan
+				isLocalOpenAI
+					? "中文为主的会议可选择中文（zh）；auto 会自动判断，中英混合可先比较两者。不会自动改变当前选择。"
+					: isAgentPlan
 					? this.getTranscriptionLanguageDescription()
 					: `${this.getTranscriptionLanguageDescription()} 如需其他代码，可使用下方自定义语言代码。`
 			)
@@ -1892,6 +1894,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		config: TranscriptionConfig,
 		capability: ReturnType<typeof getTranscriptionProviderCapability>
 	): void {
+		if (config.provider === "local-openai-compatible" && capability.supportsNativeHotwords) {
+			this.renderLocalEnhancementPanel(containerEl, config, "hotwordEnhancementEnabled");
+			return;
+		}
 		const heading = this.renderCapabilityPanelHeading(containerEl, "术语增强", "提高专有名词、人名和项目名的识别稳定性。仅发送作用域匹配且已批准的内容。");
 		if (!(capability.supportsNativeHotwords && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL)) {
 			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
@@ -1930,6 +1936,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		config: TranscriptionConfig,
 		capability: ReturnType<typeof getTranscriptionProviderCapability>
 	): void {
+		if (config.provider === "local-openai-compatible" && capability.supportsContextEnhancement) {
+			this.renderLocalEnhancementPanel(containerEl, config, "contextEnhancementEnabled");
+			return;
+		}
 		const heading = this.renderCapabilityPanelHeading(containerEl, "上下文增强", "使用已批准的固定 Prompt 和记忆内容；发起转写时会把生效内容发送给当前服务商，共用 400 字预算。");
 		if (!(capability.supportsContextEnhancement && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL)) {
 			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
@@ -1957,6 +1967,38 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			if (manual.settingEl.isConnected) manual.setDesc(`配置错误：${getSanitizedErrorMessage(error)}`);
 		});
 		this.renderTranscriptionExampleReset(containerEl);
+	}
+
+	private renderLocalEnhancementPanel(
+		containerEl: HTMLElement, config: TranscriptionConfig,
+		key: "hotwordEnhancementEnabled" | "contextEnhancementEnabled"
+	): void {
+		const hotwords = key === "hotwordEnhancementEnabled";
+		const heading = this.renderCapabilityPanelHeading(containerEl, hotwords ? "热词增强" : "会议背景",
+			hotwords ? "仅使用人工批准且作用域匹配的词条。最多 100 个、合计 1000 字；权重仅用于筛选优先级。"
+				: "仅使用人工批准且作用域匹配的背景，最多 400 字；不会自动加入 Memory 内容。");
+		const initialized = this.plugin.settings.memoryInitialized;
+		const enabled = initialized && Boolean(config.localEnhancement?.[key]);
+		heading.addToggle((toggle) => toggle.setValue(enabled).setDisabled(!initialized).onChange(async (value) => {
+			const current = this.plugin.settings.offlineTranscription;
+			if (current.provider !== "local-openai-compatible") return;
+			current.localEnhancement ??= { hotwordEnhancementEnabled: false, contextEnhancementEnabled: false };
+			current.localEnhancement[key] = value;
+			await this.plugin.saveSettings();
+			this.refreshSettings();
+		}));
+		if (!initialized) this.renderMemoryInitializationCallout(containerEl);
+		const manual = new Setting(containerEl).setName(hotwords ? "人工术语" : "人工会议背景").setDesc("正在读取人工配置…")
+			.addButton((button) => button.setButtonText("打开配置文件").setDisabled(!enabled).onClick(() => void this.plugin.openTranscriptionEnhancementManualFile()));
+		new Setting(containerEl).setName("预览生效内容").setDesc("仅在本机使用。转写前核验服务能力；服务不支持时会提示。预览含预算省略数量。")
+			.addButton((button) => button.setButtonText("预览生效内容").setDisabled(!enabled).onClick(() => void this.plugin.openTranscriptionEnhancementPreview()));
+		void this.plugin.getTranscriptionEnhancementSummary().then((summary) => {
+			if (manual.settingEl.isConnected) manual.setDesc(hotwords
+				? `已配置 ${summary.manualTermCount} 个人工术语；仅已批准且作用域匹配项参与筛选。`
+				: `已配置 ${summary.manualPromptCount} 条人工背景；仅已批准且作用域匹配项参与筛选。`);
+		}).catch((error) => {
+			if (manual.settingEl.isConnected) manual.setDesc(`配置错误：${getSanitizedErrorMessage(error)}。请修正后再转写。`);
+		});
 	}
 
 	private renderTranscriptionExampleReset(containerEl: HTMLElement): void {
@@ -2110,6 +2152,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	): TranscriptionCapabilityView[] {
 		const isAliyunFiletrans = config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL;
 		const filetrans = isAliyunFiletrans ? config.aliyunFiletrans : undefined;
+		const enhancementFlags = config.provider === "local-openai-compatible" ? config.localEnhancement : filetrans;
 		const speakerEnabled = config.provider === "volcengine-agentplan" ||
 			(config.provider === "local-openai-compatible" && config.model === LOCAL_OPENAI_DIARIZATION_MODEL) ||
 			(config.provider === "mosi" && this.plugin.settings.mosiSpeakerDiarizationEnabled) ||
@@ -2140,13 +2183,13 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			"hotwords",
 			"热词增强",
 			Boolean(capability.supportsNativeHotwords),
-			filetrans?.hotwordEnhancementEnabled ? "enabled" : "disabled"
+			enhancementFlags?.hotwordEnhancementEnabled ? "enabled" : "disabled"
 		);
 		const context = featureView(
 			"context",
 			"上下文增强",
 			Boolean(capability.supportsContextEnhancement),
-			filetrans?.contextEnhancementEnabled ? "enabled" : "disabled"
+			enhancementFlags?.contextEnhancementEnabled ? "enabled" : "disabled"
 		);
 		for (const item of [hotwords, context]) {
 			if (item.supported && !this.plugin.settings.memoryInitialized) {

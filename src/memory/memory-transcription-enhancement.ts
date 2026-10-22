@@ -1,3 +1,4 @@
+import { LOCAL_ENHANCEMENT_LIMITS } from "../providers/local-asr-enhancement";
 import type { TranscriptionEnhancementSnapshot, TranscriptionHotwordWeight } from "../providers/transcription-provider";
 import { createStableFingerprint, insertOrReplaceManagedBlock } from "./memory-output";
 
@@ -103,6 +104,7 @@ export interface BuildTranscriptionEnhancementInput {
 	memoryAssertions: readonly ApprovedTranscriptionMemoryAssertion[];
 	enableHotwords?: boolean;
 	enableContext?: boolean;
+	localOnly?: boolean;
 }
 
 export function createTranscriptionEnhancementStore(at = new Date().toISOString()): TranscriptionEnhancementStore {
@@ -459,11 +461,12 @@ export function buildTranscriptionEnhancementSnapshot(
 	input: BuildTranscriptionEnhancementInput
 ): TranscriptionEnhancementSnapshot {
 	const matchingTerms = (input.enableHotwords === false ? [] : Object.values(input.store.terms))
-		.filter((term) => term.status === "approved" && scopeMatches(term.scope, input.scopes))
+		.filter((term) => term.status === "approved" && (!input.localOnly || term.source === "manual") && scopeMatches(term.scope, input.scopes))
 		.sort((left, right) => compareScopedRecords(left, right, input.scopes));
 	const selectedByText = new Map<string, TranscriptionEnhancementTerm>();
 	for (const term of matchingTerms) {
-		const key = getEffectiveTermText(term).toLocaleLowerCase();
+		const effectiveText = getEffectiveTermText(term);
+		const key = input.localOnly ? effectiveText : effectiveText.toLocaleLowerCase();
 		if (key && !selectedByText.has(key)) {
 			selectedByText.set(key, term);
 		}
@@ -471,13 +474,17 @@ export function buildTranscriptionEnhancementSnapshot(
 	const deduplicatedTerms = [...selectedByText.values()];
 	const selectedTerms: TranscriptionEnhancementTerm[] = [];
 	let superHotwordCount = 0;
+	let hotwordCharacters = 0;
 	for (const term of deduplicatedTerms) {
-		if (selectedTerms.length >= TRANSCRIPTION_ENHANCEMENT_MAX_HOTWORDS) {
+		if (selectedTerms.length >= (input.localOnly ? LOCAL_ENHANCEMENT_LIMITS.max_hotwords : TRANSCRIPTION_ENHANCEMENT_MAX_HOTWORDS)) {
 			break;
 		}
-		if (term.weight === 50 && superHotwordCount >= TRANSCRIPTION_ENHANCEMENT_MAX_SUPER_HOTWORDS) {
+		if (!input.localOnly && term.weight === 50 && superHotwordCount >= TRANSCRIPTION_ENHANCEMENT_MAX_SUPER_HOTWORDS) {
 			continue;
 		}
+		const characters = Array.from(getEffectiveTermText(term)).length;
+		if (input.localOnly && hotwordCharacters + characters > LOCAL_ENHANCEMENT_LIMITS.max_hotword_characters) continue;
+		hotwordCharacters += characters;
 		selectedTerms.push(term);
 		if (term.weight === 50) {
 			superHotwordCount += 1;
@@ -487,7 +494,7 @@ export function buildTranscriptionEnhancementSnapshot(
 	const matchingPrompts = (input.enableContext === false ? [] : Object.values(input.store.prompts))
 		.filter((prompt) => prompt.status === "approved" && scopeMatches(prompt.scope, input.scopes))
 		.sort((left, right) => compareScopedRecords(left, right, input.scopes));
-	const matchingAssertions = (input.enableContext === false ? [] : input.memoryAssertions)
+	const matchingAssertions = (input.enableContext === false || input.localOnly ? [] : input.memoryAssertions)
 		.filter((assertion) => assertionScopeMatches(assertion, input.scopes))
 		.sort((left, right) =>
 			getAssertionScopeRank(right, input.scopes) - getAssertionScopeRank(left, input.scopes) ||
@@ -503,7 +510,8 @@ export function buildTranscriptionEnhancementSnapshot(
 	let contextText = "";
 	for (const unit of contextUnits) {
 		const separator = contextText ? "\n" : "";
-		if (contextText.length + separator.length + unit.text.length > TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS) {
+		if ((input.localOnly ? Array.from(contextText + separator + unit.text).length : contextText.length + separator.length + unit.text.length) > TRANSCRIPTION_ENHANCEMENT_MAX_CONTEXT_CHARACTERS) {
+			if (input.localOnly) continue;
 			break;
 		}
 		contextText += separator + unit.text;

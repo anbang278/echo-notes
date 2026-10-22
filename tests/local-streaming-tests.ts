@@ -43,6 +43,20 @@ function fakeFiles(bytes: number): LocalDesktopFiles {
 	}; } };
 }
 
+test("explicit local enhancement never falls back to standard multipart on old or generic servers", async () => {
+	let opens = 0; let posts = 0;
+	const files: LocalDesktopFiles = { vaultRoot: () => "/isolated", async openVaultFile() { opens++; throw new Error("unexpected audio read"); } };
+	const http: LocalLoopbackHttp = { async request(_url, init) { if (init.method === "POST") posts++; return { status: 404, headers: {}, bodyText: "{}" }; } };
+	for (const baseUrl of ["http://127.0.0.1:18081/v1", "http://127.0.0.1:9999/v1"]) {
+		const provider = new LocalOpenAICompatibleProvider(app("/unused"), { ...config(baseUrl),
+			localEnhancement: { hotwordEnhancementEnabled: true, contextEnhancementEnabled: false } }, "", { http, files });
+		await assert.rejects(provider.transcribe({ audioFile: audio(32), enhancement: {
+			hotwords: [], scopeIds: [], memoryAssertionIds: [], fingerprint: "empty", omittedHotwordCount: 0, omittedContextCount: 0
+		} }), /增强/);
+	}
+	assert.equal(opens, 0); assert.equal(posts, 0);
+});
+
 test("loopback HTTP rejects remote URLs, shorthand, credentials and query redirects", () => {
 	for (const url of ["http://127.1/v1", "http://2130706433/v1", "http://0x7f000001/v1", "http://remote/v1", "http://localhost/v1?q=1", "http://a:b@localhost/v1"]) {
 		assert.throws(() => parseLoopbackUrl(url));

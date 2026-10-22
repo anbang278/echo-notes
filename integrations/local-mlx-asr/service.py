@@ -256,6 +256,7 @@ async def capabilities():
         "version": SERVICE_VERSION,
         "models": [MODEL_ID, DIAR_MODEL_ID],
         "model_capabilities": model_capabilities([MODEL_ID, DIAR_MODEL_ID]),
+        "request_lookup": True,
         "max_file_bytes": MAX_FILE_BYTES,
         "max_duration_seconds": MAX_DURATION_SECONDS,
         "chunk_bytes": CHUNK_BYTES,
@@ -308,6 +309,12 @@ async def commit_job(job_id: str, request: Request):
     start_inference(job)
     return JSONResponse(status_code=202, content={"job_id": job.id, "state": job.state},
                         headers={"X-Request-ID": request.state.request_id})
+
+
+@app.get("/v1/local-asr/requests/{client_request_id}")
+async def request_status(client_request_id: str):
+    job = await asyncio.to_thread(store.get_by_request, client_request_id)
+    return JSONResponse(job.public(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/v1/local-asr/jobs/{job_id}")

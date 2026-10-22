@@ -38,6 +38,18 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
     async def upload(self, job, data=b'test'):
         return await self.client.put(f'/v1/local-asr/jobs/{job}/audio',content=data,headers={'Content-Range':f'bytes 0-{len(data)-1}/{len(data)}','X-Chunk-SHA256':hashlib.sha256(data).hexdigest()})
 
+    async def test_request_lookup_recovers_enhanced_job_without_prompt_or_mutation(self):
+        body = {'client_request_id': 'lost-enhanced-123', 'model': service.MODEL_ID,
+                'language': 'zh', 'total_bytes': 4, 'media_type': 'audio/wav',
+                'enhancement': {'version': 1, 'hotwords': ['private-term'], 'context_text': 'private-context'}}
+        created = (await self.client.post('/v1/local-asr/jobs', json=body)).json()
+        found = await self.client.get('/v1/local-asr/requests/lost-enhanced-123')
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.json()['job_id'], created['job_id'])
+        self.assertNotIn('private', found.text)
+        self.assertEqual((await self.client.get('/v1/local-asr/requests/not-found-123')).status_code, 410)
+        self.assertEqual(len(self.store.jobs), 1)
+
     async def test_commit_once_and_control_requests_do_not_wait_for_compute(self):
         job=(await self.create()).json()['job_id']
         self.assertEqual((await self.upload(job)).status_code,200)

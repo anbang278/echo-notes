@@ -162,7 +162,9 @@ def candidate_engine(service, manifest):
         result = engine.model.generate(chunk, language=input_language, max_tokens=service.TOKEN_BUDGET,
                                        temperature=0.0, stream=False, verbose=False)
         text = result.text if hasattr(result, 'text') else result.get('text')
-        tokens = getattr(result, 'generation_tokens', 0)
+        tokens = getattr(result, 'generation_tokens', None)
+        if tokens is None:
+            tokens = len(getattr(result, 'tokens', None) or [])
         if not isinstance(text, str):
             raise ValueError('Candidate did not return plain transcription text')
         if isinstance(tokens, int) and tokens >= service.TOKEN_BUDGET:
@@ -189,6 +191,37 @@ def write_report(directory, result):
         seconds = d['listen_start']
         lines.append(f"| {seconds//60:02}:{seconds%60:02} | {', '.join(d['flags'])} | {excerpt(d['reference'])} | {excerpt(d['predicted'])} |")
     (directory/'diff.md').write_text('\n'.join(lines)+'\n')
+
+
+def write_review_materials(directory, reference, payload):
+    """Full texts and start-anchor speaker juxtaposition, without invented ends or DER."""
+    prediction = payload.get('transcript', payload.get('text', ''))
+    lines = ['# 全文对照', '', '参考稿为未校准的模型输出，用户批准的术语拼写优先。',
+             '以下保留双方全文；参考稿只提供起始时间，未推断结束时间。', '', '## 模型参考稿', '']
+    anchors = []
+    for segment in reference:
+        start = segment['start']
+        lines.extend([f"### {start//60:02}:{start%60:02} · 参考发言人 {segment['speaker_label']}", '', segment['text'], ''])
+        nearby = [{key: item.get(key) for key in ('start', 'end', 'speaker', 'speakers', 'overlap', 'text')}
+                  for item in payload.get('segments', []) if item.get('start', float('inf')) <= start+2
+                  and item.get('end', -1) >= max(0, start-2)]
+        anchors.append({'reference_start': start, 'reference_end': None, 'reference_speaker': segment['speaker_label'],
+                        'reference_text': segment['text'], 'predicted_near_anchor': nearby,
+                        'human_review': 'pending'})
+    lines.extend(['## 本地输出全文', '', prediction, ''])
+    full = directory/'full-comparison.md'
+    full.write_text('\n'.join(lines)); full.chmod(0o600)
+    write_json(directory/'speaker-review.json', {'method': 'reference_start_plus_minus_2_seconds',
+               'note': 'Anonymous labels are independent. Nearby segments are review aids, not a label mapping, precise turn match or DER.',
+               'anchors': anchors})
+    review = ['# 说话人回听对照', '', '两套匿名编号彼此独立，不直接将不同编号判错。按参考起点 ±2 秒列出本地真实片段，逐项回听。', '']
+    for item in anchors:
+        start = item['reference_start']
+        review.extend([f"## {start//60:02}:{start%60:02} · 参考发言人 {item['reference_speaker']}", '', item['reference_text'], ''])
+        for candidate in item['predicted_near_anchor']:
+            review.extend([f"- {candidate['start']:.2f}–{candidate['end']:.2f} 秒 · {candidate['speaker'] or '归属不确定'} · 重叠={candidate['overlap']}：{candidate['text']}", ''])
+    target = directory/'speaker-review.md'
+    target.write_text('\n'.join(review)); target.chmod(0o600)
 
 
 def run(opts):
@@ -273,6 +306,7 @@ def run(opts):
             score = score_reference(reference, payload.get('transcript', payload['text']), approved_terms)
             write_json(destination/'comparison.json', score)
             write_report(destination, score)
+            write_review_materials(destination, reference, payload)
             metrics_path = store.jobs_dir/job.id/'metrics.json'
             metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else engine.last_request
             write_json(destination/'metrics.json', metrics)

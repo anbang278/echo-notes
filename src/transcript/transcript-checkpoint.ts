@@ -56,7 +56,10 @@ export function createTranscriptionConfigurationFingerprint(
 					contextEnhancementEnabled: config.aliyunFiletrans.contextEnhancementEnabled,
 					enhancementFingerprint
 			}
-			: undefined
+			: undefined,
+		localEnhancement: config.provider === "local-openai-compatible" &&
+			(config.localEnhancement?.hotwordEnhancementEnabled || config.localEnhancement?.contextEnhancementEnabled)
+			? { ...config.localEnhancement, enhancementFingerprint } : undefined
 	}));
 }
 

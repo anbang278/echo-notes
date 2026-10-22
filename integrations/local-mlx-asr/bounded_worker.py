@@ -176,7 +176,7 @@ class Worker:
                 raise
             if depth >= 2 or (end - start) / sr <= MIN_RETRY_SECONDS:
                 raise  # already minimal; the failure is real
-            job.inference_counters["asr_retries"] = job.inference_counters.get("asr_retries", 0) + 1
+            job.inference_counters["token_budget_retries"] = job.inference_counters.get("token_budget_retries", 0) + 1
             window = np.asarray(audio[start:end])
             sub_boundaries = list(ba.plan_chunks(window, sr, chunk_seconds=retry_seconds))
             texts = []
@@ -294,7 +294,8 @@ class Worker:
                 isinstance(exc, InferenceFailure) and exc.code == "alignment_failed")
             if not retryable or depth >= 2 or (end-start)/sr <= MIN_RETRY_SECONDS:
                 raise
-            job.inference_counters["alignment_retries"] = job.inference_counters.get("alignment_retries", 0) + 1
+            counter = "token_budget_retries" if self._is_token_exhaustion(exc) else "alignment_retries"
+            job.inference_counters[counter] = job.inference_counters.get(counter, 0) + 1
             target = min(DIAR_RETRY_CHUNK_SECONDS / (2 ** depth), (end-start)/sr/2)
             boundaries = list(ba.plan_chunks(np.asarray(audio[start:end]), sr,
                                             chunk_seconds=target, search_seconds=min(1.0, target/4)))

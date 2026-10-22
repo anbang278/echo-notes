@@ -232,6 +232,15 @@ class JobStore:
                 raise JobError(410, "unknown_job", "Job not found or expired")
             return job
 
+    def get_by_request(self, client_request_id):
+        validate_client_request_id(client_request_id)
+        with self.lock:
+            self.prune_expired()
+            job = next((item for item in self.jobs.values() if item.client_request_id == client_request_id), None)
+            if job is None:
+                raise JobError(410, "unknown_job", "Job not found or expired")
+            return job
+
     def append_chunk(self, job, offset, payload, sha256_hex):
         if type(offset) is not int or offset < 0:
             raise JobError(400, "invalid_offset", "offset must be non-negative")

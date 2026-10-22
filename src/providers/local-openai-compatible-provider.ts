@@ -1,3 +1,4 @@
+import { localEnhancementFromSnapshot, requireLocalEnhancementCapability } from "./local-asr-enhancement";
 import type { App } from "obsidian";
 import { getAudioMimeType, isSupportedAudioFile } from "../audio/audio-detector";
 import { captureLocalSource, createDesktopFiles, verifyLocalSource, type LocalDesktopFiles } from "../network/local-desktop-files";
@@ -49,12 +50,20 @@ export class LocalOpenAICompatibleProvider implements TranscriptionProvider {
 		}
 		const capabilities = eligible ? await this.capabilities.probe(http, origin, config.model, input.signal, this.apiKey) : null;
 		throwIfAborted(input.signal);
+		const enabled = Boolean(config.localEnhancement?.hotwordEnhancementEnabled || config.localEnhancement?.contextEnhancementEnabled);
+		if (enabled && !input.enhancement) throw new TranscriptionError("api_error", "本地增强快照缺失，请检查人工配置后重新转写。");
+		const enhancement = enabled && input.enhancement ? localEnhancementFromSnapshot(input.enhancement) : undefined;
+		if (enhancement) {
+			requireLocalEnhancementCapability(capabilities?.enhancement, enhancement);
+			if (config.localEnhancement?.hotwordEnhancementEnabled && !capabilities?.enhancement?.hotwords) throw new TranscriptionError("api_error", "当前本地模型不支持热词增强。");
+			if (config.localEnhancement?.contextEnhancementEnabled && !capabilities?.enhancement?.context) throw new TranscriptionError("api_error", "当前本地模型不支持会议背景增强。");
+		}
 		if (input.resumeLocalTask && !capabilities) {
 			throw new TranscriptionError("network_error", "暂时无法核验原本地任务服务；恢复信息已保留，请恢复原服务后重试。");
 		}
 		if (capabilities) {
 			const result = await runLocalMlxJob(input.audioFile, config, {
-				http, files, capabilities, origin, apiKey: this.apiKey,
+				http, files, capabilities, origin, apiKey: this.apiKey, enhancement,
 				configurationFingerprint: input.configurationFingerprint,
 				onProgress: input.onProgress, onCheckpoint: input.onLocalCheckpoint,
 				signal: input.signal, checkpoint: input.resumeLocalTask

@@ -1,3 +1,4 @@
+import { normalizeLocalEnhancement, parseLocalEnhancementCapability, requireLocalEnhancementCapability, type LocalAsrEnhancement, type LocalEnhancementCapability } from "./local-asr-enhancement";
 import type { TFile } from "obsidian";
 import type { OfflineTranscriptionProviderId, TranscriptionConfig } from "../settings/settings";
 import { parseLocalMlxResult } from "./local-mlx-result";
@@ -26,6 +27,8 @@ export interface LocalAsrCapabilities {
 	maxFileBytes: number;
 	maxDurationSeconds: number;
 	chunkBytes: number;
+	enhancement?: LocalEnhancementCapability;
+	requestLookup?: boolean;
 }
 
 export function isEligibleLocalMlxEndpoint(baseUrl: string): boolean {
@@ -81,7 +84,11 @@ export class LocalMlxCapabilityCache {
 			|| typeof data.max_file_bytes !== "number" || !Number.isSafeInteger(data.max_file_bytes) || data.max_file_bytes <= 0
 			|| typeof data.max_duration_seconds !== "number" || !Number.isInteger(data.max_duration_seconds) || data.max_duration_seconds <= 0
 			|| typeof data.chunk_bytes !== "number" || !Number.isInteger(data.chunk_bytes) || data.chunk_bytes < 64 * 1024) return null;
+		const modelCapabilities = object(data.model_capabilities) ? data.model_capabilities[model] : undefined;
+		const enhancement = parseLocalEnhancementCapability(object(modelCapabilities) ? modelCapabilities.enhancement : undefined);
 		return {
+			...(enhancement ? { enhancement } : {}),
+			...(data.request_lookup === true ? { requestLookup: true } : {}),
 			instanceId: data.instance_id, version: typeof data.version === "string" ? data.version : "",
 			maxFileBytes: Math.min(data.max_file_bytes, MAX_FILE_BYTES),
 			maxDurationSeconds: Math.min(data.max_duration_seconds, MAX_DURATION_SECONDS),
@@ -110,8 +117,10 @@ async function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
-export async function localConfigurationFingerprint(model: string, language: string, origin: string): Promise<string> {
-	return sha256(new TextEncoder().encode(JSON.stringify(["local-openai-compatible", model, language, origin])));
+export async function localConfigurationFingerprint(model: string, language: string, origin: string, enhancement?: LocalAsrEnhancement): Promise<string> {
+	const identity: unknown[] = ["local-openai-compatible", model, language, origin];
+	if (enhancement) identity.push(enhancement);
+	return sha256(new TextEncoder().encode(JSON.stringify(identity)));
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -171,6 +180,7 @@ export interface LocalMlxTranscribeDeps {
 	origin: string;
 	apiKey: string;
 	configurationFingerprint?: string;
+	enhancement?: LocalAsrEnhancement;
 	onProgress?: (event: TranscriptionProgress) => Promise<void> | void;
 	onCheckpoint?: (task: LocalTranscriptionTaskResume) => Promise<void> | void;
 	signal?: AbortSignal;
@@ -185,8 +195,10 @@ export async function runLocalMlxJob(audioFile: TFile, config: TranscriptionConf
 	const { http, files, capabilities, signal, origin } = deps;
 	throwIfAborted(signal);
 	if (!isEligibleLocalMlxEndpoint(`${origin}/v1`)) throw new TranscriptionError("unsupported_audio", "本机任务服务地址无效。");
+	const enhancement = deps.enhancement ? normalizeLocalEnhancement(deps.enhancement) : undefined;
+	if (enhancement) requireLocalEnhancementCapability(capabilities.enhancement, enhancement);
 	const language = (config.language || "auto").toLowerCase();
-	const fingerprint = deps.configurationFingerprint ?? await localConfigurationFingerprint(config.model, language, origin);
+	const fingerprint = deps.configurationFingerprint ?? await localConfigurationFingerprint(config.model, language, origin, enhancement);
 	const handle = await files.openVaultFile(audioFile.path);
 	try {
 		const source = await captureLocalSource(handle);
@@ -236,7 +248,7 @@ export async function runLocalMlxJob(audioFile: TFile, config: TranscriptionConf
 			const created = parseJson(await request(`${origin}${PREFIX}/jobs`, {
 				method: "POST", headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ client_request_id: task.clientRequestId, model: config.model, language,
-					total_bytes: source.sourceSize, media_type: getAudioMimeType(audioFile) })
+					total_bytes: source.sourceSize, media_type: getAudioMimeType(audioFile), ...(enhancement ? { enhancement } : {}) })
 			}), "创建本地任务");
 			if (!validId(created.job_id)) throw new TranscriptionError("invalid_response", "创建任务响应缺少合法 job_id。");
 			task = { ...task, jobId: created.job_id };
@@ -310,16 +322,25 @@ async function currentInstance(http: LocalLoopbackHttp, task: LocalTranscription
 export async function cancelLocalMlxTask(http: LocalLoopbackHttp, source: LocalTranscriptionTaskResume, apiKey = ""): Promise<LocalTaskControlResult> {
 	let task: LocalTranscriptionTaskResume = { ...source, cancelRequested: true, phase: "canceling" };
 	try {
-		const instance = await currentInstance(http, task, apiKey);
-		if (instance === "unavailable") return { confirmed: false, task };
-		if (instance === "restarted") return { confirmed: true, expired: true, task: { ...task, phase: "canceled" } };
+		const capabilities = await new LocalMlxCapabilityCache().probe(http, task.origin, task.model, undefined, apiKey);
+		if (!capabilities) return { confirmed: false, task };
+		if (capabilities.instanceId !== task.instanceId) return { confirmed: true, expired: true, task: { ...task, phase: "canceled" } };
 		const headers = authorization(apiKey);
 		if (!task.jobId) {
+			// New services can recover identity without persisting or resending private prompts.
+			let created: Record<string, unknown>;
+			if (capabilities.requestLookup) {
+				if (!validId(task.clientRequestId)) return { confirmed: false, task };
+				const response = await http.request(`${task.origin}${PREFIX}/requests/${task.clientRequestId}`, { method: "GET", headers, timeoutMs: REQUEST_TIMEOUT_MS });
+				if ([404, 410].includes(response.status)) return { confirmed: true, expired: true, task: { ...task, phase: "canceled" } };
+				created = parseJson(response, "查回待取消任务");
+			} else {
 			// Recover an acknowledged-or-lost creation by its already persisted idempotency key.
-			const created = parseJson(await http.request(`${task.origin}${PREFIX}/jobs`, { method: "POST", timeoutMs: REQUEST_TIMEOUT_MS,
+				created = parseJson(await http.request(`${task.origin}${PREFIX}/jobs`, { method: "POST", timeoutMs: REQUEST_TIMEOUT_MS,
 				headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ client_request_id: task.clientRequestId,
 					model: task.model, language: task.language, total_bytes: task.sourceSize,
 					media_type: getAudioMimeType({ extension: task.sourcePath.split(".").pop() ?? "" }) }) }), "恢复待取消任务");
+			}
 			if (!validId(created.job_id) || created.instance_id !== task.instanceId) return { confirmed: false, task };
 			task = { ...task, jobId: created.job_id };
 		}

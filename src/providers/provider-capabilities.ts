@@ -186,8 +186,9 @@ export function getTranscriptionProviderCapability(
 		return createAliyunLegacyCapability();
 	}
 	const capability = TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
-	if (normalizedProviderId === "local-openai-compatible" && model === LOCAL_OPENAI_DIARIZATION_MODEL) {
-		return { ...capability, supportsTimestamp: true, supportsSpeakerDiarization: true };
+	if (normalizedProviderId === "local-openai-compatible" && (model === LOCAL_OPENAI_TRANSCRIPTION_MODEL || model === LOCAL_OPENAI_DIARIZATION_MODEL)) {
+		return { ...capability, supportsNativeHotwords: true, supportsContextEnhancement: true,
+			supportsTimestamp: model === LOCAL_OPENAI_DIARIZATION_MODEL, supportsSpeakerDiarization: model === LOCAL_OPENAI_DIARIZATION_MODEL };
 	}
 	return capability;
 }

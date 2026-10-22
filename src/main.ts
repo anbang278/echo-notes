@@ -2566,7 +2566,7 @@ export default class EchoNotesPlugin extends Plugin {
 		manualPromptCount: number;
 		pendingCandidateCount: number;
 	}> {
-		const { stats } = await this.memoryService.getTranscriptionEnhancementDocuments(this.settings);
+		const { stats } = await this.memoryService.getTranscriptionEnhancementDocuments(this.settings, getSelectedTranscriptionConfig(this.settings).provider === "local-openai-compatible");
 		return stats;
 	}
 
@@ -2578,12 +2578,15 @@ export default class EchoNotesPlugin extends Plugin {
 		try {
 			const activeFile = this.app.workspace.getActiveViewOfType(MarkdownView)?.file ?? undefined;
 			const config = getSelectedTranscriptionConfig(this.settings);
+			const localOnly = config.provider === "local-openai-compatible";
+			const flags = localOnly ? config.localEnhancement : config.aliyunFiletrans;
 			const snapshot = await this.memoryService.buildTranscriptionEnhancement(this.settings, activeFile, {
-				enableHotwords: config.aliyunFiletrans?.hotwordEnhancementEnabled ?? false,
-				enableContext: config.aliyunFiletrans?.contextEnhancementEnabled ?? false
+				localOnly,
+				enableHotwords: flags?.hotwordEnhancementEnabled ?? false,
+				enableContext: flags?.contextEnhancementEnabled ?? false
 			});
 			new TranscriptionEnhancementPreviewModal(this.app, {
-				snapshot,
+				snapshot, localOnly,
 				sourceLabel: activeFile ? `当前笔记：${activeFile.basename}` : "无活动 Markdown 笔记 · 仅全局"
 			}).open();
 		} catch (error) {
@@ -3759,11 +3762,13 @@ export default class EchoNotesPlugin extends Plugin {
 		let checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
 		const isAliyunFiletrans =
 			transcriptionConfig.provider === "aliyun-bailian" && transcriptionConfig.model === ALIYUN_FILETRANS_MODEL;
-		const hotwordEnhancementEnabled = isAliyunFiletrans &&
-			Boolean(transcriptionConfig.aliyunFiletrans?.hotwordEnhancementEnabled);
-		const contextEnhancementEnabled = isAliyunFiletrans &&
-			Boolean(transcriptionConfig.aliyunFiletrans?.contextEnhancementEnabled);
-		const usesMemoryEnhancement = isAliyunFiletrans && !options.resumeRemoteTask &&
+		const isLocalEnhancement = transcriptionConfig.provider === "local-openai-compatible";
+		const enhancementFlags = isLocalEnhancement ? transcriptionConfig.localEnhancement : transcriptionConfig.aliyunFiletrans;
+		const hotwordEnhancementEnabled = (isAliyunFiletrans || isLocalEnhancement) &&
+			Boolean(enhancementFlags?.hotwordEnhancementEnabled);
+		const contextEnhancementEnabled = (isAliyunFiletrans || isLocalEnhancement) &&
+			Boolean(enhancementFlags?.contextEnhancementEnabled);
+		const usesMemoryEnhancement = (isAliyunFiletrans || isLocalEnhancement) && !options.resumeRemoteTask &&
 			(hotwordEnhancementEnabled || contextEnhancementEnabled);
 		if (options.resumeRemoteTask) {
 			checkpointIdentity = {
@@ -3960,7 +3965,8 @@ export default class EchoNotesPlugin extends Plugin {
 				try {
 					enhancement = await this.memoryService.buildTranscriptionEnhancement(this.settings, sourceNote, {
 						enableHotwords: hotwordEnhancementEnabled,
-						enableContext: contextEnhancementEnabled
+						enableContext: contextEnhancementEnabled,
+						localOnly: isLocalEnhancement
 					});
 					checkpointIdentity = createTranscriptionCheckpointIdentity(
 						audioFile,
@@ -3968,7 +3974,7 @@ export default class EchoNotesPlugin extends Plugin {
 						enhancement.fingerprint
 					);
 					this.diagnostics.record(diagnostic.id, "configuration", "transcription-enhancement-snapshot", {
-						hotwordIds: enhancement.hotwords.map((item) => item.id),
+						hotwordIds: isLocalEnhancement ? undefined : enhancement.hotwords.map((item) => item.id),
 						memoryAssertionIds: enhancement.memoryAssertionIds,
 						hotwordCount: enhancement.hotwords.length,
 						memoryAssertionCount: enhancement.memoryAssertionIds.length,
@@ -3978,6 +3984,7 @@ export default class EchoNotesPlugin extends Plugin {
 						fingerprint: enhancement.fingerprint
 					});
 				} catch (error) {
+					if (isLocalEnhancement && error instanceof TranscriptionEnhancementDocumentError) throw new Error(`本地人工配置第 ${error.line} 行无效，请打开配置文件修正后重试。`, { cause: error });
 					if (!(error instanceof TranscriptionEnhancementDocumentError)) throw error;
 					enhancement = undefined;
 					enhancementWarning = `${error.filePath}:${error.line} ${error.message.replace(`${error.filePath}:${error.line} `, "")}`;

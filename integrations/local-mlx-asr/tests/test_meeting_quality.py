@@ -31,6 +31,17 @@ class MeetingQualityTests(unittest.TestCase):
         self.assertTrue(any('negation' in d['flags'] for d in report['differences']))
         self.assertTrue(any('number' in d['flags'] for d in report['differences']))
 
+    def test_review_outputs_keep_full_text_and_use_only_observed_speaker_times(self):
+        reference = [{'speaker_label': '1', 'start': 10, 'end': None, 'text': '不批准。'}]
+        payload = {'text': '不批准。', 'segments': [{'start': 9.8, 'end': 11.2, 'speaker': 'speaker_2', 'speakers': [2], 'text': '不批准。', 'overlap': False}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            self.module.write_review_materials(Path(tmp), reference, payload)
+            self.assertIn('不批准。', (Path(tmp)/'full-comparison.md').read_text())
+            rows = json.loads((Path(tmp)/'speaker-review.json').read_text())['anchors']
+            self.assertIsNone(rows[0]['reference_end'])
+            self.assertEqual(rows[0]['predicted_near_anchor'][0]['start'], 9.8)
+            self.assertEqual(rows[0]['reference_speaker'], '1')
+
     def test_character_distance_matches_small_dynamic_programming_oracle(self):
         rng=random.Random(23)
         def oracle(a,b):
@@ -44,6 +55,14 @@ class MeetingQualityTests(unittest.TestCase):
             a=''.join(rng.choices('甲乙123',k=rng.randrange(20)))
             b=''.join(rng.choices('甲乙123',k=rng.randrange(20)))
             self.assertEqual(self.module.character_distance(a,b),oracle(a,b))
+
+    def test_candidate_token_limit_is_checked_for_sdk_token_lists(self):
+        from types import SimpleNamespace as NS
+        class Failure(Exception): pass
+        service=NS(Engine=lambda:NS(),TOKEN_BUDGET=2,TranscriptionFailure=Failure)
+        engine=self.module.candidate_engine(service,{'backend':'mlx-audio-plus'})
+        engine.model=NS(generate=lambda *args,**kwargs:NS(text='fixture',tokens=[1,2],language='zh'))
+        with self.assertRaises(Failure):engine.generate_text([1],'Chinese')
 
     def test_candidate_requires_verified_local_files_before_loading(self):
         verify=getattr(self.module,'load_candidate_manifest',None)

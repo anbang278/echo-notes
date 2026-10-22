@@ -10,6 +10,7 @@ const origin = "http://127.0.0.1:18081";
 const config: TranscriptionConfig<OfflineTranscriptionProviderId> = { provider: "local-openai-compatible", baseUrl: `${origin}/v1`, model: "m/plain", language: "zh" };
 const caps: LocalAsrCapabilities = { instanceId: "instance-1", version: "2.0", maxFileBytes: 1073741824, maxDurationSeconds: 28800, chunkBytes: 4194304 };
 const capsWire = { service: "echonotes-mlx-asr", protocol: 1, instance_id: caps.instanceId, version: caps.version, models: [config.model], max_file_bytes: caps.maxFileBytes, max_duration_seconds: caps.maxDurationSeconds, chunk_bytes: caps.chunkBytes };
+const enhancementCapability = { hotwords: true, context: true, limits: { max_hotwords: 100, max_hotword_characters: 1000, max_context_characters: 400 } };
 const reply = (status: number, body: unknown = {}) => ({ status, headers: {}, bodyText: JSON.stringify(body) });
 const file = (size: number): TFile => ({ path: "audio/a.wav", name: "a.wav", extension: "wav", stat: { size, mtime: 1234, ctime: 1234 } }) as TFile;
 
@@ -66,6 +67,53 @@ function deps(http: LocalLoopbackHttp, size = 1024) {
 function wrapping(http: LocalLoopbackHttp, wrapper: (url: string, init: LocalHttpRequest, next: () => Promise<LocalLoopbackResponse>) => Promise<LocalLoopbackResponse>): LocalLoopbackHttp {
 	return { request: (url, init) => wrapper(url, init, () => http.request(url, init)) };
 }
+
+test("prompt snapshot is frozen in creation and changed words cannot resume the old job", async () => {
+	const h = harness();
+	const enhancement = { version: 1 as const, hotwords: ["星河"], context_text: "人工背景" };
+	const outcome = await runLocalMlxJob(file(1024), config, { ...deps(h.http), capabilities: { ...caps, enhancement: enhancementCapability }, enhancement,
+		onCheckpoint() { enhancement.hotwords[0] = "changed during upload"; } });
+	const body = JSON.parse(String(h.calls.find((call) => call.url.endsWith("/jobs"))!.init.body));
+	assert.deepEqual(body.enhancement, { version: 1, hotwords: ["星河"], context_text: "人工背景" });
+	assert.doesNotMatch(JSON.stringify(outcome.localTask), /星河|人工背景/);
+	await assert.rejects(runLocalMlxJob(file(1024), config, { ...deps(h.http), capabilities: { ...caps, enhancement: enhancementCapability },
+		enhancement, checkpoint: outcome.localTask }), /配置已变化/);
+});
+
+test("old service rejects enabled hints before opening audio; disabled creation stays unchanged", async () => {
+	const h = harness();
+	let opened = false;
+	await assert.rejects(runLocalMlxJob(file(1024), config, { ...deps(h.http), files: { vaultRoot: () => "/isolated", async openVaultFile() { opened = true; throw new Error("unexpected file read"); } },
+		enhancement: { version: 1, hotwords: [], context_text: "" } }), /增强/);
+	assert.equal(opened, false);
+	await runLocalMlxJob(file(1024), config, deps(h.http));
+	const body = JSON.parse(String(h.calls.find((call) => call.url.endsWith("/jobs"))!.init.body));
+	assert.equal("enhancement" in body, false);
+});
+
+test("model enhancement capability requires a valid explicit per-model declaration", async () => {
+	const cache = new LocalMlxCapabilityCache();
+	const response = { ...capsWire, model_capabilities: { [config.model]: { enhancement: { ...enhancementCapability, version: 1, transports: ["jobs"] } } } };
+	const result = await cache.probe({ async request() { return reply(200, response); } }, origin, config.model);
+	assert.deepEqual(result?.enhancement, enhancementCapability);
+});
+
+test("lost enhanced creation is canceled by read-only request lookup without resending prompts", async () => {
+	const h = harness();
+	const outcome = await runLocalMlxJob(file(1024), config, deps(h.http));
+	const http = wrapping(h.http, async (url, init, next) => {
+		if (url.endsWith("/capabilities")) return reply(200, { ...capsWire, request_lookup: true });
+		if (url.includes("/requests/")) {
+			assert.equal(init.method, "GET");
+			return reply(200, h.status());
+		}
+		assert.notEqual(init.method, "POST");
+		return next();
+	});
+	const result = await cancelLocalMlxTask(http, { ...outcome.localTask, jobId: undefined });
+	assert.equal(result.confirmed, true);
+	assert.equal(result.task.jobId, "job-1");
+});
 
 test("MLX gate accepts only current literal loopback service endpoints", () => {
 	for (const host of ["localhost", "127.0.0.1", "[::1]"]) assert.equal(isEligibleLocalMlxEndpoint(`http://${host}:18081/v1/`), true);

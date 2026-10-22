@@ -6038,7 +6038,9 @@ for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
 					memoryEnhancementEnabled: false
 				}
 			}
-			: customConfig
+			: provider === "local-openai-compatible"
+				? { ...customConfig, localEnhancement: { hotwordEnhancementEnabled: false, contextEnhancementEnabled: false } }
+				: customConfig
 	);
 }
 assert.equal(normalizeEchoNotesSettings({

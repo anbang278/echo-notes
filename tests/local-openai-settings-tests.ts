@@ -22,7 +22,8 @@ export function runLocalOpenAISettingsTests(): void {
 	};
 	assert.deepEqual(localConfig, {
 		provider: "local-openai-compatible", baseUrl: LOCAL_OPENAI_BASE_URL,
-		model: LOCAL_OPENAI_TRANSCRIPTION_MODEL, language: "auto"
+		model: LOCAL_OPENAI_TRANSCRIPTION_MODEL, language: "auto",
+		localEnhancement: { hotwordEnhancementEnabled: false, contextEnhancementEnabled: false }
 	});
 	assert.equal(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS["local-openai-compatible"], "本地模型（OpenAI 兼容）");
 
@@ -42,7 +43,8 @@ export function runLocalOpenAISettingsTests(): void {
 		assert.deepEqual(settings.offlineTranscription, lmConfig, "Switching back must not reset prior settings");
 		switchOfflineTranscriptionProvider(settings, "local-openai-compatible");
 		assert.deepEqual(settings.offlineTranscription, {
-			provider: "local-openai-compatible", baseUrl: "http://[::1]:23456/v1", model: "custom/local-model", language: "fr"
+			provider: "local-openai-compatible", baseUrl: "http://[::1]:23456/v1", model: "custom/local-model", language: "fr",
+			localEnhancement: { hotwordEnhancementEnabled: false, contextEnhancementEnabled: false }
 		});
 		assert.notEqual(settings.offlineTranscriptionByProvider["local-openai-compatible"], settings.offlineTranscription,
 			"Stored profiles must not alias live settings");
