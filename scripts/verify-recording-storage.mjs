@@ -223,41 +223,61 @@ export async function verifyCoreRecordingStorage(page, pluginId) {
 				contexts.push({ context, oscillator });
 				return destination.stream;
 			};
-			for (const route of ["命令", "快捷键", "麦克风按钮"]) {
-				plugin.settings.recordingStorage = { strategy: "note-subfolder", subfolder: `入口验收/${route}`, customFolder: "Recordings" };
-				await app.workspace.getLeaf(false).openFile(noteA);
-				const before = captured.length;
-				if (route === "麦克风按钮") {
-					permissionMethods.push([activeRecorder, activeRecorder.checkPermission]);
-					activeRecorder.checkPermission = async () => true;
-					activeRecorder.plugin.addedButtonEls[0].click();
-				} else if (route === "快捷键") {
-					// 快捷键分发最终调用同一个已注册 checkCallback，不更改用户热键配置。
-					check(app.commands.commands["audio-recorder:start"].checkCallback(false), "快捷键开始命令不可用");
-				} else check(app.commands.executeCommandById("audio-recorder:start"), "开始命令不可用");
-				await waitFor(() => activeRecorder.recording, `${route} 未开始录音`);
-				// recording 标志仅表示已调用 MediaRecorder.start()；等合成源实际渲染半秒音频后再停止。
-				// M4A 可能到 stop 才输出媒体内容，不要求提前产生 dataavailable 分片。
-				const sourceContext = contexts.at(-1).context;
-				const startedAudioTime = sourceContext.currentTime;
-				await waitFor(() => sourceContext.state === "running" && sourceContext.currentTime - startedAudioTime >= 0.5,
-					`${route} 合成录音的音频渲染时钟未推进`);
-				const renderedSecondsBeforeStop = sourceContext.currentTime - startedAudioTime;
-				await app.workspace.getLeaf(false).openFile(noteB);
-				if (route === "麦克风按钮") activeRecorder.plugin.addedButtonEls[0].click();
-				else if (route === "快捷键") check(app.commands.commands["audio-recorder:stop"].checkCallback(false), "快捷键停止命令不可用");
-				else check(app.commands.executeCommandById("audio-recorder:stop"), "停止命令不可用");
-				await waitFor(() => captured.length > before, `${route} 未保存录音`);
-				const audio = captured.at(-1);
-				await waitFor(() => linksTo(noteB, audio), "保存时笔记未收到可解析音频链接");
-				check(audio.parent.path === `${root}/笔记乙/入口验收/${route}`, "切换笔记后核心录音未按保存时笔记归档");
-				const savedAudio = await app.vault.readBinary(audio);
-				check(savedAudio.byteLength > 0, "核心录音保存了空文件");
-				const decodedAudio = await sourceContext.decodeAudioData(savedAudio.slice(0));
-				check(decodedAudio.duration > 0, "核心合成录音未包含可解码音频");
-				check(!linksTo(noteA, audio), "核心录音误回链开始时笔记");
-				results.push({ scenario: `核心${route}合成音频`, path: audio.path,
-					renderedSecondsBeforeStop, savedBytes: savedAudio.byteLength, decodedSeconds: decodedAudio.duration });
+			for (const strategy of ["obsidian", "same-folder", "note-subfolder", "custom-folder"]) {
+				for (const route of ["命令", "快捷键", "麦克风按钮"]) {
+					plugin.settings.recordingStorage = { strategy, subfolder: `入口验收/${route}`, customFolder: `${root}/固定录音` };
+					await app.workspace.getLeaf(false).openFile(noteA);
+					const before = captured.length;
+					if (route === "麦克风按钮") {
+						permissionMethods.push([activeRecorder, activeRecorder.checkPermission]);
+						activeRecorder.checkPermission = async () => true;
+						activeRecorder.plugin.addedButtonEls[0].click();
+					} else if (route === "快捷键") {
+						// 快捷键分发最终调用同一个已注册 checkCallback，不更改用户热键配置。
+						check(app.commands.commands["audio-recorder:start"].checkCallback(false), "快捷键开始命令不可用");
+					} else check(app.commands.executeCommandById("audio-recorder:start"), "开始命令不可用");
+					await waitFor(() => activeRecorder.recording, `${route} 未开始录音`);
+					// recording 标志仅表示已调用 MediaRecorder.start()；等合成源实际渲染半秒音频后再停止。
+					// M4A 可能到 stop 才输出媒体内容，不要求提前产生 dataavailable 分片。
+					const sourceContext = contexts.at(-1).context;
+					const startedAudioTime = sourceContext.currentTime;
+					await waitFor(() => sourceContext.state === "running" && sourceContext.currentTime - startedAudioTime >= 0.5,
+						`${route} 合成录音的音频渲染时钟未推进`);
+					const renderedSecondsBeforeStop = sourceContext.currentTime - startedAudioTime;
+					await app.workspace.getLeaf(false).openFile(noteB);
+					const editor = app.workspace.activeLeaf.view.editor;
+					const sentinel = `保留选择正文-${strategy}-${route}`;
+					const lastLine = editor.lastLine();
+					editor.replaceRange(`\n${sentinel}`, { line: lastLine, ch: editor.getLine(lastLine).length });
+					const selectedLine = editor.lastLine();
+					editor.setSelection({ line: selectedLine, ch: 0 }, { line: selectedLine, ch: sentinel.length });
+					const timesBefore = (editor.getValue().match(/录音时间：/g) ?? []).length;
+					if (route === "麦克风按钮") activeRecorder.plugin.addedButtonEls[0].click();
+					else if (route === "快捷键") check(app.commands.commands["audio-recorder:stop"].checkCallback(false), "快捷键停止命令不可用");
+					else check(app.commands.executeCommandById("audio-recorder:stop"), "停止命令不可用");
+					await waitFor(() => captured.length > before, `${route} 未保存录音`);
+					const audio = captured.at(-1);
+					await waitFor(() => linksTo(noteB, audio), "保存时笔记未收到可解析音频链接");
+					const expectedFolder = { obsidian: `${root}/原生附件`, "same-folder": `${root}/笔记乙`,
+						"note-subfolder": `${root}/笔记乙/入口验收/${route}`, "custom-folder": `${root}/固定录音` }[strategy];
+					check(audio.parent.path === expectedFolder, "核心录音未按停止时笔记与存放策略归档");
+					const content = editor.getValue();
+					check((content.match(/录音时间：/g) ?? []).length === timesBefore + 1, "单段录音必须只新增一条时间");
+					check(content.includes(sentinel), "录音插入覆盖了已选择的正文");
+					const embed = `!${app.fileManager.generateMarkdownLink(audio, noteB.path)}`;
+					const position = content.indexOf(embed);
+					check(position >= 0 && /录音时间：\d{2}:\d{2}–\d{2}:\d{2}（不到1分钟）\n$/.test(content.slice(0, position)),
+						"时间必须位于本段音频正上方");
+					check(content.indexOf(embed, position + embed.length) < 0, "单段录音重复插入链接");
+					const savedAudio = await app.vault.readBinary(audio);
+					check(savedAudio.byteLength > 0, "核心录音保存了空文件");
+					const decodedAudio = await sourceContext.decodeAudioData(savedAudio.slice(0));
+					check(decodedAudio.duration > 0, "核心合成录音未包含可解码音频");
+					check(!linksTo(noteA, audio), "核心录音误回链开始时笔记");
+					results.push({ scenario: `核心${route}-${strategy}合成音频`, timingInserted: true, selectedTextPreserved: true, path: audio.path,
+						renderedSecondsBeforeStop, savedBytes: savedAudio.byteLength, decodedSeconds: decodedAudio.duration });
+				}
+
 			}
 
 			plugin.settings.transcriptionMode = "realtime";

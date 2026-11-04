@@ -273,9 +273,15 @@ Open **Echo Notes → Transcription → Output rules → Recording storage**. Th
 
 Folders may use Chinese names and nested paths, are created when needed, and avoid collisions by numbering a new file. They must be vault-relative paths: absolute paths, URLs, `..`, empty paths, and invalid path segments are rejected. Save a folder field by pressing Enter or moving focus away; invalid values remain visible with an error instead of being silently redirected elsewhere.
 
-Core-recorder audio uses the note visible at save time and inserts its link there. With no source note, same-folder and note-subfolder strategies resolve from the vault root and the saved audio opens directly. Real-time recording freezes both its source note and storage configuration when it starts, so switching notes or editing settings does not move an in-progress recording.
+Core-recorder audio uses the note visible when recording stops and inserts its link there. With no source note, same-folder and note-subfolder strategies resolve from the vault root and the saved audio opens directly. Real-time recording freezes both its source note and storage configuration when it starts, so switching notes or editing settings does not move an in-progress recording.
 
 This setting affects only new recordings and never moves history. The separate **Transcript output strategy** continues to control transcript placement. When Echo Notes is disabled, the core recorder returns to native save behavior. If a compatible core save hook is unavailable, or a custom save fails before an audio file exists, Echo Notes reports the condition and falls back to Obsidian's attachment rule. A link-write failure after audio exists never creates a duplicate recording.
+
+## Recording time annotations
+
+The core Audio recorder's commands, hotkeys, and microphone button automatically insert the local start and end times, rounded-down duration in minutes, and audio embed together at the note cursor. The annotation uses the fixed text `录音时间：14:00–15:30（1小时30分钟）`. Same-day intervals use 24-hour `HH:mm`; intervals across dates include `YYYY-MM-DD` at both ends. Recordings shorter than a minute display `不到1分钟`.
+
+Timing starts after microphone access succeeds and ends when recording stops. Each recording gets its own annotation. The insertion preserves selected text. If you switch notes while the audio is being saved, the block is appended to the note selected at stop time with a notice. Starting another recording waits until the current one finishes saving. When timing hooks are unavailable or the system clock jumps, a notice explains that the time annotation was skipped. This feature is enabled automatically for new core-recorder recordings.
 
 ## Configure the Obsidian Core Plugin Audio Recorder
 

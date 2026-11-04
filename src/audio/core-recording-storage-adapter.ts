@@ -1,5 +1,6 @@
 import type { App, MarkdownView, TFile } from "obsidian";
 import type { RecordingStorageSettings } from "../settings/settings";
+import { formatRecordingSessionTiming, type RecordingSessionTiming } from "./recording-session-timing";
 import { RecordingMayExistError, RecordingStorageService } from "./recording-storage-service";
 
 interface CoreRecorder {
@@ -7,6 +8,8 @@ interface CoreRecorder {
 	onStartRecording: (...args: unknown[]) => unknown;
 	onStopRecording: (...args: unknown[]) => unknown;
 	extension: string;
+	startRecording?: (...args: unknown[]) => unknown;
+	recorder?: MediaRecorder | null;
 }
 
 interface AdapterOptions {
@@ -27,8 +30,31 @@ function isCoreRecorder(value: unknown): value is CoreRecorder {
 		&& typeof candidate.extension === "string";
 }
 
+interface SaveContext {
+	source: TFile | null;
+	settings: RecordingStorageSettings;
+}
+
+interface RecordingSession {
+	startedAt: number;
+	startedMonotonic: number;
+	timing: RecordingSessionTiming | null;
+	context: SaveContext | null;
+	saving?: Promise<unknown>;
+	cleanup: () => void;
+}
+
+type RecorderMethod = "saveRecording" | "onStartRecording" | "startRecording" | "onStopRecording";
+
+interface RecorderBinding {
+	recorder: CoreRecorder;
+	methods: Array<{ key: RecorderMethod; original: unknown; wrapped: unknown; owned: boolean }>;
+	session: RecordingSession | null;
+	starting: boolean;
+}
+
 export class CoreRecordingStorageAdapter {
-	private binding: { recorder: CoreRecorder; original: CoreRecorder["saveRecording"]; wrapped: CoreRecorder["saveRecording"]; owned: boolean } | null = null;
+	private binding: RecorderBinding | null = null;
 	private disposed = false;
 	private warned = false;
 
@@ -37,30 +63,148 @@ export class CoreRecordingStorageAdapter {
 	refresh(): void {
 		if (this.disposed) return;
 		const recorder = this.options.getRecorder();
-		if (this.binding && this.binding.recorder === recorder && this.binding.recorder.saveRecording === this.binding.wrapped) return;
+		if (this.binding && this.binding.recorder === recorder && this.binding.methods.every((method) => this.binding?.recorder[method.key] === method.wrapped)) return;
 		this.restore();
 		if (!isCoreRecorder(recorder)) {
-			if (!this.warned && this.options.getSettings().strategy !== "obsidian") {
-				this.options.notify("核心录音机保存接口不可用，录音存放配置暂未生效；核心录音仍使用 Obsidian 原生保存。");
+			if (recorder && !this.warned) {
+				this.options.notify("核心录音机保存接口不可用，录音时间和存放配置暂未生效；核心录音仍使用 Obsidian 原生保存。");
 				this.warned = true;
 			}
 			return;
 		}
 		const original = recorder.saveRecording;
-		const owned = Object.hasOwn(recorder, "saveRecording");
-		const wrapped = async (data: ArrayBuffer): Promise<unknown> => {
-			if (this.disposed || this.options.getSettings().strategy === "obsidian") return await original.call(recorder, data);
-			return this.save(recorder, original, data);
-		};
+		const binding: RecorderBinding = { recorder, methods: [], session: null, starting: false };
+		this.binding = binding;
 		try {
-			recorder.saveRecording = wrapped;
-			this.binding = { recorder, original, wrapped, owned };
+			this.wrap(binding, "saveRecording", async (data: ArrayBuffer): Promise<unknown> => {
+				const session = binding.session?.context ? binding.session : null;
+				if (this.disposed || this.binding !== binding || (!session && this.options.getSettings().strategy === "obsidian")) {
+					const result: unknown = await original.call(recorder, data);
+					return result;
+				}
+				if (session?.saving) return session.saving;
+				const operation = this.save(recorder, original, data, session);
+				if (session) session.saving = operation;
+				try {
+					return await operation;
+				} finally {
+					if (session) this.clearSession(binding, session);
+				}
+			});
+		} catch {
+			this.restore();
+			this.warn("无法接入核心录音机保存接口，录音时间和存放配置暂未生效；将使用 Obsidian 原生保存。");
+			return;
+		}
+		if (typeof recorder.startRecording !== "function") {
+			this.warn("核心录音机计时接口不可用，无法标注录音时间；录音仍可正常保存。");
+			return;
+		}
+		try {
+			this.bindTiming(binding);
 			this.warned = false;
 		} catch {
-			if (!this.warned && this.options.getSettings().strategy !== "obsidian") {
-				this.options.notify("无法接入核心录音机保存接口，录音存放配置暂未生效；将使用 Obsidian 原生保存。");
-				this.warned = true;
+			// Keep the working storage wrapper even when the timing hooks are read-only.
+			this.restoreMethods(binding, binding.methods.splice(1));
+			this.warn("无法接入核心录音机计时接口，无法标注录音时间；录音仍可正常保存。");
+		}
+	}
+
+	private warn(message: string): void {
+		if (!this.warned) this.options.notify(message);
+		this.warned = true;
+	}
+
+	private wrap(binding: RecorderBinding, key: RecorderMethod, wrapped: unknown): void {
+		const recorder = binding.recorder;
+		const method = { key, original: recorder[key], wrapped, owned: Object.hasOwn(recorder, key) };
+		if (!Reflect.set(recorder, key, wrapped) || recorder[key] !== wrapped) throw new Error("核心录音机接口不可写。");
+		binding.methods.push(method);
+	}
+
+	private bindTiming(binding: RecorderBinding): void {
+		const recorder = binding.recorder;
+		const originalStart = recorder.onStartRecording;
+		const originalCapture = recorder.startRecording!;
+		const originalStop = recorder.onStopRecording;
+		this.wrap(binding, "onStartRecording", async (...args: unknown[]) => {
+			if (binding.starting || binding.session) {
+				this.options.notify("录音正在启动、录制或保存，请完成当前录音后再开始。");
+				return;
 			}
+			binding.starting = true;
+			try {
+				const result: unknown = await originalStart.apply(recorder, args);
+				return result;
+			} finally {
+				binding.starting = false;
+				if (this.binding !== binding) this.restoreMethods(binding, binding.methods);
+			}
+		});
+		this.wrap(binding, "startRecording", (...args: unknown[]) => {
+			if (this.disposed || this.binding !== binding) {
+				// Permission may resolve after unload. Release this late stream before the core creates a recorder.
+				const stream = args[0] as MediaStream | undefined;
+				stream?.getTracks?.().forEach((track) => track.stop());
+				throw new Error("Echo Notes 已停用，录音启动已取消，请重新开始录音。");
+			}
+			const result: unknown = originalCapture.apply(recorder, args);
+			const media = recorder.recorder;
+			if (media?.state !== "recording") {
+				this.warn("未能确认录音开始时间，录音保存后将跳过时间标注。");
+				return result;
+			}
+			const session: RecordingSession = {
+				startedAt: Date.now(), startedMonotonic: performance.now(), timing: null, context: null,
+				cleanup: () => { media.removeEventListener("stop", stopped); media.removeEventListener("error", failed); }
+			};
+			const stopped = () => this.captureStop(binding, session);
+			const failed = () => {
+				this.options.notify("核心录音机发生错误，无法确认本段录音时间，请检查已保存的音频。");
+				this.clearSession(binding, session);
+			};
+			media.addEventListener("stop", stopped, { once: true });
+			media.addEventListener("error", failed, { once: true });
+			binding.session = session;
+			return result;
+		});
+		this.wrap(binding, "onStopRecording", (...args: unknown[]) => {
+			const session = binding.session;
+			if (session?.context) return;
+			const endedAt = Date.now();
+			const endedMonotonic = performance.now();
+			const result: unknown = originalStop.apply(recorder, args);
+			if (session) this.captureStop(binding, session, endedAt, endedMonotonic);
+			return result;
+		});
+	}
+
+	private captureStop(binding: RecorderBinding, session: RecordingSession, endedAt = Date.now(), endedMonotonic = performance.now()): void {
+		if (this.disposed || this.binding !== binding || session.context) return;
+		session.context = this.captureContext();
+		const timing = { startedAt: session.startedAt, endedAt, durationMs: endedMonotonic - session.startedMonotonic };
+		if (formatRecordingSessionTiming(timing)) session.timing = timing;
+		else this.options.notify("系统时间发生变化或录音计时异常，已跳过时间标注；录音仍会保存。");
+	}
+
+	private captureContext(): SaveContext {
+		const file = this.options.app.workspace.getActiveFile();
+		return {
+			source: file?.extension === "md" ? file : null,
+			settings: { ...this.options.getSettings() }
+		};
+	}
+
+	private clearSession(binding: RecorderBinding, session: RecordingSession): void {
+		session.cleanup();
+		if (binding.session === session) binding.session = null;
+	}
+
+	private restoreMethods(binding: RecorderBinding, methods: RecorderBinding["methods"]): void {
+		for (const method of [...methods].reverse()) {
+			if (binding.recorder[method.key] !== method.wrapped) continue;
+			if (method.owned) Reflect.set(binding.recorder, method.key, method.original);
+			else Reflect.deleteProperty(binding.recorder, method.key);
 		}
 	}
 
@@ -71,26 +215,33 @@ export class CoreRecordingStorageAdapter {
 
 	private restore(): void {
 		const binding = this.binding;
-		if (binding && binding.recorder.saveRecording === binding.wrapped) {
-			if (binding.owned) binding.recorder.saveRecording = binding.original;
-			else Reflect.deleteProperty(binding.recorder, "saveRecording");
+		if (binding) {
+			if (binding.session) this.clearSession(binding, binding.session);
+			// The in-flight native onStartRecording calls this.startRecording after permission resolves.
+			// Keep that one guard until the pending start settles so a late stream cannot escape unload.
+			const methods = binding.starting ? binding.methods.filter((method) => method.key !== "startRecording") : binding.methods;
+			this.restoreMethods(binding, methods);
 		}
 		this.binding = null;
 	}
 
-	private async save(recorder: CoreRecorder, original: CoreRecorder["saveRecording"], data: ArrayBuffer): Promise<unknown> {
-		const { app, storage, getSettings, getView, notify } = this.options;
-		const activeFile = app.workspace.getActiveFile();
-		const source = activeFile?.extension === "md" ? activeFile : null;
+	private async save(recorder: CoreRecorder, original: CoreRecorder["saveRecording"], data: ArrayBuffer, session: RecordingSession | null): Promise<unknown> {
+		const { app, storage, notify } = this.options;
+		const { source, settings } = session?.context ?? this.captureContext();
 		const sourcePath = source?.path ?? "";
-		const view = getView();
-		const settings = { ...getSettings() };
 		const extension = recorder.extension;
 		let file: TFile;
 		try {
 			const date = new Date();
 			const timestamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
-			file = await storage.createBinary({ settings, sourcePath, name: `Recording ${timestamp}`, extension }, data);
+			const name = `Recording ${settings.strategy === "obsidian" ? timestamp.replace(" ", "") : timestamp}`;
+			try {
+				file = await storage.createBinary({ settings, sourcePath, name, extension }, data);
+			} catch (error) {
+				if (!session || settings.strategy === "obsidian" || error instanceof RecordingMayExistError) throw error;
+				file = await storage.createBinary({ settings: { ...settings, strategy: "obsidian" }, sourcePath, name, extension }, data);
+				notify(`自定义录音目录保存失败，已回退 Obsidian 附件规则：${file.path}`);
+			}
 		} catch (error) {
 			if (error instanceof RecordingMayExistError) {
 				notify(`录音创建时发生错误，${error.path} 可能已保存；为避免重复保存，请先检查该文件是否存在且完整。`);
@@ -99,12 +250,20 @@ export class CoreRecordingStorageAdapter {
 			return this.fallback(recorder, original, data);
 		}
 		try {
+			if (this.disposed) return file;
 			if (source && source.extension === "md") {
+				if (app.vault.getAbstractFileByPath(source.path) !== source) throw new Error("来源笔记已不存在。");
 				const link = app.fileManager.generateMarkdownLink(file, source.path);
 				const embed = link.startsWith("!") ? link : `!${link}`;
-				if (view?.file === source && app.workspace.getActiveFile() === source) view.editor.replaceSelection(`${embed}\n`);
-				else if (app.vault.getAbstractFileByPath(source.path) === source) await app.vault.process(source, (content) => `${content}\n${embed}\n`);
-				else throw new Error("来源笔记已不存在。");
+				const time = session?.timing ? formatRecordingSessionTiming(session.timing) : null;
+				const block = `${time ? `${time}\n` : ""}${embed}\n`;
+				const view = this.options.getView();
+				if (view?.file === source && app.workspace.getActiveFile() === source) {
+					view.editor.replaceRange(`\n${block}`, view.editor.getCursor());
+				} else {
+					await app.vault.process(source, (content) => `${content}\n${block}`);
+					if (session) notify("录音及时间已追加到停止录音时的笔记末尾。");
+				}
 			} else {
 				await app.workspace.getLeaf(false).openFile(file);
 			}

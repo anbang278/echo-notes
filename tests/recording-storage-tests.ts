@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { mock } from "node:test";
+import { formatRecordingSessionTiming } from "../src/audio/recording-session-timing";
 import type { App, MarkdownView, TFile } from "obsidian";
 import { normalizeRecordingStorageSettings, type RecordingStorageSettings } from "../src/settings/settings";
 import { resolveRecordingFolder, validateRecordingStorage } from "../src/audio/recording-storage-path";
@@ -185,4 +187,229 @@ export async function runRecordingStorageTests(): Promise<void> {
 	incompatible.adapter.refresh();
 	assert.equal(incompatible.notices.length, 1, "不兼容只提示一次并保留原方法");
 	assert.equal(incompatible.getRecorder().saveRecording, incompatible.native);
+	await runRecordingTimingTests();
+}
+
+function timedFixture() {
+	const f = fixture();
+	let permission: () => Promise<void> = async () => undefined;
+	let permissionRequests = 0;
+	let releasedTracks = 0;
+	let captures = 0;
+	const recorder = {
+		saveRecording: f.native,
+		extension: "webm",
+		recording: false,
+		recorder: null as (EventTarget & { state: string }) | null,
+		async onStartRecording() {
+			permissionRequests++;
+			await permission();
+			this.startRecording({ getTracks: () => [{ stop: () => { releasedTracks++; } }] });
+			this.recording = true;
+		},
+		startRecording(_stream?: unknown) {
+			captures++;
+			this.recorder = Object.assign(new EventTarget(), { state: "recording" });
+		},
+		onStopRecording() {
+			assert.equal(this.recording, true, "不能重复停止");
+			this.recording = false;
+			this.recorder!.state = "inactive";
+			this.recorder!.dispatchEvent(new Event("stop"));
+		}
+	};
+	const originalMethods = { startRecording: recorder.startRecording, onStartRecording: recorder.onStartRecording, onStopRecording: recorder.onStopRecording };
+	f.setRecorder(recorder);
+	f.adapter.refresh();
+	return { ...f, recorder, originalMethods, permissionRequests: () => permissionRequests, captures: () => captures,
+		releasedTracks: () => releasedTracks, setPermission: (fn: () => Promise<void>) => { permission = fn; } };
+}
+
+async function runRecordingTimingTests(): Promise<void> {
+	const local = (year: number, month: number, day: number, hour: number, minute: number) => new Date(year, month - 1, day, hour, minute).getTime();
+	const start = local(2026, 11, 4, 14, 0);
+	const format = (durationMs: number) => formatRecordingSessionTiming({ startedAt: start, endedAt: start + durationMs, durationMs });
+	assert.equal(format(59999), "录音时间：14:00–14:00（不到1分钟）");
+	assert.equal(format(60000), "录音时间：14:00–14:01（1分钟）");
+	assert.equal(format(3600000), "录音时间：14:00–15:00（1小时）");
+	assert.equal(format(5400999), "录音时间：14:00–15:30（1小时30分钟）");
+	const midnight = local(2026, 12, 31, 23, 30);
+	assert.equal(formatRecordingSessionTiming({ startedAt: midnight, endedAt: midnight + 3000000, durationMs: 3000000 }),
+		"录音时间：2026-12-31 23:30–2027-01-01 00:20（50分钟）");
+	assert.equal(formatRecordingSessionTiming({ startedAt: start, endedAt: start + 3600000, durationMs: 1000 }), null);
+	assert.equal(formatRecordingSessionTiming({ startedAt: NaN, endedAt: start, durationMs: 0 }), null);
+	assert.equal(formatRecordingSessionTiming({ startedAt: start, endedAt: start - 1, durationMs: -1 }), null);
+
+	let wall = start;
+	let monotonic = 0;
+	const wallClock = mock.method(Date, "now", () => wall);
+	const elapsedClock = mock.method(performance, "now", () => monotonic);
+	const advance = (ms: number) => { wall += ms; monotonic += ms; };
+	const data = new Uint8Array([4, 5, 6]).buffer;
+	try {
+		for (const strategy of ["obsidian", "same-folder", "note-subfolder", "custom-folder"] as const) {
+			const f = timedFixture();
+			const note = f.setNote("会议/测试.md");
+			f.setSettings({ ...defaults(), strategy });
+			let resolvePermission!: () => void;
+			f.setPermission(() => new Promise<void>((resolve) => { resolvePermission = resolve; }));
+			const pendingStart = f.recorder.onStartRecording();
+			await f.recorder.onStartRecording();
+			assert.equal(f.permissionRequests(), 1, "启动期间应阻止重复麦克风申请");
+			advance(120000);
+			resolvePermission();
+			await pendingStart;
+			let text = "前文保留选中文字后文";
+			const view = { file: note, editor: {
+				getCursor: () => ({ line: 0, ch: 2 }),
+				replaceRange: (value: string) => { text = text.slice(0, 2) + value + text.slice(2); },
+				replaceSelection: () => { throw new Error("不得覆盖选择正文"); }
+			} } as unknown as MarkdownView;
+			f.setView(view);
+			advance(5400000);
+			f.recorder.onStopRecording();
+			f.recorder.onStopRecording();
+			await f.recorder.onStartRecording();
+			assert.equal(f.permissionRequests(), 1, "保存前应阻止下一段录音");
+			advance(120000);
+			const saved = await f.recorder.saveRecording(data) as TFile;
+			assert.equal(f.nativeCalls(), 0, "有计时的默认附件模式也必须经过统一存储");
+			assert.equal((text.match(/录音时间：/g) ?? []).length, 1);
+			assert.ok(text.includes("（1小时30分钟）"), "授权等待与保存延迟不得计入录音");
+			assert.ok(text.includes(saved.path));
+			assert.ok(text.endsWith("保留选中文字后文"));
+			f.setPermission(async () => undefined);
+			await f.recorder.onStartRecording();
+			advance(500);
+			f.recorder.onStopRecording();
+			await f.recorder.saveRecording(data);
+			assert.equal((text.match(/录音时间：/g) ?? []).length, 2, "第二段应独立生成时间");
+			f.adapter.dispose();
+		}
+
+		const switched = timedFixture();
+		switched.setNote("停止时.md");
+		await switched.recorder.onStartRecording();
+		advance(60000);
+		switched.recorder.onStopRecording();
+		switched.setNote("保存时.md");
+		await switched.recorder.saveRecording(data);
+		assert.match(switched.contents.get("停止时.md") ?? "", /录音时间：/);
+		assert.equal(switched.contents.get("保存时.md"), undefined);
+		assert.match(switched.notices.at(-1) ?? "", /笔记末尾/);
+
+		const deleted = timedFixture();
+		const note = deleted.setNote("已删除.md")!;
+		await deleted.recorder.onStartRecording();
+		deleted.recorder.onStopRecording();
+		deleted.files.delete(note.path);
+		const orphan = await deleted.recorder.saveRecording(data) as TFile;
+		assert.ok(deleted.files.has(orphan.path));
+		assert.match(deleted.notices.at(-1) ?? "", /插入或打开失败/);
+
+		const fallback = timedFixture();
+		fallback.setNote("回退.md");
+		fallback.setSettings({ ...defaults(), strategy: "custom-folder", customFolder: "../invalid" });
+		await fallback.recorder.onStartRecording();
+		fallback.recorder.onStopRecording();
+		const attachment = await fallback.recorder.saveRecording(data) as TFile;
+		assert.ok(attachment.path.startsWith("Attachments/"));
+		assert.match(fallback.contents.get("回退.md") ?? "", /录音时间：/);
+		assert.equal(fallback.nativeCalls(), 0);
+
+		const denied = timedFixture();
+		denied.setPermission(async () => { throw new Error("denied"); });
+		await assert.rejects(denied.recorder.onStartRecording(), /denied/);
+		assert.equal(denied.captures(), 0);
+		denied.setPermission(async () => undefined);
+		await denied.recorder.onStartRecording();
+		denied.recorder.onStopRecording();
+		await denied.recorder.saveRecording(data);
+
+		const late = timedFixture();
+		let allow!: () => void;
+		late.setPermission(() => new Promise<void>((resolve) => { allow = resolve; }));
+		const starting = late.recorder.onStartRecording();
+		late.adapter.dispose();
+		allow();
+		await assert.rejects(starting, /启动已取消/);
+		assert.equal(late.captures(), 0);
+		assert.equal(late.releasedTracks(), 1);
+		assert.equal(late.recorder.startRecording, late.originalMethods.startRecording);
+		assert.equal(late.recorder.onStartRecording, late.originalMethods.onStartRecording);
+		assert.equal(late.recorder.saveRecording, late.native);
+
+		const slow = timedFixture();
+		slow.setNote("慢保存.md");
+		slow.app.fileManager.generateMarkdownLink = (file) => `[audio](${file.path})`;
+		await slow.recorder.onStartRecording();
+		slow.recorder.onStopRecording();
+		let finishSave!: () => void;
+		const createBinary = slow.app.vault.createBinary.bind(slow.app.vault);
+		let creations = 0;
+		slow.app.vault.createBinary = async (...args) => {
+			creations++;
+			await new Promise<void>((resolve) => { finishSave = resolve; });
+			return createBinary(...args);
+		};
+		const firstSave = slow.recorder.saveRecording(data);
+		const repeatedSave = slow.recorder.saveRecording(data);
+		await slow.recorder.onStartRecording();
+		assert.equal(slow.permissionRequests(), 1);
+		// Let storage's queued directory/path checks reach the actual write.
+		while (!finishSave) await Promise.resolve();
+		finishSave();
+		assert.equal(await firstSave, await repeatedSave);
+		assert.equal(creations, 1, "保存中的重复调用应共享同一个录音文件");
+		assert.match(slow.contents.get("慢保存.md") ?? "", /!\[audio\]\(/);
+
+		const unloading = timedFixture();
+		unloading.setNote("保存中停用.md");
+		await unloading.recorder.onStartRecording();
+		unloading.recorder.onStopRecording();
+		unloading.setAfterCreate(() => unloading.adapter.dispose());
+		const preserved = await unloading.recorder.saveRecording(data) as TFile;
+		assert.ok(unloading.files.has(preserved.path));
+		assert.equal(unloading.contents.get("保存中停用.md"), undefined);
+
+		const noNote = timedFixture();
+		await noNote.recorder.onStartRecording();
+		noNote.recorder.onStopRecording();
+		const opened = await noNote.recorder.saveRecording(data) as TFile;
+		assert.equal(noNote.opened.at(-1), opened.path);
+
+		const rebinding = timedFixture();
+		const originalStart = rebinding.recorder.onStartRecording;
+		const replacement = rebinding.makeRecorder();
+		rebinding.setRecorder(replacement);
+		rebinding.adapter.refresh();
+		assert.notEqual(rebinding.recorder.onStartRecording, originalStart);
+		assert.equal(rebinding.recorder.saveRecording, rebinding.native);
+		rebinding.adapter.dispose();
+		assert.equal(replacement.saveRecording, rebinding.native);
+
+		const readOnly = fixture();
+		const incompatible = readOnly.makeRecorder();
+		const originalOnStart = incompatible.onStartRecording;
+		Object.defineProperty(incompatible, "startRecording", { value: () => undefined, writable: false });
+		readOnly.setRecorder(incompatible);
+		readOnly.adapter.refresh();
+		assert.equal(incompatible.onStartRecording, originalOnStart, "计时绑定失败应还原已经包装的启动方法");
+		assert.notEqual(incompatible.saveRecording, readOnly.native, "计时绑定失败仍应保留存储适配");
+		assert.match(readOnly.notices.at(-1) ?? "", /无法标注录音时间/);
+		readOnly.adapter.dispose();
+		assert.equal(incompatible.saveRecording, readOnly.native);
+
+		const changedClock = timedFixture();
+		changedClock.setNote("时钟变化.md");
+		await changedClock.recorder.onStartRecording();
+		wall += 600000;
+		changedClock.recorder.onStopRecording();
+		await changedClock.recorder.saveRecording(data);
+		assert.ok(!changedClock.contents.get("时钟变化.md")?.includes("录音时间："));
+		assert.ok(changedClock.notices.some((notice) => notice.includes("计时异常")));
+	} finally {
+		wallClock.mock.restore();
+		elapsedClock.mock.restore();
+	}
 }
