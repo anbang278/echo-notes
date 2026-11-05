@@ -6,18 +6,23 @@ const END = "<!-- echo-notes-recording-summary:end -->";
 
 export async function verifyRecordingSummary(page, pluginId) {
 	const summaries = {
-		basic: "新员工围绕销售沟通开展话术培训，通过模拟客户提问练习沟通顺序、需求确认和表达语气，帮助新人理解从开场到跟进的实际业务流程。",
-		repeated: "新员工继续进行销售话术对练，重点练习客户需求确认与问题回应，通过模拟沟通熟悉开场、提问和后续跟进的操作方式。",
-		second: "项目成员核对订单交付流程，围绕订单确认、仓储出库和异常跟进讨论各环节的职责，整理需要进一步核实的业务场景。",
-		first: "项目评审围绕客户任务流程展开，核对需求收集、责任分配和异常处理的实际操作，以明确后续方案需要覆盖的业务范围。",
-		later: "项目成员讨论客户任务的界面呈现，通过检查表单字段、操作入口和状态提示，梳理一线人员完成任务时需要的信息。",
-		old: "旧一轮讨论围绕订单报表开展，核对历史统计口径和数据来源，以整理当时尚需确认的字段含义与计算方式。",
-		newer: "新一轮讨论聚焦订单异常处理，通过核对缺货、取消和补发场景中的实际操作，明确各岗位需要跟进的工作范围。",
-		retry: "重新分析的录音记录了新员工销售培训，通过客户问答对练讲解需求确认、话术衔接和表达语气，帮助新人熟悉沟通流程。",
-		"capture-old": "来源读取较慢的旧讨论围绕历史订单报表开展，核对统计口径和数据来源，以整理当时尚需确认的字段含义与计算方式。",
-		"capture-new": "来源读取期间启动的新讨论聚焦订单异常处理，通过核对缺货、取消和补发场景中的操作，明确各岗位需要跟进的工作范围。",
-		shared: "并发请求共享的录音记录了客户服务流程讨论，成员通过核对需求登记、责任分派和异常跟进的实际操作，梳理各岗位的协作范围。"
+		basic: "新员工销售话术培训与客户沟通模拟对练",
+		repeated: "新员工客户需求确认与问题回应话术对练",
+		second: "订单交付各环节职责与异常跟进流程核对",
+		first: "客户任务流程需求与异常处理方案评审",
+		later: "客户任务表单字段与操作状态提示讨论",
+		old: "历史订单报表统计口径与数据来源核对",
+		newer: "订单缺货取消与补发异常处理职责核对",
+		retry: "新员工销售问答与话术衔接表达语气复盘",
+		"capture-old": "历史订单报表字段含义与计算方式核对",
+		"capture-new": "订单异常处理操作与岗位跟进范围讨论",
+		shared: "客户服务需求登记分派与异常跟进流程讨论",
+		migration: "新员工销售话术训练与客户沟通流程复盘"
 	};
+	for (const [key, summary] of Object.entries(summaries)) {
+		const characters = Array.from(summary).length;
+		assert(characters >= 15 && characters <= 30, `摘要场景 ${key} 长度不在15–30字范围内`);
+	}
 	const calls = [];
 	const completions = [];
 	const server = createServer(async (request, response) => {
@@ -33,7 +38,7 @@ export async function verifyRecordingSummary(page, pluginId) {
 			const key = /\[summary-host-case:([a-z-]+)\]/.exec(user)?.[1];
 			assert(key, "录音摘要 Mock 请求缺少场景标识");
 			assert(system.includes(START) && system.includes(END), "最终分析请求缺少摘要输出契约");
-			assert(system.includes("用途明确") && system.includes("150"), "摘要提示缺少用途或字数要求");
+			assert(/15[–-]30/.test(system) && (system.includes("主题") || system.includes("用途")), "摘要提示缺少主题用途或15–30字要求");
 			calls.push(key);
 			const finish = () => {
 				completions.push(key);
@@ -92,6 +97,10 @@ export async function verifyRecordingSummary(page, pluginId) {
 			});
 			const tasksFor = (transcript) => plugin.taskCenter.getTasks().filter((task) =>
 				task.kind === "analysis" && task.targetPath === transcript.path);
+			const checkPlainSummaries = (content, count) => {
+				check(!content.includes(start) && !content.includes(end), "来源笔记仍包含摘要HTML标记");
+				check(content.split("｜AI 总结：").length - 1 === count, "来源笔记摘要数量异常");
+			};
 			try {
 				plugin.settings = {
 					...JSON.parse(JSON.stringify(original.settings)),
@@ -133,20 +142,27 @@ export async function verifyRecordingSummary(page, pluginId) {
 				await app.workspace.getLeaf(false).openFile(transcriptA);
 				await plugin.runAnalysisBatch(transcriptA, [template("basic")]);
 				let content = await readNote(note);
-				check(content.includes(`${manual}${start}｜AI 总结：${summaries.basic}${end}`), "首轮摘要没有保留手写说明并写入时间行");
+				check(content.includes(`${manual}｜AI 总结：${summaries.basic}`), "首轮摘要没有保留手写说明并写入时间行");
+				checkPlainSummaries(content, 1);
 				check((await app.vault.read(transcriptA)).includes("echo_notes_recording_summary"), "摘要未持久化到转写技术信息");
 				check(tasksFor(transcriptA).every((task) => task.status === "success"), "首轮分析未记录为成功");
 				const untouchedSecond = content.split("\n").find((line) => line.startsWith("录音时间：10:00"));
 				check(untouchedSecond === "录音时间：10:00–10:30（30分钟）", "首轮摘要写入了其他录音");
 
 				await app.workspace.getLeaf(false).openFile(note);
+				const noteEditor = app.workspace.getLeavesOfType("markdown").find((leaf) => leaf.view.file === note).view.editor;
+				const handwrittenSuffix = "；手写补充保留。";
+				const firstTimeLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("录音时间：08:54"));
+				noteEditor.replaceRange(handwrittenSuffix, { line: firstTimeLine, ch: noteEditor.getLine(firstTimeLine).length });
 				await plugin.runAnalysisBatch(transcriptA, [template("repeated", "basic")]);
 				content = await readNote(note);
 				check(content.includes(summaries.repeated) && !content.includes(summaries.basic), "重新分析未更新原摘要");
-				check(content.split(start).length - 1 === 1 && content.includes(manual), "重新分析重复追加或改写了手写说明");
+				checkPlainSummaries(content, 1);
+				check(content.includes(`${manual}｜AI 总结：${summaries.repeated}${handwrittenSuffix}`), "重新分析改写了摘要前后手写说明");
 				await plugin.runAnalysisBatch(transcriptB, [template("second")]);
 				content = await readNote(note);
-				check(content.split(start).length - 1 === 2 && content.includes(summaries.repeated) && content.includes(summaries.second), "多录音摘要位置不独立");
+				checkPlainSummaries(content, 2);
+				check(content.includes(summaries.repeated) && content.includes(summaries.second), "多录音摘要位置不独立");
 
 				await plugin.runAnalysisBatch(transcriptC, [template("basic", "no-time")]);
 				check(await readNote(noTime) === noTimeText, "无录音时间时改写了笔记");
@@ -173,7 +189,8 @@ export async function verifyRecordingSummary(page, pluginId) {
 				await plugin.retryAnalysisTask(transcriptA.path, retryTemplate.id);
 				content = await readNote(note);
 				check(content.includes(summaries.retry) && !content.includes(summaries.newer), "重试入口没有更新摘要");
-				check(content.split(start).length - 1 === 2 && content.includes("其他手写正文。"), "最终笔记存在重复摘要或正文丢失");
+				checkPlainSummaries(content, 2);
+				check(content.includes("其他手写正文。") && content.includes(handwrittenSuffix), "最终笔记手写正文丢失");
 
 				const sourceLinks = plugin.transcriptLinkService;
 				const originalCapture = sourceLinks.captureTranscriptSourceAnchor;
@@ -252,13 +269,28 @@ export async function verifyRecordingSummary(page, pluginId) {
 					adapter.getPendingSource = originalPendingSource;
 					plugin.processAudioToTranscript = originalProcess;
 				}
+				const oldLongSummary = "旧版合成摘要记录新员工参加销售话术培训，通过模拟客户沟通核对提问顺序、需求确认、话术衔接和表达语气，帮助新人理解实际销售沟通流程。";
+				check(Array.from(oldLongSummary).length > 30, "旧版迁移样例应超过30字");
+				const legacyPrefix = "录音时间：10:00–10:30（30分钟）：迁移前手写。";
+				const legacySuffix = "迁移后手写。";
+				const secondTimeLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("录音时间：10:00"));
+				noteEditor.replaceRange(`${legacyPrefix}${start}｜AI 总结：${oldLongSummary}${end}${legacySuffix}`,
+					{ line: secondTimeLine, ch: 0 }, { line: secondTimeLine, ch: noteEditor.getLine(secondTimeLine).length });
+				await plugin.runAnalysisBatch(transcriptB, [template("migration")]);
+				content = await readNote(note);
+				checkPlainSummaries(content, 2);
+				check(content.includes(`${legacyPrefix}｜AI 总结：${summaries.migration}${legacySuffix}`),
+					"旧版标记迁移未保留前后手写文字并替换为短摘要");
+				check(!content.includes(oldLongSummary), "旧版长摘要迁移后仍存在");
 				return {
 					requestToSourceWriteback: true, manualTextPreserved: true, idempotentEditorUpdate: true,
 					multipleRecordings: true, missingTimeKeepsAnalysisSuccess: true,
 					multiTemplateInputOrder: true, missingSummaryKeepsAnalysisSuccess: true,
 					failedTemplateFallback: true, staleBatchCannotOverwrite: true, retryUpdatesSummary: true,
 					delayedSourceKeepsBothAnalyses: true, duplicateAnalysisSharesPromise: true,
-					automaticCreateWaitsForSource: true
+					automaticCreateWaitsForSource: true, sourceNoteHasNoHtmlMarkers: true,
+					shortSummary15To30Characters: true, legacyMarkersMigratedWithManualText: true,
+					manualPrefixAndSuffixPreserved: true
 				};
 			} finally {
 				await Promise.allSettled([...plugin.processingAnalyses.values()]);
@@ -280,7 +312,7 @@ export async function verifyRecordingSummary(page, pluginId) {
 				}
 			}
 		}, { id: pluginId, baseUrl: `http://127.0.0.1:${address.port}/v1`, summaries, start: START, end: END });
-		assert.equal(calls.length, 15, `摘要宿主验收请求次数异常，实际为 ${calls.length}`);
+		assert.equal(calls.length, 16, `摘要宿主验收请求次数异常，实际为 ${calls.length}`);
 		assert.equal(calls.filter((key) => key === "shared").length, 1, "同模板并发批次发起了重复 HTTP 请求");
 		assert(completions.indexOf("later") < completions.indexOf("first"), "多模板 Mock 未产生乱序返回");
 		assert(completions.indexOf("newer") < completions.indexOf("old"), "新旧批次 Mock 未产生迟到旧结果");

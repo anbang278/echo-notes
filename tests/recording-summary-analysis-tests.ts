@@ -1,3 +1,5 @@
+import { readRecordingSummaryWriteback, writeRecordingSummaryWriteback } from "../src/transcript/recording-summary-writeback";
+import { markTranscriptAnalysisPending, markTranscriptAnalysisDone } from "../src/transcript/transcript-analysis-metadata";
 import assert from "node:assert/strict";
 import { DEFAULT_ANALYSIS_TEMPLATES } from "../src/settings/settings";
 import type { AnalysisInput } from "../src/analysis/analysis-provider";
@@ -10,6 +12,8 @@ import {
 } from "../src/analysis/analysis-technical";
 import {
 	RECORDING_SUMMARY_END,
+	RECORDING_SUMMARY_MAX_CHARACTERS,
+	RECORDING_SUMMARY_MIN_CHARACTERS,
 	RECORDING_SUMMARY_START,
 	normalizeRecordingSummary,
 	parseRecordingSummaryResponse
@@ -18,6 +22,21 @@ import {
 const envelope = (summary: string): string => `${RECORDING_SUMMARY_START}\n${summary}\n${RECORDING_SUMMARY_END}`;
 
 export function runRecordingSummaryAnalysisTests(): void {
+	const durableSummary = "新悦新员工销售话术与沟通语气培训";
+	assert.equal(normalizeRecordingSummary(`｜AI 总结：${durableSummary}`), undefined, "模型返回保留标签时不能生成重复标签并阻断后续更新");
+	for (const ending of ["\n", "\r\n"]) {
+		const transcript = ["---", "type: audio-transcript", "custom: keep", "---", "合成转写正文", ""].join(ending);
+		const snapshot = writeRecordingSummaryWriteback(transcript, [durableSummary]);
+		assert.ok(snapshot);
+		const metadata = { templateId: "work-minutes", provider: "mock", model: "fixture", timestamp: "2026-11-05T00:00:00Z" };
+		const afterAnalysis = markTranscriptAnalysisDone(markTranscriptAnalysisPending(snapshot, metadata), metadata);
+		assert.deepEqual(readRecordingSummaryWriteback(afterAnalysis), [durableSummary], "正常分析更新必须保留写回快照");
+		assert.equal(afterAnalysis.split(ending + "---").length - 1, 1, "分析更新只保留一段frontmatter");
+		assert.ok(afterAnalysis.includes("custom: keep" + ending));
+		assert.ok(afterAnalysis.endsWith("合成转写正文" + ending));
+		if (ending === "\r\n") assert.equal(afterAnalysis.replace(/\r\n/g, "").includes("\n"), false);
+	}
+
 	const input: AnalysisInput = {
 		template: DEFAULT_ANALYSIS_TEMPLATES["work-minutes"],
 		transcriptTitle: "Synthetic meeting.transcript",
@@ -27,18 +46,20 @@ export function runRecordingSummaryAnalysisTests(): void {
 	};
 	const prompt = buildAnalysisMessages(input);
 	assert.match(prompt.system, /不打开转写稿.*是做什么的/);
-	assert.match(prompt.system, /具体项目、业务或问题/);
-	assert.match(prompt.system, /目的.*主要讨论范围或活动内容/);
-	assert.match(prompt.system, /没有明确目的.*不猜测意图/);
-	assert.match(prompt.system, /50–100字.*150个Unicode字符/);
-	assert.match(prompt.system, /信息少时允许更短/);
+	assert.match(prompt.system, /具体事项和会议主题或用途/);
+	assert.match(prompt.system, /培训、核对、评审.*须有转写依据/);
+	assert.match(prompt.system, /不铺陈过程.*不强求结论或行动项/);
+	assert.match(prompt.system, /不猜测意图.*不为凑字编造/);
+	assert.match(prompt.system, /严格15–30字.*Unicode字符计数/);
+	assert.match(prompt.system, /已有信息无法支持规定长度.*摘要留空/);
+	assert.doesNotMatch(prompt.system, /50–100字|150个Unicode字符/);
 	assert.ok(prompt.system.includes(RECORDING_SUMMARY_START));
 	assert.ok(prompt.system.includes(RECORDING_SUMMARY_END));
 	assert.ok(prompt.user.includes(input.template.customPrompt.trim()), "保留原模板要求");
 	assert.ok(prompt.user.includes(input.transcriptText), "保持原转写输入");
 	assert.ok(!buildAnalysisMessages({ ...input, includeRecordingSummary: undefined }).system.includes(RECORDING_SUMMARY_START));
 	assert.match(buildAnalysisMessages({ ...input, copyLanguage: "en" }).system, /what this meeting or recording is for/);
-	assert.match(buildAnalysisMessages({ ...input, copyLanguage: "en" }).system, /at most 150 Unicode characters/);
+	assert.match(buildAnalysisMessages({ ...input, copyLanguage: "en" }).system, /15–30 Unicode characters/);
 
 	const chunk = createChunkAnalysisInput(input, 1, 2);
 	assert.equal(chunk.includeRecordingSummary, false);
@@ -48,7 +69,7 @@ export function runRecordingSummaryAnalysisTests(): void {
 	assert.ok(buildAnalysisMessages(synthesis).system.includes(RECORDING_SUMMARY_START));
 	assert.equal(createSynthesisAnalysisInput({ ...input, includeRecordingSummary: undefined }, []).includeRecordingSummary, undefined);
 
-	const summary = "面向新员工开展销售沟通培训，通过模拟客户问答练习提问顺序与表达语气，帮助新人熟悉上岗后的客户沟通方式。";
+	const summary = "新悦新员工销售话术与表达语气对练";
 	const body = "## 培训内容\n\n练习客户问答。\n\n## 后续\n\n安排下一次对练。";
 	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n\n${envelope(summary)}\n`, true), { text: body, recordingSummary: summary });
 	assert.deepEqual(parseRecordingSummaryResponse(body, true), { text: body });
@@ -56,10 +77,23 @@ export function runRecordingSummaryAnalysisTests(): void {
 	assert.deepEqual(parseRecordingSummaryResponse(unrequested), { text: unrequested }, "其他调用保持原始响应");
 
 	assert.equal(normalizeRecordingSummary(` \n${summary}\n `), summary);
-	assert.equal(normalizeRecordingSummary("短录音主题"), "短录音主题");
-	assert.equal(normalizeRecordingSummary("𠮷".repeat(150)), "𠮷".repeat(150), "按Unicode字符计数");
-	assert.equal(normalizeRecordingSummary("𠮷".repeat(151)), undefined);
-	const invalid = ["", " \n ", "一".repeat(151), "第一行\n第二行", "第一行\r第二行", "a\tb", "a\u0000b", "a\u007fb", "a\u2028b", "<b>摘要</b>", "[[其他笔记]]", "[外链](https://example.com)", "**加粗**", "`代码`", "__下划线__", "%%隐藏%%", "# 标题"];
+	assert.equal(RECORDING_SUMMARY_MIN_CHARACTERS, 15);
+	assert.equal(RECORDING_SUMMARY_MAX_CHARACTERS, 30);
+	assert.equal(normalizeRecordingSummary("一".repeat(14)), undefined);
+	assert.equal(normalizeRecordingSummary("一".repeat(15)), "一".repeat(15));
+	assert.equal(normalizeRecordingSummary("一".repeat(30)), "一".repeat(30));
+	assert.equal(normalizeRecordingSummary("一".repeat(31)), undefined);
+	assert.equal(normalizeRecordingSummary("𠮷".repeat(15)), "𠮷".repeat(15), "补充平面文字按Unicode字符计数");
+	assert.equal(normalizeRecordingSummary("😀".repeat(30)), "😀".repeat(30), "emoji按Unicode字符计数");
+	assert.equal(normalizeRecordingSummary("😀".repeat(14)), undefined);
+	assert.equal(normalizeRecordingSummary("😀".repeat(31)), undefined);
+	const withControl = (control: string) => `${summary.slice(0, 8)}${control}${summary.slice(8)}`;
+	const invalid = [
+		"", " \n ", "短录音主题", "一".repeat(14), "一".repeat(31),
+		...["\n", "\r", "\t", "\u0000", "\u007f", "\u2028", "\u2029"].map(withControl),
+		`<b>${summary}</b>`, `[[${summary}]]`, "[培训](https://a.b)",
+		`**${summary}**`, `\`${summary}\``, `__${summary}__`, `%%${summary}%%`, `# ${summary}`
+	];
 	for (const value of invalid) {
 		assert.equal(normalizeRecordingSummary(value), undefined, `应拒绝 ${JSON.stringify(value)}`);
 		assert.deepEqual(parseRecordingSummaryResponse(`${body}\n\n${envelope(value)}`, true), { text: body }, "异常摘要仍保留分析正文");
@@ -84,12 +118,12 @@ export function runRecordingSummaryAnalysisTests(): void {
 	assert.equal(readTranscriptRecordingSummary(first, "work-minutes"), summary);
 	assert.equal(readTranscriptRecordingSummary(first, "study-notes"), undefined);
 	assert.ok(first.includes(transcript.trimEnd()), "保留原始正文与人工说明");
-	const studySummary = "围绕语言学习复习词汇，并记录需要继续练习的发音。";
+	const studySummary = "英语学习复盘与发音重点练习安排讨论";
 	const other = renderTranscriptTechnicalInfo({ ...technicalInput, templateId: "study-notes", result: { ...technicalInput.result, recordingSummary: studySummary } });
 	const multi = insertOrReplaceTranscriptTechnicalItem(first, other, "study-notes", "zh");
 	assert.equal(readTranscriptRecordingSummary(multi, "work-minutes"), summary);
 	assert.equal(readTranscriptRecordingSummary(multi, "study-notes"), studySummary);
-	const changed = "项目团队围绕上线前的数据核对进行讨论，梳理当前差异与需要确认的处理方式。";
+	const changed = "项目上线前业务数据差异核对与处理讨论";
 	const updated = insertOrReplaceTranscriptTechnicalItem(multi, renderTranscriptTechnicalInfo({ ...technicalInput, result: { ...technicalInput.result, recordingSummary: changed } }), "work-minutes", "zh");
 	assert.equal(readTranscriptRecordingSummary(updated, "work-minutes"), changed);
 	assert.equal(readTranscriptRecordingSummary(updated, "study-notes"), studySummary);

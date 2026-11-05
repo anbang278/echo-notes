@@ -9,6 +9,7 @@ export interface RecordingSummaryContentResult {
 	status: "inserted" | "updated" | "already-present" | "skipped";
 	content: string;
 	reason?: string;
+	previousSummary?: string;
 	edit?: { line: number; from: number; to: number; text: string };
 }
 
@@ -22,7 +23,8 @@ const SUMMARY_LABEL = "｜AI 总结：";
 export function updateRecordingSummaryContent(
 	content: string,
 	match: AudioLinkMatch,
-	summary: string
+	summary: string,
+	knownSummaries: readonly string[] = []
 ): RecordingSummaryContentResult {
 	const skipped = (reason: string): RecordingSummaryContentResult => ({ status: "skipped", content, reason });
 	const normalized = normalizeRecordingSummary(summary);
@@ -49,13 +51,31 @@ export function updateRecordingSummaryContent(
 		|| !line.slice(start + RECORDING_SUMMARY_START.length, end).startsWith(SUMMARY_LABEL)
 	)) return skipped("malformed-summary-marker");
 
-	const text = `${RECORDING_SUMMARY_START}${SUMMARY_LABEL}${normalized}${RECORDING_SUMMARY_END}`;
-	const from = hasMarker ? start : line.length;
-	const to = hasMarker ? end + RECORDING_SUMMARY_END.length : line.length;
-	if (line.slice(from, to) === text) return { status: "already-present", content };
+	const text = `${SUMMARY_LABEL}${normalized}`;
+	let from = line.length;
+	let to = line.length;
+	let previousSummary: string | undefined;
+	if (hasMarker) {
+		from = start;
+		to = end + RECORDING_SUMMARY_END.length;
+	} else {
+		const labelIndex = line.indexOf(SUMMARY_LABEL);
+		if (labelIndex !== -1) {
+			if (line.indexOf(SUMMARY_LABEL, labelIndex + SUMMARY_LABEL.length) !== -1) return skipped("ambiguous-summary-label");
+			const candidates = Array.from(new Set(knownSummaries)).filter((candidate) => line.startsWith(`${SUMMARY_LABEL}${candidate}`, labelIndex));
+			if (candidates.length > 1) return skipped("ambiguous-summary-boundary");
+			previousSummary = candidates[0];
+			if (!previousSummary && knownSummaries.length === 0 && line.slice(labelIndex) === text) previousSummary = normalized;
+			if (!previousSummary) return skipped("untracked-summary");
+			from = labelIndex;
+			to = labelIndex + SUMMARY_LABEL.length + previousSummary.length;
+		}
+	}
+	if (line.slice(from, to) === text) return { status: "already-present", content, previousSummary };
 	return {
-		status: hasMarker ? "updated" : "inserted",
+		status: from === line.length ? "inserted" : "updated",
 		content: `${content.slice(0, lineOffset + from)}${text}${content.slice(lineOffset + to)}`,
+		previousSummary,
 		edit: { line: lineIndex, from, to, text }
 	};
 }

@@ -2,30 +2,33 @@ import type { CopyLanguage } from "../settings/settings";
 
 export const RECORDING_SUMMARY_START = "<!-- echo-notes-recording-summary:start -->";
 export const RECORDING_SUMMARY_END = "<!-- echo-notes-recording-summary:end -->";
-export const RECORDING_SUMMARY_MAX_CHARACTERS = 150;
+export const RECORDING_SUMMARY_MIN_CHARACTERS = 15;
+export const RECORDING_SUMMARY_MAX_CHARACTERS = 30;
 
 export function normalizeRecordingSummary(value: string): string | undefined {
 	const summary = value.trim();
-	if (!summary || Array.from(summary).length > RECORDING_SUMMARY_MAX_CHARACTERS) return undefined;
+	const characters = Array.from(summary);
+	if (characters.length < RECORDING_SUMMARY_MIN_CHARACTERS || characters.length > RECORDING_SUMMARY_MAX_CHARACTERS) return undefined;
 	if (/[\u2028\u2029<>`[\]\\*]/u.test(summary)
-		|| Array.from(summary).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-		|| summary.includes("%%") || summary.includes("__") || /^#{1,6}\s/u.test(summary)) return undefined;
+		|| characters.some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+		|| summary.includes("%%") || summary.includes("__") || summary.includes("｜AI 总结：")
+		|| /^#{1,6}\s/u.test(summary)) return undefined;
 	return summary;
 }
 
 export function createRecordingSummaryPrompt(copyLanguage: CopyLanguage): string {
 	const instructions = copyLanguage === "en"
 		? [
-			"After the complete analysis, append one plain-text sentence explaining what this meeting or recording is for, so the reader can understand its purpose without opening the transcript.",
-			"Name the specific project, business topic or problem, the stated purpose, and the main discussion or activity. Include a clear outcome only if it helps explain the purpose.",
-			"Use only information supported by the transcript. If no purpose is stated, describe the actual discussion or activity. Do not invent intentions or force conclusions or action items.",
-			"Aim for 50–100 characters and use at most 150 Unicode characters, including spaces. A shorter sentence is fine when the source is brief. Keep it on one line, without a heading, prefix or Markdown formatting."
+			"After the complete analysis, append one concise plain-text sentence explaining what this meeting or recording is for, so the reader understands its topic without opening the transcript.",
+			"Focus on the specific subject and meeting topic or purpose. Use terms such as training, reconciliation or review only when supported by the transcript. Omit detailed processes and do not force conclusions or action items.",
+			"Use only information supported by the transcript. Do not invent participants, intentions or outcomes to meet the length requirement. Leave the summary empty if the available facts cannot support a summary within the required length.",
+			`Use ${RECORDING_SUMMARY_MIN_CHARACTERS}–${RECORDING_SUMMARY_MAX_CHARACTERS} Unicode characters, including spaces and punctuation. Keep it on one line, without a heading, prefix or Markdown formatting.`
 		]
 		: [
-			"完成完整分析后，额外输出一句用途明确的录音摘要，让读者不打开转写稿也能知道这场会议或这段录音是做什么的。",
-			"优先交代具体项目、业务或问题，会议或录音的目的，以及主要讨论范围或活动内容。明确结果有助于理解用途时才简要带出。",
-			"只使用转写稿中有依据的信息，没有明确目的时通过实际讨论或活动说明用途，不猜测意图，不强求结论或行动项，避免“讨论相关问题”等空泛表述。",
-			"通常50–100字，最多150个Unicode字符，信息少时允许更短。摘要必须是单行纯文本，不加标题、前缀或Markdown格式。"
+			"完成完整分析后，额外输出一句核心精炼的录音摘要，让读者不打开转写稿也能知道这场会议或这段录音是做什么的。",
+			"聚焦具体事项和会议主题或用途，培训、核对、评审等词须有转写依据。不铺陈过程，不强求结论或行动项，避免“讨论相关问题”等空泛表述。",
+			"只使用转写稿中有依据的信息，不猜测意图，不为凑字编造参与人、目的或结论。已有信息无法支持规定长度的摘要时，摘要留空。",
+			`严格${RECORDING_SUMMARY_MIN_CHARACTERS}–${RECORDING_SUMMARY_MAX_CHARACTERS}字，按Unicode字符计数，包含标点。摘要必须是单行纯文本，不加标题、前缀或Markdown格式。`
 		];
 	return [
 		...instructions,

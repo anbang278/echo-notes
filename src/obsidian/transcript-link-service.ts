@@ -3,7 +3,8 @@ import type { AudioFileService } from "../audio/audio-file-service";
 import { isSupportedAudioFile } from "../audio/audio-detector";
 import { parseAudioLinks, type AudioLinkMatch } from "../audio/audio-link-parser";
 import type { LinkService } from "./link-service";
-import { updateRecordingSummaryContent } from "./recording-summary-content";
+import { updateRecordingSummaryContent, type RecordingSummaryContentResult } from "./recording-summary-content";
+import { readRecordingSummaryWriteback, writeRecordingSummaryWriteback } from "../transcript/recording-summary-writeback";
 import { readTranscriptSourceReferences } from "../transcript/transcript-source-metadata";
 
 export interface SourceAudioAnchor {
@@ -78,9 +79,10 @@ export class TranscriptLinkService {
 	insertRecordingSummary(
 		anchor: SourceAudioAnchor,
 		summary: string,
-		isCurrent: () => boolean = () => true
+		isCurrent: () => boolean = () => true,
+		transcriptFile?: TFile
 	): Promise<RecordingSummaryWriteResult> {
-		return this.enqueue(anchor.sourceNote, () => this.insertRecordingSummaryNow(anchor, summary, isCurrent));
+		return this.enqueue(anchor.sourceNote, () => this.insertRecordingSummaryNow(anchor, summary, isCurrent, transcriptFile));
 	}
 
 	private async enqueue<T>(key: TFile, write: () => Promise<T>): Promise<T> {
@@ -97,14 +99,17 @@ export class TranscriptLinkService {
 	private async insertRecordingSummaryNow(
 		anchor: SourceAudioAnchor,
 		summary: string,
-		isCurrent: () => boolean
+		isCurrent: () => boolean,
+		transcriptFile?: TFile
 	): Promise<RecordingSummaryWriteResult> {
 		const result = (status: RecordingSummaryWriteResult["status"], reason?: string): RecordingSummaryWriteResult => ({
 			status, sourcePath: anchor.sourceNote.path, reason
 		});
-		const guard = (): string | undefined => {
+		const guard = (checkCurrent = true): string | undefined => {
 			if (this.options.isDisposed()) return "plugin-unloaded";
-			if (!isCurrent()) return "stale-analysis";
+			if (checkCurrent && !isCurrent()) return "stale-analysis";
+			if (!transcriptFile || transcriptFile === anchor.sourceNote
+				|| this.app.vault.getAbstractFileByPath(transcriptFile.path) !== transcriptFile) return "transcript-missing";
 			if (this.app.vault.getAbstractFileByPath(anchor.sourceNote.path) !== anchor.sourceNote) return "source-missing";
 			if (this.app.vault.getAbstractFileByPath(anchor.audioFile.path) !== anchor.audioFile) return "audio-missing";
 			if (anchor.initialReferenceCount !== 1) return "initially-ambiguous";
@@ -113,39 +118,66 @@ export class TranscriptLinkService {
 		const initialReason = guard();
 		if (initialReason) return result("skipped", initialReason);
 		let writeResult = result("skipped", "audio-missing");
+		let pendingSummaries: string[] | undefined;
 		try {
+			const knownSummaries = readRecordingSummaryWriteback(await this.app.vault.read(transcriptFile!));
+			if (knownSummaries === null) return result("skipped", "invalid-writeback-state");
 			await this.options.withMutatingFile(anchor.sourceNote, async () => {
-				const reason = guard();
-				if (reason) {
-					writeResult = result("skipped", reason);
+				const prepare = (content: string, known: readonly string[]): RecordingSummaryContentResult => {
+					const reason = guard();
+					if (reason) return { status: "skipped", reason, content };
+					const located = this.locate(content, anchor);
+					if (located.result) return { status: "skipped", reason: located.result.reason, content };
+					return updateRecordingSummaryContent(content, located.match!, summary, known);
+				};
+				const sourceEditors = this.getSourceEditors(anchor.sourceNote);
+				if (new Set(sourceEditors.map((editor) => editor.getValue())).size > 1) {
+					writeResult = result("skipped", "multiple-source-editors");
 					return;
 				}
+				const initialContent = sourceEditors.length > 0 ? sourceEditors[0].getValue() : await this.app.vault.read(anchor.sourceNote);
+				const initialUpdate = prepare(initialContent, knownSummaries);
+				writeResult = result(initialUpdate.status, initialUpdate.reason);
+				if (initialUpdate.status === "skipped") return;
+				const previousSummaries = initialUpdate.previousSummary ? [initialUpdate.previousSummary] : [];
+				const nextSummaries = Array.from(new Set([summary.trim(), ...previousSummaries]));
+				pendingSummaries = nextSummaries;
+				let snapshotSaved = false;
+				try {
+					await this.options.withMutatingFile(transcriptFile!, async () => {
+						await this.app.vault.process(transcriptFile!, (content) => {
+							const reason = guard();
+							if (reason) {
+								writeResult = result("skipped", reason);
+								return content;
+							}
+							const updated = writeRecordingSummaryWriteback(content, nextSummaries);
+							if (updated === null) {
+								writeResult = result("skipped", "invalid-writeback-state");
+								return content;
+							}
+							snapshotSaved = true;
+							return updated;
+						});
+					});
+				} catch {
+					writeResult = result("failed", "writeback-state-failed");
+					return;
+				}
+				if (!snapshotSaved) return;
+
+				// Keep this write bound to the initially identified old summary, including its exact end.
 				const editors = this.getSourceEditors(anchor.sourceNote);
 				if (new Set(editors.map((editor) => editor.getValue())).size > 1) {
 					writeResult = result("skipped", "multiple-source-editors");
 					return;
 				}
-				const update = (content: string) => {
-					const currentReason = guard();
-					if (currentReason) {
-						writeResult = result("skipped", currentReason);
-						return { content };
-					}
-					const located = this.locate(content, anchor);
-					if (located.result) {
-						writeResult = result(located.result.status, located.result.reason);
-						return { content };
-					}
-					const updated = updateRecordingSummaryContent(content, located.match!, summary);
-					writeResult = result(updated.status, updated.reason);
-					return updated;
-				};
 				if (editors.length > 0) {
-					const editor = editors[0];
-					const updated = update(editor.getValue());
-					if ("edit" in updated && updated.edit) {
+					const updated = prepare(editors[0].getValue(), previousSummaries);
+					writeResult = result(updated.status, updated.reason);
+					if (updated.edit) {
 						const { line, from, to, text } = updated.edit;
-						editor.replaceRange(text, { line, ch: from }, { line, ch: to });
+						editors[0].replaceRange(text, { line, ch: from }, { line, ch: to });
 					}
 					return;
 				}
@@ -154,9 +186,32 @@ export class TranscriptLinkService {
 						writeResult = result("skipped", "source-editor-opened");
 						return content;
 					}
-					return update(content).content;
+					const updated = prepare(content, previousSummaries);
+					writeResult = result(updated.status, updated.reason);
+					return updated.content;
 				});
 			});
+			if (pendingSummaries && pendingSummaries.length > 1
+				&& (writeResult.status === "inserted" || writeResult.status === "updated" || writeResult.status === "already-present")) {
+				try {
+					let converged = false;
+					await this.options.withMutatingFile(transcriptFile!, async () => {
+						await this.app.vault.process(transcriptFile!, (content) => {
+							// Account for the completed source write even if a newer analysis has started.
+							if (guard(false) || JSON.stringify(readRecordingSummaryWriteback(content)) !== JSON.stringify(pendingSummaries)) return content;
+							const updated = writeRecordingSummaryWriteback(content, [summary.trim()]);
+							if (updated === null) return content;
+							converged = true;
+							return updated;
+						});
+					});
+					if (!converged) writeResult.reason = "writeback-state-pending";
+				} catch {
+					// The source write already succeeded. Retain both recovery candidates on failure.
+					writeResult.reason = "writeback-state-pending";
+				}
+			}
+
 			return writeResult;
 		} catch {
 			return result("failed", "write-failed");

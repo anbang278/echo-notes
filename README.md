@@ -285,9 +285,9 @@ Timing starts after microphone access succeeds and ends when recording stops. Ea
 
 ### Recording summaries after analysis
 
-After saving an AI analysis, Echo Notes appends `｜AI 总结：…` to the matching recording-time line. The summary explains the specific topic, stated purpose, and main discussion or activity, so you can understand the recording from the source note. It targets 50–100 characters with a 150-character limit and is generated within the final analysis request, including the final synthesis for long transcripts.
+After saving an AI analysis, Echo Notes appends `｜AI 总结：…` to the matching recording-time line. The concise summary identifies the specific topic and purpose of the meeting in 15–30 Unicode characters, so you can understand it without opening the transcript. Source notes display plain text without surrounding HTML comments. The summary is generated within the final analysis request, including the final synthesis for long transcripts.
 
-Handwritten text is preserved, and analyzing again updates the managed summary. Automatic analysis, manual analysis, and retries support this update. Keep the recording-time line directly above a unique audio reference in the source note. If the summary is unavailable or a safe update cannot be located, a notice explains the issue and the saved analysis remains available in the transcript. Summary text follows the analysis language, while the recording-time line and summary label use the fixed Chinese annotation.
+Handwritten text is preserved, and analyzing again precisely updates the summary using its writeback record in the transcript, including when handwritten text follows it. Reanalyzing a recording migrates intact comments written by 0.4.46 to plain text. Automatic analysis, manual analysis, and retries support this update. Keep the recording-time line directly above a unique audio reference in the source note. If the summary is unavailable or a safe update cannot be located, a notice explains the issue and the saved analysis remains available in the transcript. Summary text follows the analysis language, while the recording-time line and summary label use the fixed Chinese annotation.
 
 ## Configure the Obsidian Core Plugin Audio Recorder
 

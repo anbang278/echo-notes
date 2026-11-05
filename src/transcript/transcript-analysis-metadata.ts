@@ -109,23 +109,23 @@ function updateTranscriptAnalysisMetadata(
 		return [`---`, ...nextFrontmatter, `---`, "", content.trimStart()].join("\n");
 	}
 
-	return `${frontmatter.prefix}${nextFrontmatter.join("\n")}${frontmatter.suffix}`;
+	return `${frontmatter.prefix}${nextFrontmatter.join(frontmatter.lineEnding)}${frontmatter.suffix}`;
 }
 
-function splitFrontmatter(content: string): { prefix: string; content: string; suffix: string } | null {
-	if (!content.startsWith("---\n")) {
-		return null;
-	}
-
-	const endIndex = content.indexOf("\n---", 4);
-	if (endIndex === -1) {
-		return null;
-	}
-
+function splitFrontmatter(content: string): { prefix: string; content: string; suffix: string; lineEnding: string } | null {
+	const opening = /^---(\r?\n)/.exec(content);
+	if (!opening) return null;
+	const closingPattern = /^---[ \t]*\r?$/gm;
+	closingPattern.lastIndex = opening[0].length;
+	const closing = closingPattern.exec(content);
+	if (!closing) return null;
+	const fields = content.slice(opening[0].length, closing.index);
+	const separator = /\r?\n$/.exec(fields)?.[0] ?? opening[1];
 	return {
-		prefix: "---\n",
-		content: content.slice(4, endIndex),
-		suffix: content.slice(endIndex)
+		prefix: opening[0],
+		content: fields.replace(/\r?\n$/, ""),
+		suffix: `${separator}${content.slice(closing.index)}`,
+		lineEnding: opening[1]
 	};
 }
 

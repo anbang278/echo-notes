@@ -4665,7 +4665,7 @@ export default class EchoNotesPlugin extends Plugin {
 					new Notice("AI 分析已保存，未能定位录音的来源笔记，摘要未回写。");
 					return;
 				}
-				const write = await this.transcriptLinkService.insertRecordingSummary(anchor, summary, isCurrent);
+				const write = await this.transcriptLinkService.insertRecordingSummary(anchor, summary, isCurrent, transcriptFile);
 				if ((write.status === "skipped" || write.status === "failed") && isCurrent()) {
 					new Notice("AI 分析已保存，录音摘要未回写。请检查来源笔记中的录音时间与唯一音频引用后重新分析。");
 				}
