@@ -7,6 +7,7 @@ export interface AnalysisInput {
 	transcriptText: string;
 	copyLanguage: CopyLanguage;
 	diagnostics?: DiagnosticSink;
+	includeRecordingSummary?: boolean;
 }
 
 export interface AnalysisResult {
@@ -14,6 +15,7 @@ export interface AnalysisResult {
 	provider: string;
 	model: string;
 	traceId?: string;
+	recordingSummary?: string;
 	raw?: unknown;
 }
 

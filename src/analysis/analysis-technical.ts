@@ -5,6 +5,7 @@ import {
 	type CopyLanguage
 } from "../settings/settings";
 import type { AnalysisResult } from "./analysis-provider";
+import { normalizeRecordingSummary } from "./recording-summary";
 import { TRANSCRIPT_MANAGED_END, TRANSCRIPT_TECHNICAL_END, TRANSCRIPT_TECHNICAL_START } from "../transcript/transcript-content";
 
 export interface RenderTranscriptTechnicalInfoInput {
@@ -40,6 +41,10 @@ export function renderTranscriptTechnicalInfo(input: RenderTranscriptTechnicalIn
 	if (input.result.traceId) {
 		inlineFields.push(renderDataviewInlineField("echo_notes_analysis_trace_id", input.result.traceId));
 	}
+	const recordingSummary = input.result.recordingSummary && normalizeRecordingSummary(input.result.recordingSummary);
+	if (recordingSummary) {
+		inlineFields.push(renderDataviewInlineField("echo_notes_recording_summary", recordingSummary));
+	}
 
 	return [
 		`## ${input.templateName}`,
@@ -48,6 +53,23 @@ export function renderTranscriptTechnicalInfo(input: RenderTranscriptTechnicalIn
 		"",
 		`_${metadata.join(metadataSeparator)}_`
 	].join("\n");
+}
+
+export function readTranscriptRecordingSummary(content: string, templateId: AnalysisTemplateId): string | undefined {
+	if (content.split(TRANSCRIPT_TECHNICAL_START).length !== 2 || content.split(TRANSCRIPT_TECHNICAL_END).length !== 2) return undefined;
+	const sectionStart = content.indexOf(TRANSCRIPT_TECHNICAL_START);
+	const sectionEnd = content.indexOf(TRANSCRIPT_TECHNICAL_END);
+	if (sectionStart === -1 || sectionEnd <= sectionStart) return undefined;
+	const section = content.slice(sectionStart + TRANSCRIPT_TECHNICAL_START.length, sectionEnd);
+	const startMarker = getTranscriptTechnicalItemStart(templateId);
+	const endMarker = getTranscriptTechnicalItemEnd(templateId);
+	if (section.split(startMarker).length !== 2 || section.split(endMarker).length !== 2) return undefined;
+	const itemStart = section.indexOf(startMarker);
+	const itemEnd = section.indexOf(endMarker);
+	if (itemEnd <= itemStart) return undefined;
+	const item = section.slice(itemStart + startMarker.length, itemEnd);
+	const fields = [...item.matchAll(/^- \[echo_notes_recording_summary:: ([^\r\n]*)\]\r?$/gm)];
+	return fields.length === 1 ? normalizeRecordingSummary(fields[0][1]) : undefined;
 }
 
 export function insertTranscriptTechnicalSection(

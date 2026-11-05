@@ -7,6 +7,7 @@ export function createChunkAnalysisInput(
 ): AnalysisInput {
 	return {
 		...input,
+		includeRecordingSummary: false,
 		template: {
 			...input.template,
 			customPrompt: [

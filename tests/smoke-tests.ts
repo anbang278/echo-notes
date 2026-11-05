@@ -1,3 +1,5 @@
+import { runRecordingSummaryAnalysisTests } from "./recording-summary-analysis-tests";
+import { runRecordingSummaryLinkTests } from "./recording-summary-link-tests";
 import { runLocalOpenAISettingsTests } from "./local-openai-settings-tests";
 import assert from "node:assert/strict";
 import { runRecordingStorageTests } from "./recording-storage-tests";
@@ -7250,3 +7252,6 @@ assert.ok([...proofreadingStoreFiles.keys()].every((path) => path.split("/").at(
 assert.ok(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ASR-1.7B"));
 assert.equal(validateDualModelConfiguration("Qwen/Qwen3-ASR-1.7B", "XingChenAGI/XingChenASR-V3.2-Ultra"), null);
 console.log("Smoke tests passed.");
+
+await runRecordingSummaryAnalysisTests();
+await runRecordingSummaryLinkTests();

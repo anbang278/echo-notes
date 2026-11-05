@@ -18,6 +18,7 @@ import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
 import type { AnalysisResult, ChunkedAnalysisProvider } from "./analysis/analysis-provider";
 import { analyzeChunkSequence } from "./analysis/analysis-chunked-service";
 import { AnalysisService } from "./analysis/analysis-service";
+import { readTranscriptRecordingSummary } from "./analysis/analysis-technical";
 import { diagnoseAnalysisProviderSettings } from "./analysis/analysis-diagnostics";
 import { splitAnalysisText, estimateAnalysisTextTokens } from "./analysis/analysis-chunking";
 import {
@@ -425,7 +426,8 @@ export default class EchoNotesPlugin extends Plugin {
 	private localCancellationRequests?: Map<string, Promise<boolean>>;
 	private localCancellationConfirmations?: Map<string, LocalCancellationConfirmation>;
 	private localCleanupRequests?: Map<string, Promise<void>>;
-	private processingAnalyses = new Set<string>();
+	private processingAnalyses = new Map<string, Promise<boolean>>();
+	private analysisSummaryRounds = new Map<TFile, symbol>();
 	private activeMemoryTasks = new Map<string, ActiveMemoryTask>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
@@ -530,6 +532,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	onunload(): void {
 		this.unloading = true;
+		this.analysisSummaryRounds.clear();
 		for (const taskId of this.localCancellationConfirmations?.keys() ?? []) {
 			this.stopLocalCancellationConfirmation(taskId);
 		}
@@ -3395,12 +3398,21 @@ export default class EchoNotesPlugin extends Plugin {
 					if (file.stat.ctime < this.loadedAt) {
 						return;
 					}
-					void this.processAudioToTranscript(file, undefined, { allowUploadConfirmation: false })
-						.then((result) => {
-							if (result?.analysisEligible) {
-								this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis(), result.diagnosticChainId);
-							}
-						})
+					const pendingSource = this.coreRecordingStorageAdapter?.getPendingSource(file.path);
+					void (async () => {
+						const sourceNote = await pendingSource;
+						if (this.unloading) return;
+						const result = await this.processAudioToTranscript(file, sourceNote ?? undefined, {
+							allowUploadConfirmation: false,
+							onTranscriptFileReady: sourceNote ? async (transcriptFile) => {
+								const anchor = await this.transcriptLinkService.captureTranscriptSourceAnchor(transcriptFile);
+								return anchor ? this.insertTranscriptLink(anchor, transcriptFile, false) : undefined;
+							} : undefined
+						});
+						if (result?.analysisEligible) {
+							this.startAnalysisTasks(result.transcriptFile, this.getDefaultAnalysisTemplatesForAnalysis(), result.diagnosticChainId);
+						}
+					})()
 						.catch((error) => {
 							new Notice(`自动转写失败：${getErrorMessage(error)}`);
 							this.log("自动转写失败", error);
@@ -4604,45 +4616,83 @@ export default class EchoNotesPlugin extends Plugin {
 		if (templates.length === 0) {
 			return;
 		}
-		void this.runAnalysisBatch(transcriptFile, templates, diagnosticChainId);
+		void this.runAnalysisBatch(transcriptFile, templates, diagnosticChainId).catch((error) => {
+			this.log("AI 分析批次未完成", error);
+			new Notice(`AI 分析批次未完成：${getErrorMessage(error)}`);
+		});
 	}
 
 	private async runAnalysisBatch(
 		transcriptFile: TFile,
 		templates: AnalysisTemplateConfig[],
-		diagnosticChainId?: string
+		diagnosticChainId?: string,
+		retryOfSessionId?: string,
+		extractMemory = true
 	): Promise<void> {
-		const results = await Promise.all(
-			templates.map(async (template) => ({
-				template,
-				success: await this.startAnalysisTask(transcriptFile, template, diagnosticChainId)
-			}))
-		);
-		const successfulTemplateIds = results
-			.filter((result) => result.success)
-			.map((result) => result.template.id);
-		if (successfulTemplateIds.length > 0) {
-			void this.startMemoryTask(transcriptFile, successfulTemplateIds, false, false, diagnosticChainId);
+		const round = Symbol();
+		this.analysisSummaryRounds.set(transcriptFile, round);
+		const isCurrent = () => !this.unloading && this.analysisSummaryRounds.get(transcriptFile) === round;
+		try {
+			if (this.unloading) return;
+			// Register all tasks before source IO so simultaneous entry points share the real in-flight work.
+			const resultsPromise = Promise.all(
+				templates.map(async (template) => ({
+					template,
+					success: await this.startAnalysisTask(transcriptFile, template, diagnosticChainId, retryOfSessionId)
+				}))
+			);
+			const anchorPromise = this.transcriptLinkService.captureTranscriptSourceAnchor(transcriptFile).catch((error) => {
+				this.log("读取录音摘要来源失败", error);
+				return undefined;
+			});
+			const [results, anchor] = await Promise.all([resultsPromise, anchorPromise]);
+			const successfulTemplateIds = results.filter((item) => item.success).map((item) => item.template.id);
+			if (successfulTemplateIds.length > 0 && extractMemory) {
+				void this.startMemoryTask(transcriptFile, successfulTemplateIds, false, false, diagnosticChainId);
+			}
+			if (!isCurrent() || successfulTemplateIds.length === 0) return;
+			try {
+				const content = await this.app.vault.read(transcriptFile);
+				if (!isCurrent()) return;
+				const summary = successfulTemplateIds
+					.map((templateId) => readTranscriptRecordingSummary(content, templateId))
+					.find((value) => value !== undefined);
+				if (!summary) {
+					new Notice("AI 分析已保存，本次未返回有效的录音摘要。可重新分析重试。");
+					return;
+				}
+				if (!anchor) {
+					new Notice("AI 分析已保存，未能定位录音的来源笔记，摘要未回写。");
+					return;
+				}
+				const write = await this.transcriptLinkService.insertRecordingSummary(anchor, summary, isCurrent);
+				if ((write.status === "skipped" || write.status === "failed") && isCurrent()) {
+					new Notice("AI 分析已保存，录音摘要未回写。请检查来源笔记中的录音时间与唯一音频引用后重新分析。");
+				}
+			} catch (error) {
+				this.log("录音摘要回写失败", error);
+				if (isCurrent()) new Notice("AI 分析已保存，录音摘要写入失败。可重新分析重试。");
+			}
+		} finally {
+			if (this.analysisSummaryRounds.get(transcriptFile) === round) this.analysisSummaryRounds.delete(transcriptFile);
 		}
 	}
 
-	private async startAnalysisTask(
+	private startAnalysisTask(
 		transcriptFile: TFile,
 		template: AnalysisTemplateConfig | null | undefined,
 		diagnosticChainId?: string,
 		diagnosticRetryOfSessionId?: string
 	): Promise<boolean> {
 		if (!template || !this.settings.analysisEnabled) {
-			return false;
+			return Promise.resolve(false);
 		}
 
 		const templateTitle = template.name;
 		const processingKey = `${transcriptFile.path}:${template.id}`;
 		const analysisTaskId = createTaskId("analysis", transcriptFile.path, template.id);
-		if (this.processingAnalyses.has(processingKey)) {
-			new Notice(`正在后台生成 ${templateTitle}：${transcriptFile.name}`);
-			return false;
-		}
+		const pending = this.processingAnalyses.get(processingKey);
+		if (pending) return pending;
 		const diagnostic = this.startDiagnosticSession("analysis", diagnosticChainId, diagnosticRetryOfSessionId);
 
 		this.taskCenter.upsertTask({
@@ -4670,10 +4720,10 @@ export default class EchoNotesPlugin extends Plugin {
 				run: () => this.retryAnalysisTask(transcriptFile.path, template.id)
 			}
 		});
-		this.processingAnalyses.add(processingKey);
-		await this.markGettingStartedRunning("analysis", transcriptFile.path);
 		new Notice(`后台生成 ${templateTitle}：${transcriptFile.name}`);
-		return this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId, diagnostic.id);
+		const operation = this.runAnalysisTask(transcriptFile, template, processingKey, analysisTaskId, diagnostic.id);
+		this.processingAnalyses.set(processingKey, operation);
+		return operation;
 	}
 
 	private async retryAnalysisTask(transcriptPath: string, templateId: string): Promise<void> {
@@ -4688,7 +4738,7 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		const previousTask = this.taskCenter.getTask(createTaskId("analysis", transcriptPath, templateId));
-		await this.startAnalysisTask(file, template, previousTask?.diagnosticChainId, previousTask?.diagnosticSessionId);
+		await this.runAnalysisBatch(file, [template], previousTask?.diagnosticChainId, previousTask?.diagnosticSessionId, false);
 	}
 
 	private async runAnalysisTask(
@@ -4713,6 +4763,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 		const templateTitle = template.name;
 		try {
+			await this.markGettingStartedRunning("analysis", transcriptFile.path);
 			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
 				markTranscriptAnalysisPending(content, {
 					templateId: template.id,
@@ -4770,6 +4821,7 @@ export default class EchoNotesPlugin extends Plugin {
 				transcriptTitle: transcriptFile.basename,
 				transcriptText: analysisTranscriptText,
 				copyLanguage: this.settings.copyLanguage,
+				includeRecordingSummary: true,
 				diagnostics: this.diagnostics.getSink(diagnosticSessionId)
 			};
 			const chunks = this.settings.analysisLongTextEnabled

@@ -6,6 +6,7 @@ import {
 	type EchoNotesSettings
 } from "../settings/settings";
 import type { AudioLinkMatch } from "../audio/audio-link-parser";
+import { createRecordingSummaryPrompt } from "./recording-summary";
 
 export const ANALYSIS_TEMPLATE_ORDER = BUILTIN_ANALYSIS_TEMPLATE_IDS;
 export const ANALYSIS_CONTEXT_LINE_RADIUS = 3;
@@ -20,6 +21,7 @@ export interface AnalysisPromptInput {
 	transcriptTitle: string;
 	transcriptText: string;
 	copyLanguage: CopyLanguage;
+	includeRecordingSummary?: boolean;
 }
 
 export function getAnalysisTemplate(settings: EchoNotesSettings, templateId: AnalysisTemplateId): AnalysisTemplateConfig | null {
@@ -336,7 +338,8 @@ export function buildAnalysisMessages(input: AnalysisPromptInput): { system: str
 		system: [
 			input.template.systemPrompt.trim(),
 			`请始终使用${languageName}输出。`,
-			"输出 Markdown；不要把整篇结果包裹在代码块中。"
+			"输出 Markdown；不要把整篇结果包裹在代码块中。",
+			input.includeRecordingSummary ? createRecordingSummaryPrompt(input.copyLanguage) : ""
 		]
 			.filter(Boolean)
 			.join("\n\n"),

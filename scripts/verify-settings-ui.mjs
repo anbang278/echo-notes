@@ -19,6 +19,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { verifyLocalAsrLifecycle } from "./verify-local-asr-lifecycle.mjs";
+import { verifyRecordingSummary } from "./verify-recording-summary.mjs";
 import { verifyCoreRecordingStorage, verifyRecordingStorageSettings } from "./verify-recording-storage.mjs";
 
 // 该脚本只用于本地验收，通过隔离的 Obsidian renderer 调用内部 API，不进入插件运行时代码。
@@ -6312,11 +6313,12 @@ try {
 			setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR
 		});
 		const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
+	const recordingSummaryIntegration = await verifyRecordingSummary(page, PLUGIN_ID);
 		assert(pageErrors.length === 0, `录音存储验收出现运行时错误：${pageErrors.join(" | ")}`);
 		await writeFile(path.join(OUTPUT_DIR, "recording-summary.json"), JSON.stringify({
 			pluginVersion: manifest.version, obsidianVersion: obsidianAsar.version,
 			generatedAt: new Date().toISOString(), durationMs: Date.now() - verificationStartedAt,
-			recordingStorageLayouts, recordingStorageIntegration, runtimeErrors: pageErrors
+			recordingStorageLayouts, recordingStorageIntegration, recordingSummaryIntegration, runtimeErrors: pageErrors
 		}, null, "\t"));
 		console.log("录音存储定向验收通过；完整设置页验收需运行不带筛选变量的命令。");
 	} else {
@@ -6356,6 +6358,7 @@ try {
 	const memoryRelationLayouts = await verifyMemoryRelations(page);
 	const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
 	const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
+	const recordingSummaryIntegration = await verifyRecordingSummary(page, PLUGIN_ID);
 	await verifySiliconFlowSettingsSaveFailure(page);
 	const siliconFlowMockChain = await verifySiliconFlowMockChain(page, siliconFlowTranscriptionMock);
 	await verifySiliconFlowModelPersistence(page);
@@ -6411,6 +6414,7 @@ try {
 		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
 		recordingStorageLayouts,
 		recordingStorageIntegration,
+		recordingSummaryIntegration,
 		siliconFlowMockChain,
 		localOpenAISettings,
 		localAsrLifecycle,

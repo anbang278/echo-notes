@@ -169,7 +169,7 @@ export async function runLocalTaskLifecycleTests(): Promise<void> {
 				offlineTranscription: { provider: "local-openai-compatible", baseUrl: `${sample.origin}/v1`, model: sample.model, language: "auto" },
 				confirmBeforeTranscription: false, skipExistingTranscript: false
 			}),
-			taskCenter: new TaskCenterStore(), activeTranscriptionControllers: new Map(), processingAudio: new Map(), unloading: false,
+			taskCenter: new TaskCenterStore(), activeTranscriptionControllers: new Map(), processingAudio: new Map(), analysisSummaryRounds: new Map(), unloading: false,
 			app: { vault: { adapter: new harness.FileSystemAdapter() } },
 			persistentStateTimer: null, gettingStartedNativeSettingsTimer: null, realtimeStatusTimer: null,
 			settingsListeners: new Set(), gettingStartedListeners: new Set(), markdownDebounceTimers: new Map(), activeMemoryTasks: new Map(),

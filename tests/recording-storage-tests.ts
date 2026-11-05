@@ -287,6 +287,47 @@ async function runRecordingTimingTests(): Promise<void> {
 			f.adapter.dispose();
 		}
 
+		const linkedSource = timedFixture();
+		const linkedNote = linkedSource.setNote("创建事件来源.md");
+		let sourceReady: Promise<TFile | null> | undefined;
+		linkedSource.app.vault.on("create", (file) => {
+			sourceReady = linkedSource.adapter.getPendingSource(file.path);
+			assert.ok(sourceReady, "create事件触发前应登记来源就绪Promise");
+			assert.equal(linkedSource.contents.get(linkedNote!.path), undefined, "创建时尚未插入来源区块");
+		});
+		await linkedSource.recorder.onStartRecording();
+		linkedSource.recorder.onStopRecording();
+		const linkedAudio = await linkedSource.recorder.saveRecording(data) as TFile;
+		assert.equal(await sourceReady, linkedNote);
+		assert.match(linkedSource.contents.get(linkedNote!.path) ?? "", /录音时间：/);
+		assert.equal(linkedSource.adapter.getPendingSource(linkedAudio.path), undefined, "保存结束应清理运行态关联");
+
+		const failedSource = timedFixture();
+		const removedNote = failedSource.setNote("创建后删除.md")!;
+		let failedReady: Promise<TFile | null> | undefined;
+		failedSource.app.vault.on("create", (file) => {
+			failedReady = failedSource.adapter.getPendingSource(file.path);
+			failedSource.files.delete(removedNote.path);
+		});
+		await failedSource.recorder.onStartRecording();
+		failedSource.recorder.onStopRecording();
+		const failedAudio = await failedSource.recorder.saveRecording(data) as TFile;
+		assert.ok(failedSource.files.has(failedAudio.path));
+		assert.equal(await failedReady, null, "来源插入失败仍应结算等待者");
+		assert.equal(failedSource.adapter.getPendingSource(failedAudio.path), undefined);
+
+		const disposedSource = timedFixture();
+		disposedSource.setNote("创建时卸载.md");
+		let disposedReady: Promise<TFile | null> | undefined;
+		disposedSource.app.vault.on("create", (file) => {
+			disposedReady = disposedSource.adapter.getPendingSource(file.path);
+			disposedSource.adapter.dispose();
+		});
+		await disposedSource.recorder.onStartRecording();
+		disposedSource.recorder.onStopRecording();
+		await disposedSource.recorder.saveRecording(data);
+		assert.equal(await disposedReady, null, "卸载应结算来源等待者");
+
 		const switched = timedFixture();
 		switched.setNote("停止时.md");
 		await switched.recorder.onStartRecording();

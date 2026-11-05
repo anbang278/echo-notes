@@ -283,6 +283,12 @@ The core Audio recorder's commands, hotkeys, and microphone button automatically
 
 Timing starts after microphone access succeeds and ends when recording stops. Each recording gets its own annotation. The insertion preserves selected text. If you switch notes while the audio is being saved, the block is appended to the note selected at stop time with a notice. Starting another recording waits until the current one finishes saving. When timing hooks are unavailable or the system clock jumps, a notice explains that the time annotation was skipped. This feature is enabled automatically for new core-recorder recordings.
 
+### Recording summaries after analysis
+
+After saving an AI analysis, Echo Notes appends `｜AI 总结：…` to the matching recording-time line. The summary explains the specific topic, stated purpose, and main discussion or activity, so you can understand the recording from the source note. It targets 50–100 characters with a 150-character limit and is generated within the final analysis request, including the final synthesis for long transcripts.
+
+Handwritten text is preserved, and analyzing again updates the managed summary. Automatic analysis, manual analysis, and retries support this update. Keep the recording-time line directly above a unique audio reference in the source note. If the summary is unavailable or a safe update cannot be located, a notice explains the issue and the saved analysis remains available in the transcript. Summary text follows the analysis language, while the recording-time line and summary label use the fixed Chinese annotation.
+
 ## Configure the Obsidian Core Plugin Audio Recorder
 
 Obsidian's `Audio recorder` core plugin is used only by the offline workflow: it saves a complete recording after stop, then Echo Notes transcribes that file with the offline provider. Real-time mode uses Echo Notes' own recorder because the core recorder exposes no stable public live-audio chunk API. The core-plugin controls appear in the offline settings section.

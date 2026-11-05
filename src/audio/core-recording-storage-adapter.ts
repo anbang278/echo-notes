@@ -57,6 +57,11 @@ export class CoreRecordingStorageAdapter {
 	private binding: RecorderBinding | null = null;
 	private disposed = false;
 	private warned = false;
+	private pendingSources = new Map<string, { promise: Promise<TFile | null>; finish: (source: TFile | null) => void }>();
+
+	getPendingSource(audioPath: string): Promise<TFile | null> | undefined {
+		return this.pendingSources.get(audioPath)?.promise;
+	}
 
 	constructor(private options: AdapterOptions) {}
 
@@ -210,6 +215,8 @@ export class CoreRecordingStorageAdapter {
 
 	dispose(): void {
 		this.disposed = true;
+		for (const pending of this.pendingSources.values()) pending.finish(null);
+		this.pendingSources.clear();
 		this.restore();
 	}
 
@@ -230,16 +237,34 @@ export class CoreRecordingStorageAdapter {
 		const { source, settings } = session?.context ?? this.captureContext();
 		const sourcePath = source?.path ?? "";
 		const extension = recorder.extension;
+		let pendingPath: string | undefined;
+		let finishSource: ((source: TFile | null) => void) | undefined;
+		const create = (saveSettings: RecordingStorageSettings, name: string) => storage.create(
+			{ settings: saveSettings, sourcePath, name, extension },
+			async (path) => {
+				// Register before createBinary emits the event, then release after the source block is inserted.
+				const promise = new Promise<TFile | null>((resolve) => { finishSource = resolve; });
+				pendingPath = path;
+				this.pendingSources.set(path, { promise, finish: finishSource! });
+				try {
+					return await app.vault.createBinary(path, data);
+				} catch (error) {
+					finishSource?.(null);
+					this.pendingSources.delete(path);
+					throw error;
+				}
+			}
+		);
 		let file: TFile;
 		try {
 			const date = new Date();
 			const timestamp = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, "0")}${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}${String(date.getMinutes()).padStart(2, "0")}${String(date.getSeconds()).padStart(2, "0")}`;
 			const name = `Recording ${settings.strategy === "obsidian" ? timestamp.replace(" ", "") : timestamp}`;
 			try {
-				file = await storage.createBinary({ settings, sourcePath, name, extension }, data);
+				file = await create(settings, name);
 			} catch (error) {
 				if (!session || settings.strategy === "obsidian" || error instanceof RecordingMayExistError) throw error;
-				file = await storage.createBinary({ settings: { ...settings, strategy: "obsidian" }, sourcePath, name, extension }, data);
+				file = await create({ ...settings, strategy: "obsidian" }, name);
 				notify(`自定义录音目录保存失败，已回退 Obsidian 附件规则：${file.path}`);
 			}
 		} catch (error) {
@@ -264,11 +289,15 @@ export class CoreRecordingStorageAdapter {
 					await app.vault.process(source, (content) => `${content}\n${block}`);
 					if (session) notify("录音及时间已追加到停止录音时的笔记末尾。");
 				}
+				finishSource?.(source);
 			} else {
 				await app.workspace.getLeaf(false).openFile(file);
 			}
 		} catch {
 			notify(`录音已保存至 ${file.path}，但链接插入或打开失败，请从文件列表打开录音。`);
+		} finally {
+			finishSource?.(null);
+			if (pendingPath) this.pendingSources.delete(pendingPath);
 		}
 		return file;
 	}

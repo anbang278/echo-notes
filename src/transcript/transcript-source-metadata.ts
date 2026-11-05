@@ -1,4 +1,5 @@
 import type { TFile } from "obsidian";
+import { normalizeAudioLinkPath } from "../audio/audio-link-parser";
 
 export interface SourceAudioMetadata {
 	path: string;
@@ -11,6 +12,26 @@ export interface TranscriptReuseCriteria {
 	provider: string;
 	model: string;
 	configurationFingerprint?: string;
+}
+
+export function readTranscriptSourceReferences(content: string): {
+	sourceNoteLinkPath?: string;
+	sourceAudioLinkPath?: string;
+	sourceAudioPath?: string;
+} {
+	const fields = parseFrontmatter(content);
+	const linkPath = (value: string | undefined): string | undefined => {
+		if (!value) return undefined;
+		const wiki = /^!?\[\[([^\]]+)\]\]$/.exec(value);
+		const markdown = /^!?\[[^\]]*\]\((.+)\)$/.exec(value);
+		const target = wiki ? wiki[1].split("|")[0] : markdown?.[1];
+		return target ? normalizeAudioLinkPath(target) : undefined;
+	};
+	return {
+		sourceNoteLinkPath: linkPath(fields?.source_note),
+		sourceAudioLinkPath: linkPath(fields?.source_audio),
+		sourceAudioPath: fields?.source_audio_path || undefined
+	};
 }
 
 export function createSourceAudioMetadata(audioFile: TFile): SourceAudioMetadata {
@@ -48,17 +69,18 @@ export function isReusableTranscriptForAudio(content: string, criteria: Transcri
 }
 
 function parseFrontmatter(content: string): Record<string, string> | null {
-	if (!content.startsWith("---\n")) {
+	const normalizedContent = content.replace(/\r\n/g, "\n");
+	if (!normalizedContent.startsWith("---\n")) {
 		return null;
 	}
 
-	const endIndex = content.indexOf("\n---", 4);
+	const endIndex = normalizedContent.indexOf("\n---", 4);
 	if (endIndex === -1) {
 		return null;
 	}
 
 	const frontmatter: Record<string, string> = {};
-	const lines = content.slice(4, endIndex).split(/\r?\n/);
+	const lines = normalizedContent.slice(4, endIndex).split("\n");
 	for (const line of lines) {
 		const separatorIndex = line.indexOf(":");
 		if (separatorIndex === -1) {

@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import { buildAnalysisMessages } from "./analysis-templates";
+import { parseRecordingSummaryResponse } from "./recording-summary";
 import { AnalysisError, type AnalysisInput, type AnalysisProvider, type AnalysisResult } from "./analysis-provider";
 import { createAnalysisDeadline, waitForAnalysisResponse } from "./analysis-timeout";
 import { createChunkAnalysisInput, createSynthesisAnalysisInput } from "./analysis-stage-prompts";
@@ -88,8 +89,13 @@ export class OpenCodeGoAnalysisProvider implements AnalysisProvider {
 				throw new AnalysisError("invalid_response", `${this.name} 分析 API 响应中缺少文本内容。`, traceId);
 			}
 
+			const parsed = parseRecordingSummaryResponse(text, input.includeRecordingSummary);
+			if (!parsed.text.trim()) {
+				throw new AnalysisError("invalid_response", `${this.name} 分析 API 响应中缺少分析正文。`, traceId);
+			}
+
 			return {
-				text,
+				...parsed,
 				provider: this.id,
 				model: this.settings.analysisModel,
 				traceId,
