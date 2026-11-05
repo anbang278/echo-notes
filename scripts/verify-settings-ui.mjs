@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { verifyLocalAsrLifecycle } from "./verify-local-asr-lifecycle.mjs";
 import { verifyRecordingSummary } from "./verify-recording-summary.mjs";
+import { verifySettingsLayout } from "./verify-settings-layout.mjs";
 import { verifyCoreRecordingStorage, verifyRecordingStorageSettings } from "./verify-recording-storage.mjs";
 
 // 该脚本只用于本地验收，通过隔离的 Obsidian renderer 调用内部 API，不进入插件运行时代码。
@@ -6332,6 +6333,9 @@ try {
 	await verifyIntroduction(page);
 	await verifyTabs(page);
 	await reopenSettings(page);
+	const responsiveSettingsLayouts = await verifySettingsLayout(page, {
+		pluginId: PLUGIN_ID, outputDir: OUTPUT_DIR, getActivePanel, setViewportMode, viewports: VIEWPORTS
+	});
 	const localAsrLifecycle = await verifyLocalAsrLifecycle(page, { pluginId: PLUGIN_ID, getActiveSetting, getActivePanel, setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR });
 	const localOpenAISettings = await verifyLocalOpenAISettings(page);
 	await verifySiliconFlowUpgradeModal(page);
@@ -6412,6 +6416,7 @@ try {
 			runtimeErrors: pageErrors.length
 		},
 		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
+		responsiveSettingsLayouts,
 		recordingStorageLayouts,
 		recordingStorageIntegration,
 		recordingSummaryIntegration,

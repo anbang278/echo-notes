@@ -57,6 +57,7 @@ body .setting-item.echo-notes-settings-definition-row {
  * 在 Obsidian 1.13 清除灰色 surface 后，给 Echo Notes 自己的内容区域建立轻量边界。
  * 注意：Shell 的职责是 Echo Notes 自己的内容边界，不要与 Obsidian 1.13 surface reset 混合。 */
 .echo-notes-settings-shell {
+	container: echo-notes-settings-shell / inline-size;
 	display: block;
 	box-sizing: border-box;
 	width: 100%;
@@ -962,7 +963,10 @@ button.echo-notes-settings-step:focus-visible {
 	min-width: 0;
 	font-size: var(--font-ui-small);
 	line-height: 1.3;
-	overflow-wrap: anywhere;
+}
+
+.echo-notes-settings-step-label > span {
+	white-space: nowrap;
 }
 
 .echo-notes-settings-step-status {
@@ -1000,7 +1004,7 @@ button.echo-notes-settings-section-tab {
 	justify-content: center;
 	height: auto;
 	min-width: 0;
-	min-height: 38px;
+	min-height: 44px;
 	margin: 0 0 -1px;
 	padding: 8px 6px 9px;
 	border: 0;
@@ -1013,7 +1017,7 @@ button.echo-notes-settings-section-tab {
 	font-size: var(--font-ui-small);
 	line-height: 1.3;
 	text-align: center;
-	overflow-wrap: anywhere;
+	white-space: nowrap;
 	cursor: pointer;
 	transition: border-color 160ms ease, color 160ms ease;
 }
@@ -1663,7 +1667,8 @@ button.echo-notes-memory-settings-review-filter.is-active {
 }
 
 .echo-notes-transcription-context-identity {
-	display: flex;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
@@ -1679,8 +1684,8 @@ button.echo-notes-memory-settings-review-filter.is-active {
 }
 
 button.echo-notes-transcription-context-switch {
-	flex: 0 0 auto;
-	min-height: 36px;
+	width: auto;
+	min-height: 44px;
 }
 
 button.echo-notes-transcription-context-switch:focus-visible {
@@ -1689,10 +1694,12 @@ button.echo-notes-transcription-context-switch:focus-visible {
 }
 
 .echo-notes-transcription-context-provider {
+	min-width: 0;
 	color: var(--text-normal);
 	font-size: var(--font-ui-medium);
 	font-weight: 700;
-	overflow-wrap: anywhere;
+	overflow-wrap: break-word;
+	line-height: 1.4;
 }
 
 .echo-notes-transcription-context-mode {
@@ -1707,6 +1714,7 @@ button.echo-notes-transcription-context-switch:focus-visible {
 }
 
 .echo-notes-transcription-context-model {
+	min-width: 0;
 	display: block;
 	width: fit-content;
 	max-width: 100%;
@@ -1864,18 +1872,18 @@ button.echo-notes-transcription-context-switch:focus-visible {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
 	gap: 8px;
-	margin-bottom: 26px;
+	margin-bottom: 12px;
 }
 
 button.echo-notes-settings-capability-tab {
 	display: flex;
 	align-items: stretch;
 	flex-direction: column;
-	grid-column: span 2;
+	grid-column: auto;
 	min-width: 0;
-	min-height: 46px;
-	height: 46px;
-	padding: 10px 12px;
+	min-height: 56px;
+	height: auto;
+	padding: 8px 10px;
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	box-shadow: none;
@@ -1883,10 +1891,6 @@ button.echo-notes-settings-capability-tab {
 	color: var(--text-normal);
 	text-align: left;
 	cursor: pointer;
-}
-
-button.echo-notes-settings-capability-tab:nth-child(n + 4) {
-	grid-column: auto;
 }
 
 button.echo-notes-settings-capability-tab:hover {
@@ -1898,7 +1902,7 @@ button.echo-notes-settings-capability-tab:hover {
 button.echo-notes-settings-capability-tab.is-active {
 	border-color: var(--interactive-accent);
 	border-left: 3px solid var(--interactive-accent);
-	padding-left: 10px;
+	padding-left: 8px;
 	background: color-mix(in srgb, var(--interactive-accent) 11%, var(--background-primary));
 	color: var(--text-accent);
 }
@@ -1911,8 +1915,9 @@ button.echo-notes-settings-capability-tab:focus-visible {
 .echo-notes-settings-capability-tab-title {
 	display: flex;
 	align-items: flex-start;
+	flex-direction: column;
 	justify-content: space-between;
-	gap: 6px;
+	gap: 2px;
 	font-size: var(--font-ui-small);
 	font-weight: 700;
 	line-height: 1.35;
@@ -1990,52 +1995,12 @@ button.echo-notes-settings-capability-tab:focus-visible {
 	margin: 6px 0 0;
 }
 
-@container echo-notes-settings-panel (max-width: 940px) {
-	.echo-notes-settings-capability-tabs {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-	}
-
-	button.echo-notes-settings-capability-tab,
-	button.echo-notes-settings-capability-tab:nth-child(n + 4),
-	button.echo-notes-settings-capability-tab:last-child {
-		grid-column: auto;
-	}
-}
-
 @container echo-notes-settings-panel (max-width: 620px) {
-	.echo-notes-settings-capability-tabs {
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-	}
-
-	button.echo-notes-settings-capability-tab,
-	button.echo-notes-settings-capability-tab:nth-child(n + 4),
-	button.echo-notes-settings-capability-tab:last-child {
-		grid-column: auto;
-		min-height: 58px;
-		height: auto;
-	}
-
-	.echo-notes-settings-capability-tab-title {
-		align-items: flex-start;
-		flex-direction: column;
-		gap: 2px;
-	}
-
-	.echo-notes-settings-capabilities-heading {
-		align-items: flex-start;
-		flex-direction: column;
-	}
-
 	.echo-notes-settings-capability-panel {
 		padding-inline: 12px;
 	}
 
 	.echo-notes-settings-capability-panel button {
-		min-height: 44px;
-	}
-
-	button.echo-notes-transcription-context-switch {
-		width: 100%;
 		min-height: 44px;
 	}
 }
@@ -2412,7 +2377,7 @@ button.echo-notes-quick-recording-hotkey-clear {
 	color: var(--color-red);
 }
 
-@container echo-notes-settings-panel (max-width: 560px) {
+@container echo-notes-settings-panel (width < 480px) {
 	.echo-notes-settings-section-tabs {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2424,7 +2389,7 @@ button.echo-notes-quick-recording-hotkey-clear {
 
 	button.echo-notes-settings-section-tab {
 		min-width: 0;
-		min-height: 42px;
+		min-height: 44px;
 		padding-inline: 6px;
 		border-bottom: 0;
 		border-radius: 6px;
@@ -2435,6 +2400,27 @@ button.echo-notes-quick-recording-hotkey-clear {
 		border-bottom: 0;
 	}
 
+	.echo-notes-transcription-context-identity {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 8px;
+	}
+
+	button.echo-notes-transcription-context-switch {
+		justify-self: start;
+	}
+
+	.echo-notes-settings-capability-tabs {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+
+@container echo-notes-settings-panel (width < 360px) {
+	.echo-notes-settings-capability-tabs {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+
+@container echo-notes-settings-panel (max-width: 560px) {
 	.echo-notes-settings-panel .setting-item {
 		align-items: stretch;
 		flex-direction: column;
@@ -2485,6 +2471,52 @@ button.echo-notes-quick-recording-hotkey-clear {
 
 	.echo-notes-inline-validation {
 		text-align: left;
+	}
+}
+
+/* Short controls keep their natural width in the default desktop settings pane. */
+@container echo-notes-settings-panel (min-width: 480px) {
+	.echo-notes-settings-panel .setting-item.echo-notes-settings-compact-row,
+	.echo-notes-settings-panel .setting-item.echo-notes-quick-recording-hotkey {
+		align-items: center;
+		flex-direction: row;
+		gap: 16px;
+	}
+
+	.echo-notes-settings-panel .setting-item.echo-notes-settings-compact-row > .setting-item-info,
+	.echo-notes-settings-panel .setting-item.echo-notes-quick-recording-hotkey > .setting-item-info {
+		width: auto;
+		min-width: 0;
+		flex: 1 1 auto;
+	}
+
+	.echo-notes-settings-panel .setting-item.echo-notes-settings-compact-row > .setting-item-control,
+	.echo-notes-settings-panel .setting-item.echo-notes-quick-recording-hotkey > .setting-item-control {
+		width: auto;
+		min-width: 0;
+		flex: 0 0 auto;
+		justify-content: flex-end;
+	}
+}
+
+@container echo-notes-settings-shell (max-width: 620px) {
+	.echo-notes-settings-workflow {
+		margin-bottom: 18px;
+	}
+
+	button.echo-notes-settings-step {
+		gap: 6px;
+		padding-inline: 2px;
+	}
+}
+
+@container echo-notes-settings-shell (width < 480px) {
+	.echo-notes-settings-step-label {
+		font-size: var(--font-ui-smaller);
+	}
+
+	.echo-notes-settings-step-status {
+		width: 100%;
 	}
 }
 
@@ -3838,32 +3870,9 @@ button.echo-notes-task-center-tab.is-active {
 		margin-bottom: 14px;
 	}
 
-	.echo-notes-settings-workflow {
-		margin-bottom: 18px;
-	}
-
-	.echo-notes-settings-step {
-		gap: 6px;
-		padding: 0 2px;
-	}
-
-	.echo-notes-settings-step-label {
-		font-size: var(--font-ui-smaller);
-	}
-
-	.echo-notes-settings-step-status {
-		width: 100%;
-	}
-
 	.echo-notes-settings-section-tabs {
 		margin-top: 8px;
 		margin-bottom: 14px;
-	}
-
-	button.echo-notes-settings-section-tab {
-		min-height: 42px;
-		padding: 7px 3px 8px;
-		font-size: var(--font-ui-smaller);
 	}
 
 	.echo-notes-upload-preview-row {
@@ -3873,12 +3882,6 @@ button.echo-notes-task-center-tab.is-active {
 
 	.echo-notes-upload-preview-label {
 		white-space: normal;
-	}
-
-	.echo-notes-transcription-context-identity {
-		align-items: flex-start;
-		flex-direction: column;
-		gap: 6px;
 	}
 
 	.echo-notes-transcription-context {
@@ -6253,10 +6256,6 @@ button.echo-notes-memory-tool:hover {
 }
 
 @container echo-notes-settings-panel (max-width: 620px) {
-	.echo-notes-settings-capability-tabs {
-	grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 	.echo-notes-asr-path-row {
 	flex-direction: column;
 }

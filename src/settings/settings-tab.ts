@@ -697,6 +697,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			'.setting-item-control > input[type="search"], ' +
 			'.setting-item-control > select'
 		).forEach((fieldEl) => fieldEl.addClass("echo-notes-settings-field"));
+		containerEl.querySelectorAll<HTMLElement>(".setting-item").forEach((settingEl) => {
+			const controlEl = settingEl.querySelector<HTMLElement>(":scope > .setting-item-control");
+			settingEl.toggleClass("echo-notes-settings-compact-row", Boolean(
+				controlEl?.children.length === 1 && controlEl.firstElementChild?.matches(".checkbox-container")
+			));
+		});
 	}
 
 	private renderRecordingStorageSettings(containerEl: HTMLElement): void {
