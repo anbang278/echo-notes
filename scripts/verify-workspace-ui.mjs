@@ -60,9 +60,9 @@ export async function verifyMeetingWorkspace(page, helpers) {
 			app.setting.close();
 			app.workspace.leftSplit?.collapse();
 			app.workspace.rightSplit?.collapse();
+			await app.vault.createFolder(root);
 			plugin.settings = { ...plugin.settings, memoryRootFolder: `${root}/Memory`, memoryPathLanguage: "zh", meetingDisplayTimezone: "Asia/Taipei", meetingWorkspaceMode: "reader", autoTranscribeOnAudioLink: false, autoTranscribeNewAudio: false };
 			await plugin.saveSettings();
-			await app.vault.createFolder(root);
 			const service = plugin.meetingWorkspace;
 			await service.catalog.initialize();
 			const project = await service.catalog.registerProject(`${root}/Project.md`, "工作台验收项目");
@@ -89,6 +89,13 @@ export async function verifyMeetingWorkspace(page, helpers) {
 			await plugin.activateMeetingWorkspace("reader");
 			return { projectId: project.id, date, root, primaryMeetingId: sources[0].meetingId };
 		}, { id: pluginId, expectedVault: validationVault, fixtureKey: FIXTURE_KEY });
+		for (let attempt = 0; attempt < 8 && await page.locator(".modal-container").count(); attempt++) {
+			const close = page.locator(".modal-container").last().locator(".modal-close-button");
+			if (await close.count() && await close.isVisible()) await close.click();
+			else await page.keyboard.press("Escape");
+			await page.waitForTimeout(50);
+		}
+		assert.equal(await page.locator(".modal-container").count(), 0, "前序验收弹窗未关闭，会议中心不可交互");
 		await setViewportMode(page, viewports[0], "light");
 		await waitWorkspace();
 		await workspace().getByLabel("会议日期范围", { exact: true }).selectOption("all");
@@ -121,7 +128,10 @@ export async function verifyMeetingWorkspace(page, helpers) {
 		await materials.locator(".echo-notes-evidence-item").first().waitFor({ state: "visible" });
 		await materials.locator(".echo-notes-evidence-item details > summary").first().click();
 		await materials.getByRole("button", { name: "固定纳入", exact: true }).first().click();
-		await page.waitForFunction((type) => window.app.workspace.getLeavesOfType(type)[0]?.view.materials.query.pinnedEvidenceIds.length > 0, VIEW_TYPE);
+		await page.waitForFunction((type) => {
+			const materials = window.app.workspace.getLeavesOfType(type)[0]?.view.materials;
+			return materials?.query.pinnedEvidenceIds.length > 0 && materials.previewQuery === JSON.stringify(materials.query);
+		}, VIEW_TYPE);
 		const selected = await page.evaluate((type) => {
 			const view = window.app.workspace.getLeavesOfType(type)[0].view;
 			return { projectIds: view.state.projectIds, tags: view.state.tags, search: view.state.search, question: view.materials.query.question, pins: view.materials.query.pinnedEvidenceIds, count: view.materials.result?.selectedItems.length };
