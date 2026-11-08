@@ -171,6 +171,11 @@ export async function verifyWorkspaceAgentUi(page, { pluginId, validationVault, 
 	} finally {
 		let cleanupSucceeded = false;
 		try {
+			const connectionModal = page.locator(".modal").filter({ has: page.getByText("连接外部 Agent", { exact: true }) }).last();
+			if (await connectionModal.isVisible()) {
+				await page.keyboard.press("Escape");
+				await connectionModal.waitFor({ state: "hidden" });
+			}
 			await page.evaluate(async ({ id, fixtureKey, type }) => {
 				const fixture = window[fixtureKey];
 				if (!fixture) return;

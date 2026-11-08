@@ -138,6 +138,11 @@ function assert(condition, message) {
 	}
 }
 
+function transcriptUsesModel(content, model) {
+	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content ?? "")?.[1];
+	return frontmatter?.split(/\r?\n/).some((line) => line === `model: ${model}` || line === `model: "${model}"`) ?? false;
+}
+
 function compareVersions(left, right) {
 	const leftParts = left.split(".").map(Number);
 	const rightParts = right.split(".").map(Number);
@@ -2538,7 +2543,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 			return { status: task?.status, model: task?.model, text: transcript ? await window.app.vault.read(transcript) : null };
 		}, PLUGIN_ID);
 		assert(waiting.status === "running" && waiting.model === models[0] &&
-			waiting.text?.includes(`model: "${models[0]}"`) && waiting.text.includes("%% echo-notes-checkpoint:start"),
+			transcriptUsesModel(waiting.text, models[0]) && waiting.text.includes("%% echo-notes-checkpoint:start"),
 			"请求等待期间 running 任务、配置技术信息与检查点须使用启动模型");
 		assert(mock.calls.length === 1, "同音频在途第二次调用不能重复上传");
 		await page.evaluate((pluginId) => {
@@ -2552,7 +2557,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 		assert(followerPath === outcome.transcriptPath && mock.calls.length === 1,
 			"同音频并发等待者须共享一次上传和同一转写稿");
 		assert(outcome.task?.status === "success" && outcome.task.model === models[0] &&
-			outcome.text?.includes(`model: "${models[0]}"`) && outcome.text.includes("Speaker 1: 本地 Mock 转写正文。"),
+			transcriptUsesModel(outcome.text, models[0]) && outcome.text.includes("Speaker 1: 本地 Mock 转写正文。"),
 			"运行中修改设置不能改变 Qwen 任务的模型、输出正文和状态");
 		assert(!outcome.text.includes("不应额外解析") && !outcome.text.includes("%% echo-notes-checkpoint:start"),
 			"额外响应结构不得进入插件正文，成功后应清理检查点");
@@ -2561,7 +2566,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 			audioPath = await createFileAndStart(models[index], index + 1);
 			outcome = await resultFor(audioPath);
 			assert(outcome.task?.status === "success" && outcome.task.provider === "siliconflow" &&
-				outcome.task.model === models[index] && outcome.text?.includes(`model: "${models[index]}"`),
+				outcome.task.model === models[index] && transcriptUsesModel(outcome.text, models[index]),
 				`本地 Mock 模型 ${models[index]} 的请求与结果不一致`);
 		}
 		assert(mock.calls.length === models.length && mock.calls.every((call, index) => call.model === models[index]),
@@ -2574,7 +2579,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 		assert(longAudioCalls.length === 2 && longAudioCalls.every((call) => call.model === models[4]),
 			"超过 10 分钟的 WAV 应切为两个请求，且所有分段使用同一任务模型");
 		assert(outcome.task?.status === "success" && outcome.task.model === models[4] &&
-			outcome.text?.includes(`model: "${models[4]}"`) && !outcome.text.includes("%% echo-notes-checkpoint:start"),
+			transcriptUsesModel(outcome.text, models[4]) && !outcome.text.includes("%% echo-notes-checkpoint:start"),
 			"长音频最终任务、稿件技术信息与检查点清理必须使用同一模型");
 
 		const gsrLongAudioCallCount = mock.calls.length;
@@ -2584,7 +2589,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 		assert(gsrLongAudioCalls.length === 4 && gsrLongAudioCalls.every((call) => call.model === models[3]),
 			"GSR 超过 10 分钟的 WAV 应切为约 3 分钟共四个请求，且所有分段使用同一任务模型");
 		assert(gsrOutcome.task?.status === "success" && gsrOutcome.task.model === models[3] &&
-			gsrOutcome.text?.includes(`model: "${models[3]}"`) && !gsrOutcome.text.includes("%% echo-notes-checkpoint:start"),
+			transcriptUsesModel(gsrOutcome.text, models[3]) && !gsrOutcome.text.includes("%% echo-notes-checkpoint:start"),
 			"GSR 长音频最终任务、稿件技术信息与检查点清理必须使用同一模型");
 
 		const oldFilePath = await createFileAndStart(models[4], 7);
@@ -2624,7 +2629,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 			}));
 		}, PLUGIN_ID);
 		assert(batchState.every((entry) => entry.model === models[0] && entry.status === "success" &&
-			entry.text?.includes(`model: "${models[0]}"`)),
+			transcriptUsesModel(entry.text, models[0])),
 			"批次任务中心与最终稿必须统一使用 Qwen");
 
 		const failedBatchPaths = [
@@ -2684,7 +2689,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 			};
 		}, { pluginId: PLUGIN_ID, retriedAudioPath: failedBatchTask.path });
 		assert(mock.calls.length === retryCallCount + 1 && mock.calls.at(-1)?.model === models[2] &&
-			retryState.status === "success" && retryState.model === models[2] && retryState.text?.includes(`model: "${models[2]}"`),
+			retryState.status === "success" && retryState.model === models[2] && transcriptUsesModel(retryState.text, models[2]),
 			"批量失败项手动重试必须使用重试时的新配置，并统一更新任务与最终稿模型");
 
 		mock.respondWith(200, { segments: [{ text: "升级后失败不能作为正文" }] });
@@ -2698,7 +2703,7 @@ async function verifySiliconFlowMockChain(page, mock) {
 		outcome = await resultFor(audioPath);
 		assert(mock.calls.length === upgradedFailureCallCount + 1 && mock.calls.at(-1)?.model === models[0] &&
 			outcome.task?.status === "failed" && outcome.task.model === models[0] &&
-			outcome.text?.includes(`model: "${models[0]}"`) && outcome.task.error?.includes("缺少 text 字段"),
+			transcriptUsesModel(outcome.text, models[0]) && outcome.task.error?.includes("缺少 text 字段"),
 			"升级后请求失败时，失败任务与稿件仍必须记录最终保存的模型");
 		mock.respondWith(200, { text: "Speaker 1: 本地 Mock 转写正文。", segments: [{ speaker: "A", text: "不应额外解析" }] });
 		const settledState = await page.evaluate((pluginId) => {
