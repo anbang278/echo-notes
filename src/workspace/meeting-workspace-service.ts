@@ -323,11 +323,13 @@ export class MeetingWorkspaceService {
 		return JSON.stringify({ ...result, ...(this.lastPublishError ? { lastPublishError: this.lastPublishError } : {}) }, null, 2);
 	}
 
-	agentConnectionInstructions(): string {
+	agentConnectionInstructions(sourceKinds: EvidenceKind[]): string {
+		if (!sourceKinds.length) return "请先选择资料范围并生成快照。";
 		const vaultPath = this.app.vault.adapter instanceof FileSystemAdapter ? this.app.vault.adapter.getBasePath() : "当前移动端 Vault，需在可访问其文件的桌面端连接";
 		const quote = (value: string): string => "'" + value.replace(/'/g, "'\\''") + "'";
 		const alias = `echo-${createStableFingerprint(vaultPath).slice(0, 8)}`;
-		const args = `setup --vault ${quote(vaultPath)} --alias ${quote(alias)} --policy ${quote(`${this.catalog.paths.systemDir}/agent-reader/policy.json`)}`;
+		const kinds = [...new Set(sourceKinds)].map((kind) => `--kind ${quote(kind)}`).join(" ");
+		const args = `setup --vault ${quote(vaultPath)} --alias ${quote(alias)} --policy ${quote(`${this.catalog.paths.systemDir}/agent-reader/policy.json`)} ${kinds}`;
 		return `先安装完整 Skill，再在本机终端执行所选宿主的命令。\n\nCodex 默认用户目录\nnode "$HOME/.agents/skills/echo-notes-memory/scripts/echo-memory.mjs" ${args}\n\nHermes 使用明确选定的 profile\n先将 HERMES_HOME 设为该 profile 的绝对目录，安装和查询使用同一目录。\nnode "$HERMES_HOME/skills/echo-notes-memory/scripts/echo-memory.mjs" ${args}\n\n运行 doctor → search → read → source 核对结果。当前连接仅允许插件策略与 setup 范围的交集。`;
 	}
 

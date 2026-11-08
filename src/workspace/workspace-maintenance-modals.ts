@@ -154,12 +154,13 @@ export class AgentConnectionModal extends Modal {
 		if (this.message) root.createEl("pre", { text: this.message, cls: "echo-notes-workspace-command", attr: { role: "status" } });
 		root.createEl("h3", { text: "首次连接" });
 		root.createEl("p", { text: "Skill 测试包随本地交付提供。公开固定版本安装命令将在发布核验后提供。为所选 Hermes profile 使用相同安装和验证目录。" });
-		const instructions = root.createEl("pre", { text: this.service.agentConnectionInstructions(), cls: "echo-notes-workspace-command" });
+		const instructions = root.createEl("pre", { text: this.service.agentConnectionInstructions(this.kinds), cls: "echo-notes-workspace-command" });
 		new Setting(root).addButton((button) => button.setButtonText("复制本机连接指引").onClick(() => this.execute(async () => { await navigator.clipboard.writeText(instructions.textContent ?? ""); this.message = "本机连接指引已复制。"; })));
 	}
 
 	private setKind(kind: EvidenceKind, value: boolean): void {
 		this.kinds = value ? [...new Set([...this.kinds, kind])] : this.kinds.filter((item) => item !== kind);
+		this.render();
 	}
 
 	private execute(operation: () => Promise<void>): void {

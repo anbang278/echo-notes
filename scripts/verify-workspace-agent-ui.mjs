@@ -99,10 +99,14 @@ export async function verifyWorkspaceAgentUi(page, { pluginId, validationVault, 
 		const modal = page.locator(".modal").filter({ has: page.getByText("连接外部 Agent", { exact: true }) }).last();
 		await modal.waitFor({ state: "visible" });
 		const setting = (title) => modal.locator(".setting-item").filter({ has: page.getByText(title, { exact: true }) });
+		assert((await modal.innerText()).includes("--kind 'approved_memory'"), "默认连接指引未显式指定已批准记忆范围");
 		const memoryToggle = setting("已批准记忆").locator(".checkbox-container");
 		if (await memoryToggle.evaluate((element) => element.classList.contains("is-enabled"))) await memoryToggle.click();
 		const transcriptToggle = setting("原始与修订转写").locator(".checkbox-container");
 		if (!await transcriptToggle.evaluate((element) => element.classList.contains("is-enabled"))) await transcriptToggle.click();
+		const connectionInstructions = await modal.innerText();
+		assert(connectionInstructions.includes("--kind 'transcript'") && !connectionInstructions.includes("--kind 'approved_memory'"), "连接指引未随原文资料范围切换");
+		report.checks.setupInstructionsMatchSelectedKinds = true;
 		await modal.getByRole("button", { name: "开启只读导出并生成快照", exact: true }).click();
 		await waitUntil(async () => (await modal.innerText()).includes("已发布完整快照"), "真实 Agent UI 未发布完整快照");
 		await modal.getByRole("button", { name: "健康检查", exact: true }).click();
