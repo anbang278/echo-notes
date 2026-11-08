@@ -10,6 +10,9 @@ import {
 	MEMORY_TYPES,
 	formatProposedTier,
 	formatMemoryType,
+	formatMemoryTier,
+	formatMemoryAuthority,
+	formatMemoryValidity,
 	isLongTermMemory,
 	type ContextPurpose,
 	type MemoryPaths,
@@ -103,6 +106,15 @@ export function buildMemoryContextPackagePreview(
 				observedAt: entry.assertion.observedAt,
 				sourcePath: entry.assertion.sourcePath
 			},
+			review: entry.review ? {
+				status: entry.review.status,
+				effectiveType: entry.review.effectiveType,
+				effectiveTier: entry.review.effectiveTier,
+				authority: entry.review.authority,
+				validity: entry.review.validity,
+				validFrom: entry.review.validFrom,
+				validUntil: entry.review.validUntil
+			} : undefined,
 			relations: entry.relationAnnotations.map((annotation) => annotation.relationId).sort()
 		}))
 	}))}`;
@@ -250,15 +262,20 @@ function renderMemoryContextManagedBlock(
 
 function renderContextEntry(entry: MemoryAggregationEntry, language: "zh" | "en"): string[] {
 	const assertion = entry.assertion;
+	const effectiveType = entry.review?.effectiveType ?? assertion.memoryType;
+	const tierText = entry.review?.effectiveTier ? formatMemoryTier(entry.review.effectiveTier, language) : formatProposedTier(assertion.proposedTier, language);
 	const lines = [
 		`- ${escapeMarkdownInline(assertion.observedAt)} · **${escapeMarkdownInline(assertion.subjectName)} · ${escapeMarkdownInline(assertion.predicate)}**：${escapeMarkdownInline(assertion.value)}`,
-		`  - ${language === "en" ? "Type" : "类型"}：${formatMemoryType(assertion.memoryType, language)} · ${language === "en" ? "Horizon" : "时效"}：${formatProposedTier(assertion.proposedTier, language)}`,
+		`  - ${language === "en" ? "Type" : "类型"}：${formatMemoryType(effectiveType, language)} · ${language === "en" ? "Horizon" : "时效"}：${tierText}`,
 		`  - ${language === "en" ? "Evidence" : "证据"}：“${escapeMarkdownInline(assertion.evidenceQuote)}”`
 	];
 	if (assertion.whyRemember) {
 		lines.push(`  - ${language === "en" ? "Why remember" : "准入理由"}：${escapeMarkdownInline(assertion.whyRemember)}`);
 	}
-	const temporalText = formatTemporalText(assertion.temporal, language);
+	if (entry.review) {
+		lines.push(`  - ${language === "en" ? "Authority" : "权威"}：${formatMemoryAuthority(entry.review.authority, language)} · ${language === "en" ? "Validity" : "有效性"}：${formatMemoryValidity(entry.review.validity, language)}`);
+	}
+	const temporalText = formatTemporalText({ ...assertion.temporal, validFrom: entry.review?.validFrom ?? assertion.temporal?.validFrom, validUntil: entry.review?.validUntil ?? assertion.temporal?.validUntil }, language);
 	if (temporalText) {
 		lines.push(`  - ${language === "en" ? "Valid" : "时间范围"}：${temporalText}`);
 	}
@@ -319,15 +336,17 @@ function matchesContextFilters(
 		return false;
 	}
 	if (options.memoryTypes && options.memoryTypes.length > 0) {
-		if (!entry.assertion.memoryType || !options.memoryTypes.includes(entry.assertion.memoryType)) {
+		const effectiveType = entry.review?.effectiveType ?? entry.assertion.memoryType;
+		if (!effectiveType || !options.memoryTypes.includes(effectiveType)) {
 			return false;
 		}
 	}
 	if (options.proposedTiers && options.proposedTiers.length > 0) {
+		const tier = entry.review?.effectiveTier;
 		const matchesHorizon = options.proposedTiers.some((horizon) =>
 			horizon === "working"
-				? entry.assertion.proposedTier === "working"
-				: isLongTermMemory(entry.assertion.proposedTier)
+				? (tier ? tier === "working" : entry.assertion.proposedTier === "working")
+				: (tier ? tier !== "working" : isLongTermMemory(entry.assertion.proposedTier))
 		);
 		if (!matchesHorizon) {
 			return false;
@@ -351,11 +370,11 @@ function sortContextEntries(
 	const wrapped = entries.map((entry) => ({
 		entry,
 		rankable: {
-			assertion: entry.assertion,
+			assertion: { ...entry.assertion, memoryType: entry.review?.effectiveType ?? entry.assertion.memoryType },
 			id: `${entry.candidateId}\n${entry.assertion.id}`,
-			tier: entry.assertion.proposedTier === "working" ? "working" : "long_term",
-			authority: "user_confirmed",
-			validity: "active"
+			tier: entry.review?.effectiveTier ?? (entry.assertion.proposedTier === "working" ? "working" : "long_term"),
+			authority: entry.review?.authority ?? "evidence_backed",
+			validity: entry.review?.validity ?? "active"
 		} satisfies RankableMemory
 	}));
 	const ranked = rankMemories(wrapped.map((item) => item.rankable), purpose);

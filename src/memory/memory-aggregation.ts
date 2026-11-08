@@ -7,6 +7,7 @@ import {
 	formatProposedTier,
 	formatMemoryType,
 	type MemoryAssertion,
+	type MemoryAssertionReview,
 	type MemoryPaths
 } from "./memory-types";
 
@@ -18,6 +19,8 @@ export const MEMORY_HOME_AGGREGATION_END = "<!-- echo-memory-home-aggregation:en
 export type MemoryAggregationKind = "projects" | "people" | "timeline";
 
 export interface MemoryAggregationEntry {
+	/** Present for current entries read from Review sidecars. */
+	review?: MemoryAssertionReview;
 	assertion: MemoryAssertion;
 	candidateId: string;
 	candidatePath: string;

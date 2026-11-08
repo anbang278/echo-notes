@@ -260,6 +260,8 @@ export interface AnalysisTemplateConfig {
 }
 
 export interface EchoNotesSettings {
+	meetingWorkspaceMode: "reader" | "projects";
+	meetingDisplayTimezone: string;
 	transcriptionMode: TranscriptionMode;
 	offlineTranscription: TranscriptionConfig<OfflineTranscriptionProviderId>;
 	offlineTranscriptionByProvider: OfflineTranscriptionProfiles;
@@ -1085,6 +1087,8 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 		useGlossaryForProofreading: false,
 		strategy: "auto-low-risk"
 	},
+	meetingWorkspaceMode: "reader",
+	meetingDisplayTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
 	memoryEnabled: false,
 	memoryInitialized: false,
 	memoryRootFolder: "Echo Memory",
@@ -1427,6 +1431,8 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		useGlossaryForProofreading: rawProofreading.useGlossaryForProofreading === true,
 		strategy: rawProofreading.strategy === "review-all" ? "review-all" : "auto-low-risk"
 	};
+	settings.meetingWorkspaceMode = raw.meetingWorkspaceMode === "projects" ? "projects" : "reader";
+	settings.meetingDisplayTimezone = normalizeMeetingTimezone(raw.meetingDisplayTimezone);
 	settings.memoryEnabled =
 		typeof raw.memoryEnabled === "boolean" ? raw.memoryEnabled : DEFAULT_SETTINGS.memoryEnabled;
 	settings.memoryInitialized =
@@ -2070,4 +2076,12 @@ function normalizeHotkeyKey(value: string): string {
 function normalizeLocalEnhancementSettings(value: unknown): LocalTranscriptionEnhancementSettings {
 	const raw = isRecord(value) ? value : {};
 	return { hotwordEnhancementEnabled: raw.hotwordEnhancementEnabled === true, contextEnhancementEnabled: raw.contextEnhancementEnabled === true };
+}
+
+function normalizeMeetingTimezone(value: unknown): string {
+	if (typeof value === "string" && value.trim()) {
+		try { new Intl.DateTimeFormat("en", { timeZone: value }).format(); return value; }
+		catch { /* Invalid stored timezone falls back to the initial device timezone. */ }
+	}
+	return DEFAULT_SETTINGS.meetingDisplayTimezone;
 }

@@ -1,4 +1,5 @@
-import { App, normalizePath, TFile, TFolder } from "obsidian";
+import { App, normalizePath, parseYaml, stringifyYaml, TFile, TFolder } from "obsidian";
+import { parseCatalogDocument, catalogSha256 } from "../catalog/catalog-document";
 import { extractTranscriptAnalyses, extractTranscriptText } from "../analysis/analysis-output";
 import { splitAnalysisText, type AnalysisTextChunk } from "../analysis/analysis-chunking";
 import { FileService } from "../obsidian/file-service";
@@ -269,7 +270,7 @@ export class MemoryService {
 	private app: App;
 	private files: FileService;
 
-	constructor(app: App) {
+	constructor(app: App, private resolveMeeting?: (input: { transcriptPath: string; legacyMeetingPath: string; title: string }) => Promise<string>) {
 		this.app = app;
 		this.files = new FileService(app);
 	}
@@ -338,7 +339,13 @@ export class MemoryService {
 	): Promise<MemoryExtractionResult> {
 		throwIfMemoryTaskAborted(options.signal);
 		const manifest = await this.readManifest(settings);
-		const transcriptContent = await this.app.vault.cachedRead(transcriptFile);
+		const preparedMeetingPath = this.resolveMeeting
+			? await this.resolveMeeting({ transcriptPath: transcriptFile.path, legacyMeetingPath: normalizePath(`${manifest.paths.meetingsDir}/${sanitizeMemoryFileName(transcriptFile.basename)} ${createStableFingerprint(transcriptFile.path).slice(0, 8)}.md`), title: transcriptFile.basename })
+			: undefined;
+		const transcriptContent = await this.app.vault.read(transcriptFile);
+		const sourceProperties = parseCatalogDocument(transcriptContent, { parse: (value) => parseYaml(value) as unknown, stringify: stringifyYaml }).properties;
+		const sourceId = typeof sourceProperties.echo_source_id === "string" ? sourceProperties.echo_source_id : undefined;
+		const sourceRevision = sourceId ? await catalogSha256(transcriptContent.replace(/\r\n/g, "\n")) : undefined;
 		throwIfMemoryTaskAborted(options.signal);
 		const transcriptText = extractTranscriptText(transcriptContent);
 		if (!transcriptText.trim()) {
@@ -378,6 +385,10 @@ export class MemoryService {
 			const existingCandidate = parseMemoryCandidate(await this.app.vault.cachedRead(existingCandidateFile));
 			const existingReview = await this.ensureMemoryReview(existingRun.candidatePath, existingCandidate);
 			options.onProgress?.("候选包已存在，正在同步会议页与审核入口");
+			if (this.resolveMeeting) {
+				const resolved = await this.resolveMeeting({ transcriptPath: existingCandidate.source.transcriptPath, legacyMeetingPath: existingRun.meetingPath, title: existingCandidate.source.transcriptTitle });
+				if (resolved !== existingRun.meetingPath) { existingRun.meetingPath = resolved; await this.writeManifest(manifest); }
+			}
 			await this.writeMeetingPage(
 				existingRun.meetingPath,
 				existingRun.candidatePath,
@@ -551,6 +562,7 @@ export class MemoryService {
 			traceIds,
 			...(rejectedAssertionCount > 0 ? { rejectedAssertionCount } : {}),
 			source: {
+				...(sourceId ? { sourceId, sourceRevision } : {}),
 				transcriptPath: transcriptFile.path,
 				transcriptTitle: transcriptFile.basename,
 				analysisTemplateIds: analyses.map((analysis) => analysis.templateId)
@@ -562,9 +574,10 @@ export class MemoryService {
 		const safeTitle = sanitizeMemoryFileName(transcriptFile.basename);
 		const candidatePath = normalizePath(`${manifest.paths.candidatesDir}/${date} ${safeTitle} ${fingerprint.slice(0, 8)}.md`);
 		const reviewPath = getMemoryReviewPath(candidatePath);
-		const meetingPath = normalizePath(
+		const legacyMeetingPath = normalizePath(
 			`${manifest.paths.meetingsDir}/${safeTitle} ${createStableFingerprint(transcriptFile.path).slice(0, 8)}.md`
 		);
+		const meetingPath = preparedMeetingPath ?? legacyMeetingPath;
 		throwIfMemoryTaskAborted(options.signal);
 		options.onProgress?.("正在写入会议页与记忆候选包");
 		await this.writeCandidate(candidatePath, reviewPath, candidate);

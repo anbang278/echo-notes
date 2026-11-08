@@ -171,6 +171,8 @@ export function parseMemoryCandidate(content: string): MemoryCandidatePackage {
 			!Number.isInteger(parsed.rejectedAssertionCount) ||
 			parsed.rejectedAssertionCount < 0
 		)) ||
+		(parsed.source.sourceId !== undefined && (typeof parsed.source.sourceId !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/.test(parsed.source.sourceId))) ||
+		(parsed.source.sourceRevision !== undefined && (typeof parsed.source.sourceRevision !== "string" || !/^[a-f0-9]{64}$/.test(parsed.source.sourceRevision))) ||
 		typeof parsed.source.transcriptPath !== "string" ||
 		typeof parsed.source.transcriptTitle !== "string" ||
 		!Array.isArray(parsed.source.analysisTemplateIds) ||

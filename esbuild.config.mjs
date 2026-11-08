@@ -1,6 +1,7 @@
 import esbuild from "esbuild";
 import { builtinModules } from "node:module";
 import process from "node:process";
+import { mkdir, writeFile } from "node:fs/promises";
 
 const production = process.argv[2] === "production";
 const builtins = [...builtinModules, ...builtinModules.map((moduleName) => `node:${moduleName}`)];
@@ -16,6 +17,7 @@ const context = await esbuild.context({
 	},
 	entryPoints: ["src/main.ts"],
 	bundle: true,
+	metafile: true,
 	external: [
 		"obsidian",
 		"electron",
@@ -46,7 +48,9 @@ const context = await esbuild.context({
 });
 
 if (production) {
-	await context.rebuild();
+	const result = await context.rebuild();
+	await mkdir(".tmp", { recursive: true });
+	await writeFile(".tmp/runtime-inputs.json", JSON.stringify(Object.keys(result.metafile.inputs)));
 	await context.dispose();
 } else {
 	await context.watch();

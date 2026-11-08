@@ -18,11 +18,13 @@ if (filesystemLoads.length !== 2) throw new Error(`运行时应只有流式读�
 
 // Only the lifecycle command adapter may load child_process; discovery may load os lazily.
 // Everything else must stay off Node process-spawning paths in the shipped bundle.
-const childProcessPattern = /\brequire\(\s*["']child_process["']\s*\)/g;
+const childProcessPattern = /\brequire\(\s*["'](?:node:)?child_process["']\s*\)/g;
 const childProcessLoads = Array.from(source.matchAll(childProcessPattern));
 if (childProcessLoads.length !== 1) throw new Error(`运行时应只有一个本地 ASR 惰性 child_process 入口，实际 ${childProcessLoads.length}`);
+const runtimeInputs = JSON.parse(await readFile(".tmp/runtime-inputs.json", "utf8"));
+if (runtimeInputs.some((file) => file.replaceAll("\\", "/").includes("src/agent-memory/node/"))) throw new Error("独立 Node reader 越过插件入口边界");
 const config = ts.readConfigFile("tsconfig.json", ts.sys.readFile).config;
-const files = ts.parseJsonConfigFileContent(config, ts.sys, process.cwd()).fileNames.filter(file => file.endsWith(".ts"));
+const files = ts.parseJsonConfigFileContent(config, ts.sys, process.cwd()).fileNames.filter(file => file.endsWith(".ts") && !file.replaceAll("\\", "/").includes("/src/agent-memory/node/"));
 let approvedLoads = 0;
 let approvedCommandLoads = 0;
 for (const file of files) {

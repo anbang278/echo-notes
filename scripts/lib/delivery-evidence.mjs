@@ -67,5 +67,6 @@ export async function validateVerification(root, report, requireClean = false) {
 }
 
 export function assertFullVerificationMode(env) {
+	if (env.ECHO_NOTES_VERIFY_WORKSPACE_ONLY === "1") throw new Error("完整验证不接受会议工作区定向筛选，请取消该变量后重试");
 	if (env.ECHO_NOTES_VERIFY_RECORDING_ONLY === "1") throw new Error("完整验证不接受 ECHO_NOTES_VERIFY_RECORDING_ONLY 定向筛选，请取消该变量后重试");
 }

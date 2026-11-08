@@ -5,6 +5,7 @@ export default [
 	{
 		ignores: [
 			"main.js",
+			"skills/echo-notes-memory/scripts/echo-memory.mjs",
 			".tmp/**",
 			"node_modules/**",
 			"dist/**",

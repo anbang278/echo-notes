@@ -9,7 +9,9 @@ import { CoreRecordingStorageAdapter } from "../src/audio/core-recording-storage
 
 const defaults = (): RecordingStorageSettings => ({ strategy: "obsidian", subfolder: "Recordings", customFolder: "Recordings" });
 
-function fixture() {
+type CatalogCallbacks = Partial<Pick<ConstructorParameters<typeof CoreRecordingStorageAdapter>[0], "onSessionStart" | "onSessionSaved" | "onSessionInterrupted">>;
+
+function fixture(callbacks: CatalogCallbacks = {}) {
 	const files = new Map<string, TFile>();
 	const bytes = new Map<string, ArrayBuffer>();
 	const contents = new Map<string, string>();
@@ -66,7 +68,7 @@ function fixture() {
 	};
 	const makeRecorder = () => ({ saveRecording: native, onStartRecording: () => undefined, onStopRecording: () => undefined, extension: "webm" });
 	let recorder: unknown = makeRecorder();
-	const adapter = new CoreRecordingStorageAdapter({ app, storage, getRecorder: () => recorder, getSettings: () => settings, getView: () => view, notify: (message) => notices.push(message) });
+	const adapter = new CoreRecordingStorageAdapter({ app, storage, getRecorder: () => recorder, getSettings: () => settings, getView: () => view, notify: (message) => notices.push(message), ...callbacks });
 	return {
 		app, storage, adapter, files, bytes, contents, notices, opened, native, makeRecorder,
 		getRecorder: () => recorder as ReturnType<typeof makeRecorder>,
@@ -188,10 +190,11 @@ export async function runRecordingStorageTests(): Promise<void> {
 	assert.equal(incompatible.notices.length, 1, "不兼容只提示一次并保留原方法");
 	assert.equal(incompatible.getRecorder().saveRecording, incompatible.native);
 	await runRecordingTimingTests();
+	await runCatalogRecordingFallbackTests();
 }
 
-function timedFixture() {
-	const f = fixture();
+function timedFixture(callbacks: CatalogCallbacks = {}) {
+	const f = fixture(callbacks);
 	let permission: () => Promise<void> = async () => undefined;
 	let permissionRequests = 0;
 	let releasedTracks = 0;
@@ -453,4 +456,99 @@ async function runRecordingTimingTests(): Promise<void> {
 		wallClock.mock.restore();
 		elapsedClock.mock.restore();
 	}
+}
+
+async function runCatalogRecordingFallbackTests(): Promise<void> {
+	const data = new Uint8Array([7, 8, 9]).buffer;
+	const registered: Array<{ id: string | null; path: string }> = [];
+	const interrupted: string[] = [];
+	const f = timedFixture({
+		onSessionStart: async () => "rec_existing-session",
+		onSessionSaved: async (id, file) => { registered.push({ id, path: file.path }); },
+		onSessionInterrupted: async (id) => { interrupted.push(id); }
+	});
+	const note = f.setNote("Native/来源.md");
+	f.setSettings({ ...defaults(), strategy: "custom-folder", customFolder: "../invalid" });
+	f.app.fileManager.getAvailablePathForAttachment = async () => { throw new Error("attachment lookup failed"); };
+	const sourceWaiters = new Map<string, Promise<TFile | null>>();
+	const waiterResults: Array<{ path: string; registeredBeforeRelease: boolean }> = [];
+	f.app.vault.on("create", (file) => {
+		const pending = f.adapter.getPendingSource(file.path);
+		assert.ok(pending, "native fallback must provide a readiness promise before the original create callback continues");
+		sourceWaiters.set(file.path, pending);
+		void pending.then(() => { waiterResults.push({ path: file.path, registeredBeforeRelease: registered.some((entry) => entry.path === file.path) }); });
+	});
+	await f.recorder.onStartRecording();
+	f.recorder.onStopRecording();
+	const native = await f.recorder.saveRecording(data) as TFile;
+	assert.equal(f.nativeCalls(), 1);
+	assert.deepEqual(registered, [{ id: "rec_existing-session", path: native.path }], "native fallback must bind the original recording session identity");
+	assert.equal(await sourceWaiters.get(native.path), note);
+	assert.equal(waiterResults[0].registeredBeforeRelease, true, "automatic transcription must run after the original recording identity is bound");
+	assert.deepEqual(interrupted, [], "a successful native fallback must not become interrupted during clearSession");
+	assert.equal(f.adapter.getPendingSource(native.path), undefined);
+	f.adapter.dispose();
+
+	let resolveStart!: (id: string) => void;
+	const lateSaved: string[] = [];
+	const lateInterrupted: string[] = [];
+	const late = timedFixture({
+		onSessionStart: () => new Promise<string>((resolve) => { resolveStart = resolve; }),
+		onSessionSaved: async (_id, file) => { await Promise.resolve(); lateSaved.push(file.path); },
+		onSessionInterrupted: async (id) => { lateInterrupted.push(id); }
+	});
+	late.setNote("保存期间停用.md");
+	await late.recorder.onStartRecording();
+	late.recorder.onStopRecording();
+	const save = late.recorder.saveRecording(data);
+	for (let index = 0; index < 20; index++) await Promise.resolve();
+	late.adapter.dispose();
+	resolveStart("rec_late");
+	const preserved = await save as TFile;
+	for (let index = 0; index < 5; index++) await Promise.resolve();
+	assert.deepEqual(lateSaved, [preserved.path]);
+	assert.deepEqual(lateInterrupted, [], "unload during save must wait for the saved callback before deciding interruption");
+
+	const partialSaved: string[] = [];
+	const partialInterrupted: string[] = [];
+	const partial = timedFixture({
+		onSessionStart: async () => "rec_partial_native",
+		onSessionSaved: async (id) => { partialSaved.push(id!); },
+		onSessionInterrupted: async (id) => { partialInterrupted.push(id); }
+	});
+	partial.setSettings({ ...defaults(), strategy: "custom-folder", customFolder: "../invalid" });
+	partial.app.fileManager.getAvailablePathForAttachment = async () => { throw new Error("lookup"); };
+	partial.setAfterCreate(() => { throw new Error("native link insertion failed after file write"); });
+	await partial.recorder.onStartRecording();
+	partial.recorder.onStopRecording();
+	await assert.rejects(partial.recorder.saveRecording(data), /native link insertion failed/);
+	for (let index = 0; index < 5; index++) await Promise.resolve();
+	assert.deepEqual(partialSaved, ["rec_partial_native"], "a uniquely confirmed audio file must keep the session identity even if native linking throws after creation");
+	assert.deepEqual(partialInterrupted, []);
+	assert.ok(partial.files.has("Native/fallback-1.webm"));
+	partial.adapter.dispose();
+
+	const unmatched: Array<string | null> = [];
+	const noTiming = fixture({ onSessionSaved: async (id) => { unmatched.push(id); } });
+	noTiming.adapter.refresh();
+	await noTiming.getRecorder().saveRecording(data);
+	assert.deepEqual(unmatched, [null], "native saving without timing hooks should still register the saved recording");
+	noTiming.adapter.dispose();
+
+	const isolated = fixture({ onSessionSaved: async (_id, file) => { assert.equal(file.path, "Native/fallback-1.webm"); } });
+	isolated.adapter.refresh();
+	const pendingByPath = new Map<string, Promise<TFile | null>>();
+	isolated.app.vault.on("create", (file) => {
+		const ready = isolated.adapter.getPendingSource(file.path);
+		if (ready) pendingByPath.set(file.path, ready);
+	});
+	let createOther = true;
+	isolated.setAfterCreate(() => {
+		if (!createOther) return;
+		createOther = false;
+		void isolated.app.vault.createBinary("Unrelated/other.webm", new Uint8Array([1]).buffer);
+	});
+	await isolated.getRecorder().saveRecording(data);
+	assert.equal(await pendingByPath.get("Unrelated/other.webm"), null, "concurrent unrelated audio must not inherit the recording source");
+	isolated.adapter.dispose();
 }

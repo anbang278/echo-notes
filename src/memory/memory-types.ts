@@ -278,6 +278,9 @@ export interface MemoryCandidatePackage {
 	traceIds: string[];
 	rejectedAssertionCount?: number;
 	source: {
+		/** New candidates bind their immutable source to a saved document version. */
+		sourceId?: string;
+		sourceRevision?: string;
 		transcriptPath: string;
 		transcriptTitle: string;
 		analysisTemplateIds: string[];

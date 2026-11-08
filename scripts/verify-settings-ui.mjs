@@ -19,6 +19,8 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { verifyLocalAsrLifecycle } from "./verify-local-asr-lifecycle.mjs";
+import { verifyWorkspaceAgentUi, verifyWorkspaceOfflineReader } from "./verify-workspace-agent-ui.mjs";
+import { verifyMeetingWorkspace } from "./verify-workspace-ui.mjs";
 import { verifyRecordingSummary } from "./verify-recording-summary.mjs";
 import { verifySettingsLayout } from "./verify-settings-layout.mjs";
 import { verifyCoreRecordingStorage, verifyRecordingStorageSettings } from "./verify-recording-storage.mjs";
@@ -82,7 +84,7 @@ body.${MOBILE_SHELL_CLASS} .modal.mod-settings .vertical-tab-content {
 	padding: 24px 16px !important;
 }
 
-body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:has(.echo-notes-task-center) {
+body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:not(.is-sidedock-collapsed):has(.echo-notes-task-center) {
 	position: fixed !important;
 	inset: 0 !important;
 	z-index: var(--layer-popover) !important;
@@ -92,7 +94,7 @@ body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:has(.echo-notes-task
 	transform: none !important;
 }
 
-body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:has(.echo-notes-task-center) > .workspace-tabs {
+body.${MOBILE_SHELL_CLASS} .workspace-split.mod-right-split:not(.is-sidedock-collapsed):has(.echo-notes-task-center) > .workspace-tabs {
 	width: 100% !important;
 	max-width: none !important;
 }
@@ -6234,6 +6236,7 @@ async function removeIsolatedProfile(profileDir) {
 }
 
 let isolatedProfile;
+let workspaceOfflineFixture = null;
 let obsidianProcess;
 let getObsidianOutput = () => "";
 let browser;
@@ -6306,6 +6309,17 @@ try {
 			validationScope: "local-asr-only", pluginVersion: manifest.version, localAsrLifecycle, runtimeErrors: pageErrors
 		}, null, "\t"));
 		console.log("本地ASR配置定向验证通过；交付仍须运行完整package。");
+	} else if (process.env.ECHO_NOTES_VERIFY_WORKSPACE_ONLY === "1") {
+		const trustButton = page.locator(".modal-container.mod-confirmation:visible").getByRole("button", { name: "信任仓库作者并启用插件", exact: true });
+		try { await trustButton.waitFor({ state: "visible", timeout: 2000 }); } catch { /* The isolated Vault may already be trusted. */ }
+		if (await trustButton.isVisible()) await trustButton.click();
+		await page.waitForFunction((id) => Boolean(window.app.plugins.plugins[id]), PLUGIN_ID);
+		const meetingWorkspaceIntegration = await verifyMeetingWorkspace(page, { pluginId: PLUGIN_ID, outputDir: OUTPUT_DIR, validationVault: isolated.validationVault, setViewportMode });
+		const agentWorkspaceIntegration = await verifyWorkspaceAgentUi(page, { pluginId: PLUGIN_ID, validationVault: isolated.validationVault, outputDir: OUTPUT_DIR });
+		workspaceOfflineFixture = agentWorkspaceIntegration.offlineFixture;
+		assert(pageErrors.length === 0, `会议工作区验收出现运行时错误：${pageErrors.join(" | ")}`);
+		await writeFile(path.join(OUTPUT_DIR, "workspace-ui.json"), JSON.stringify({ pluginVersion: manifest.version, generatedAt: new Date().toISOString(), meetingWorkspaceIntegration, runtimeErrors: pageErrors }, null, 2));
+		console.log("会议工作区定向验收通过，完整交付仍需运行 package。");
 	} else if (process.env.ECHO_NOTES_VERIFY_RECORDING_ONLY === "1") {
 		await setViewportMode(page, VIEWPORTS[0], "light");
 		await openSettings(page);
@@ -6361,6 +6375,9 @@ try {
 	const memoryReviewLayouts = await verifyMemoryReview(page);
 	const memoryRelationLayouts = await verifyMemoryRelations(page);
 	const memoryContextLayouts = await verifyMemoryContextPackage(page, memoryProviderMock);
+	const meetingWorkspaceIntegration = await verifyMeetingWorkspace(page, { pluginId: PLUGIN_ID, outputDir: OUTPUT_DIR, validationVault: isolated.validationVault, setViewportMode });
+		const agentWorkspaceIntegration = await verifyWorkspaceAgentUi(page, { pluginId: PLUGIN_ID, validationVault: isolated.validationVault, outputDir: OUTPUT_DIR });
+		workspaceOfflineFixture = agentWorkspaceIntegration.offlineFixture;
 	const recordingStorageIntegration = await verifyCoreRecordingStorage(page, PLUGIN_ID);
 	const recordingSummaryIntegration = await verifyRecordingSummary(page, PLUGIN_ID);
 	await verifySiliconFlowSettingsSaveFailure(page);
@@ -6377,6 +6394,7 @@ try {
 		validationEnvironment: "isolated-temporary-vault",
 		generatedAt: new Date().toISOString(),
 		durationMs: Date.now() - verificationStartedAt,
+		meetingWorkspaceIntegration,
 		semanticChecks: {
 			localOpenAISettings: true,
 			localAsrLifecycle: true,
@@ -6455,6 +6473,7 @@ try {
 		.find((candidate) => candidate.url() === "app://obsidian.md/index.html");
 	if (failedPage) {
 		const failureState = await failedPage.evaluate(() => ({
+			modals: [...document.querySelectorAll(".modal")].map((modal) => modal.innerText.slice(0, 1800)),
 			settingsVisible: Boolean(document.querySelector(".modal.mod-settings")),
 			settingsHeadings: [...document.querySelectorAll(".vertical-tab-header-group-title")].map((element) => element.textContent),
 			pluginRootCount: document.querySelectorAll(".echo-notes-settings-intro").length,
@@ -6472,6 +6491,12 @@ try {
 		await browser.close().catch(() => undefined);
 	}
 	await stopChild(obsidianProcess);
+	if (workspaceOfflineFixture) {
+		try {
+			await verifyWorkspaceOfflineReader(workspaceOfflineFixture, OUTPUT_DIR);
+			console.log("隔离 Obsidian 完全退出后，独立读取器与策略撤销验证通过。");
+		} catch (error) { console.error(error instanceof Error ? error.stack : error); process.exitCode = 1; }
+	}
 	await memoryProviderMock?.close().catch(() => undefined);
 	await siliconFlowTranscriptionMock?.close().catch(() => undefined);
 	await removeIsolatedProfile(isolatedProfile);

@@ -16,7 +16,13 @@ const PROJECT_BRANDS = [
 	"Vault",
 	"Dataview",
 	"LinkOnly",
-	"ASR"
+	"ASR",
+	"Codex",
+	"Hermes",
+	"Agent",
+	"Skill",
+	"ISO",
+	"Unicode"
 ];
 
 export default [
@@ -36,9 +42,18 @@ export default [
 				{
 					enforceCamelCaseLower: true,
 					brands: PROJECT_BRANDS,
-					ignoreRegex: ["^(?:sk-|https?://)"]
+					ignoreRegex: ["^(?:sk-|https?://)", "^Asia/Taipei$", "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]"]
 				}
 			]
+		}
+	},
+	{
+		files: ["src/agent-memory/node/**/*.ts"],
+		languageOptions: { globals: { process: "readonly", Buffer: "readonly", console: "readonly", TextEncoder: "readonly" } },
+		rules: {
+			"obsidianmd/no-nodejs-modules": "off",
+			"obsidianmd/no-global-this": "off",
+			"obsidianmd/hardcoded-config-path": "off"
 		}
 	}
 ];

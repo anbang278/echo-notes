@@ -19,6 +19,9 @@ interface AdapterOptions {
 	getRecorder: () => unknown;
 	getView: () => MarkdownView | null;
 	notify: (message: string) => void;
+	onSessionStart?: (startedAt: number) => Promise<string>;
+	onSessionSaved?: (id: string | null, file: TFile, timing: RecordingSessionTiming | null) => Promise<void>;
+	onSessionInterrupted?: (id: string) => Promise<void>;
 }
 
 function isCoreRecorder(value: unknown): value is CoreRecorder {
@@ -41,6 +44,9 @@ interface RecordingSession {
 	timing: RecordingSessionTiming | null;
 	context: SaveContext | null;
 	saving?: Promise<unknown>;
+	catalogId?: Promise<string | null>;
+	catalogSaved?: boolean;
+	catalogInterruptionScheduled?: boolean;
 	cleanup: () => void;
 }
 
@@ -58,8 +64,17 @@ export class CoreRecordingStorageAdapter {
 	private disposed = false;
 	private warned = false;
 	private pendingSources = new Map<string, { promise: Promise<TFile | null>; finish: (source: TFile | null) => void }>();
+	private nativeSaveQueue: Promise<unknown> = Promise.resolve();
+	private nativeSaveScope: { paths: Set<string>; extension: string } | null = null;
 
 	getPendingSource(audioPath: string): Promise<TFile | null> | undefined {
+		const scope = this.nativeSaveScope;
+		if (!this.disposed && !this.pendingSources.has(audioPath) && scope && audioPath.endsWith(`.${scope.extension}`)) {
+			let finish!: (source: TFile | null) => void;
+			const promise = new Promise<TFile | null>((resolve) => { finish = resolve; });
+			this.pendingSources.set(audioPath, { promise, finish });
+			scope.paths.add(audioPath);
+		}
 		return this.pendingSources.get(audioPath)?.promise;
 	}
 
@@ -83,12 +98,14 @@ export class CoreRecordingStorageAdapter {
 		try {
 			this.wrap(binding, "saveRecording", async (data: ArrayBuffer): Promise<unknown> => {
 				const session = binding.session?.context ? binding.session : null;
-				if (this.disposed || this.binding !== binding || (!session && this.options.getSettings().strategy === "obsidian")) {
+				if (this.disposed || this.binding !== binding) {
 					const result: unknown = await original.call(recorder, data);
 					return result;
 				}
 				if (session?.saving) return session.saving;
-				const operation = this.save(recorder, original, data, session);
+				const operation = !session && this.options.getSettings().strategy === "obsidian"
+					? this.fallback(recorder, original, data, null, false)
+					: this.save(recorder, original, data, session);
 				if (session) session.saving = operation;
 				try {
 					return await operation;
@@ -171,6 +188,7 @@ export class CoreRecordingStorageAdapter {
 			media.addEventListener("stop", stopped, { once: true });
 			media.addEventListener("error", failed, { once: true });
 			binding.session = session;
+			if (this.options.onSessionStart) session.catalogId = this.options.onSessionStart(session.startedAt).catch(() => { this.options.notify("录音已经开始，会议身份登记失败，请在保存后检查维护提示。"); return null; });
 			return result;
 		});
 		this.wrap(binding, "onStopRecording", (...args: unknown[]) => {
@@ -202,6 +220,14 @@ export class CoreRecordingStorageAdapter {
 
 	private clearSession(binding: RecorderBinding, session: RecordingSession): void {
 		session.cleanup();
+		if (!session.catalogInterruptionScheduled && !session.catalogSaved && session.catalogId && this.options.onSessionInterrupted) {
+			session.catalogInterruptionScheduled = true;
+			void (session.saving ?? Promise.resolve()).catch(() => undefined).then(async () => {
+				if (session.catalogSaved) return;
+				const id = await session.catalogId;
+				if (id && !session.catalogSaved) await this.options.onSessionInterrupted?.(id);
+			}).catch(() => { this.options.notify("录音中断状态登记失败，请检查会议维护提示。"); });
+		}
 		if (binding.session === session) binding.session = null;
 	}
 
@@ -272,9 +298,13 @@ export class CoreRecordingStorageAdapter {
 				notify(`录音创建时发生错误，${error.path} 可能已保存；为避免重复保存，请先检查该文件是否存在且完整。`);
 				return;
 			}
-			return this.fallback(recorder, original, data);
+			return this.fallback(recorder, original, data, session);
 		}
 		try {
+			if (this.options.onSessionSaved) {
+				try { await this.options.onSessionSaved(await session?.catalogId ?? null, file, session?.timing ?? null); if (session) session.catalogSaved = true; }
+				catch { notify("录音已保存，会议来源登记失败，请检查维护提示后重试登记。"); }
+			}
 			if (this.disposed) return file;
 			if (source && source.extension === "md") {
 				if (app.vault.getAbstractFileByPath(source.path) !== source) throw new Error("来源笔记已不存在。");
@@ -302,34 +332,63 @@ export class CoreRecordingStorageAdapter {
 		return file;
 	}
 
-	private async fallback(recorder: CoreRecorder, original: CoreRecorder["saveRecording"], data: ArrayBuffer): Promise<unknown> {
+	private fallback(recorder: CoreRecorder, original: CoreRecorder["saveRecording"], data: ArrayBuffer, session: RecordingSession | null, showFallbackNotice = true): Promise<unknown> {
+		const operation = this.nativeSaveQueue.then(() => this.performNativeSave(recorder, original, data, session, showFallbackNotice));
+		this.nativeSaveQueue = operation.catch(() => undefined);
+		return operation;
+	}
+
+	private async performNativeSave(recorder: CoreRecorder, original: CoreRecorder["saveRecording"], data: ArrayBuffer, session: RecordingSession | null, showFallbackNotice: boolean): Promise<unknown> {
 		const { app, notify } = this.options;
-		// 只观察本次原生调用期间的创建事件；内容核对避免把并发创建误报为本次录音。
+		const source = session?.context?.source ?? this.captureContext().source;
+		const scope = { paths: new Set<string>(), extension: recorder.extension };
+		this.nativeSaveScope = scope;
 		const candidates: TFile[] = [];
 		const ref = app.vault.on("create", (file) => {
 			const created = app.vault.getFileByPath(file.path);
-			if (created?.extension === recorder.extension) candidates.push(created);
+			if (created?.extension === recorder.extension) {
+				candidates.push(created);
+				void this.getPendingSource(created.path);
+			}
 		});
 		let result: unknown;
+		let nativeError: unknown;
 		try {
-			result = await original.call(recorder, data);
-		} catch (error) {
-			notify("自定义录音目录保存失败，原生保存也未完成；请检查存储空间和附件目录。已创建的文件不会重复保存。");
-			throw error;
+			try { result = await original.call(recorder, data); }
+			catch (error) {
+				nativeError = error;
+				notify("原生录音保存流程未完成，请检查已创建的文件和附件链接。文件会保留。");
+			} finally { app.vault.offref(ref); }
+			const matches: TFile[] = [];
+			for (const candidate of candidates) {
+				try {
+					const bytes = new Uint8Array(await app.vault.readBinary(candidate));
+					const expected = new Uint8Array(data);
+					if (bytes.length === expected.length && bytes.every((byte, index) => byte === expected[index])) matches.push(candidate);
+				} catch { /* A moved/deleted file cannot be safely attributed to this save. */ }
+			}
+			if (matches.length === 1) {
+				const file = matches[0];
+				if (this.options.onSessionSaved) {
+					try {
+						await this.options.onSessionSaved(await session?.catalogId ?? null, file, session?.timing ?? null);
+						if (session) session.catalogSaved = true;
+					} catch { notify("录音已保存，会议来源登记失败，请检查维护提示后重试登记。"); }
+				}
+				this.pendingSources.get(file.path)?.finish(source && app.vault.getAbstractFileByPath(source.path) === source ? source : null);
+				if (showFallbackNotice) notify(`自定义录音目录保存失败，已回退 Obsidian 原生保存：${file.path}`);
+			} else if (showFallbackNotice || this.options.onSessionSaved) {
+				notify("已调用 Obsidian 原生保存，无法唯一确认本次录音位置。请检查原生插入的链接或打开的音频，并在会议维护入口登记来源。");
+			}
+			if (nativeError) throw nativeError instanceof Error ? nativeError : new Error(typeof nativeError === "string" ? nativeError : "原生录音保存失败。");
+			return result;
 		} finally {
 			app.vault.offref(ref);
+			if (this.nativeSaveScope === scope) this.nativeSaveScope = null;
+			for (const path of scope.paths) {
+				this.pendingSources.get(path)?.finish(null);
+				this.pendingSources.delete(path);
+			}
 		}
-		const matches: string[] = [];
-		for (const candidate of candidates) {
-			try {
-				const bytes = new Uint8Array(await app.vault.readBinary(candidate));
-				const expected = new Uint8Array(data);
-				if (bytes.length === expected.length && bytes.every((byte, index) => byte === expected[index])) matches.push(candidate.path);
-			} catch { /* 文件被外部移动时不推断其位置。 */ }
-		}
-		notify(matches.length === 1
-			? `自定义录音目录保存失败，已回退 Obsidian 原生保存：${matches[0]}`
-			: "自定义录音目录保存失败，已调用 Obsidian 原生保存；无法唯一确认本次录音位置，请检查原生插入的链接或打开的音频。");
-		return result;
 	}
 }

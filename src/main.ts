@@ -1,3 +1,5 @@
+import { MeetingWorkspaceService } from "./workspace/meeting-workspace-service";
+import { ECHO_NOTES_MEETING_VIEW_TYPE, MeetingWorkspaceView } from "./workspace/meeting-workspace-view";
 import {
 	App,
 	Editor,
@@ -36,6 +38,7 @@ import {
 import { AudioFileService } from "./audio/audio-file-service";
 import { CoreRecordingStorageAdapter } from "./audio/core-recording-storage-adapter";
 import { RecordingStorageService } from "./audio/recording-storage-service";
+import { formatRecordingSessionTiming } from "./audio/recording-session-timing";
 import {
 	DiagnosticStore
 } from "./diagnostics/diagnostic-store";
@@ -272,6 +275,8 @@ interface LocalCancellationConfirmation {
 }
 
 const ECHO_NOTES_COMMAND_IDS = [
+	"open-meeting-center",
+	"open-project-workspace",
 	"start-official-audio-recorder",
 	"stop-official-audio-recorder",
 	"open-task-center",
@@ -366,6 +371,7 @@ interface AppWithInternals {
 }
 
 interface ActiveRealtimeRecording {
+	catalogRecordingId?: string;
 	audioFile: TFile;
 	sourceNote: TFile;
 	transcriptFile: TFile;
@@ -377,6 +383,7 @@ interface ActiveRealtimeRecording {
 	pcmCapture: RealtimePcmCapture;
 	agentPlanSession: AgentPlanRealtimeSession;
 	startedAt: number;
+	startedMonotonic: number;
 	streamingState: StreamingTranscriptionState;
 	asrError?: Error;
 	stopping: boolean;
@@ -407,6 +414,7 @@ class TranscriptionSuspendedError extends Error {
 
 export default class EchoNotesPlugin extends Plugin {
 	settings: EchoNotesSettings = normalizeEchoNotesSettings(undefined);
+	meetingWorkspace!: MeetingWorkspaceService;
 
 	private audioFileService: AudioFileService;
 	private transcriptService: TranscriptService;
@@ -458,6 +466,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		this.meetingWorkspace = new MeetingWorkspaceService(this.app, () => this.settings, () => this.saveSettings());
 		this.refreshServices();
 		this.localAsrLifecycle = new LocalAsrLifecycleManager({
 			probe: createLocalAsrProbe(),
@@ -476,7 +485,13 @@ export default class EchoNotesPlugin extends Plugin {
 			getSettings: () => this.settings.recordingStorage,
 			getRecorder: () => this.getInternalPlugins()?.getEnabledPluginById?.(AUDIO_RECORDER_PLUGIN_ID),
 			getView: () => this.app.workspace.getActiveViewOfType(MarkdownView),
-			notify: (message) => { new Notice(message); }
+			notify: (message) => { new Notice(message); },
+			onSessionStart: async (startedAt) => (await this.meetingWorkspace.recordingStarted(startedAt)).id,
+			onSessionSaved: async (id, file, timing) => {
+				if (id) await this.meetingWorkspace.recordingSaved(id, file.path, timing?.endedAt, timing?.durationMs);
+				else await this.meetingWorkspace.ensureAudio(file.path, file.basename);
+			},
+			onSessionInterrupted: async (id) => { await this.meetingWorkspace.catalog.setRecordingState(id, "interrupted"); }
 		});
 		this.diagnostics.restore(this.settings.diagnosticState);
 		this.unsubscribeTaskCenterPersistence = this.taskCenter.subscribe(() => {
@@ -488,6 +503,8 @@ export default class EchoNotesPlugin extends Plugin {
 		this.settingTab = new EchoNotesSettingTab(this.app, this);
 		this.addSettingTab(this.settingTab);
 		this.registerView(ECHO_NOTES_TASK_CENTER_VIEW_TYPE, (leaf) => new EchoNotesTaskCenterView(leaf, this));
+		this.registerView(ECHO_NOTES_MEETING_VIEW_TYPE, (leaf) => new MeetingWorkspaceView(leaf, this, this.meetingWorkspace));
+		this.addRibbonIcon("calendar-days", "打开会议中心", () => { void this.activateMeetingWorkspace(); });
 		this.realtimeRibbonEl = this.addRibbonIcon("audio-lines", "开始 Echo Notes 实时转写", () => {
 			if (this.activeRealtimeRecording) {
 				void this.stopRealtimeTranscription();
@@ -514,6 +531,7 @@ export default class EchoNotesPlugin extends Plugin {
 		this.registerEditorContextMenu();
 		this.registerAutomation();
 		this.app.workspace.onLayoutReady(() => {
+			this.meetingWorkspace.start();
 			this.coreRecordingStorageAdapter?.refresh();
 			this.registerInterval(window.setInterval(() => this.coreRecordingStorageAdapter?.refresh(), 1000));
 			this.registerGettingStartedFileEvents();
@@ -532,6 +550,7 @@ export default class EchoNotesPlugin extends Plugin {
 
 	onunload(): void {
 		this.unloading = true;
+		this.meetingWorkspace?.dispose();
 		this.analysisSummaryRounds.clear();
 		for (const taskId of this.localCancellationConfirmations?.keys() ?? []) {
 			this.stopLocalCancellationConfirmation(taskId);
@@ -609,6 +628,7 @@ export default class EchoNotesPlugin extends Plugin {
 		delete this.settings.apiKey;
 		delete this.settings.analysisApiKey;
 		delete this.settings.memoryApiKey;
+		await this.meetingWorkspace?.reconfigure();
 		await this.enqueueSettingsWrite();
 		this.refreshServices();
 		this.coreRecordingStorageAdapter?.refresh();
@@ -636,6 +656,18 @@ export default class EchoNotesPlugin extends Plugin {
 		if (options.revealGettingStarted && leaf.view instanceof EchoNotesTaskCenterView) {
 			leaf.view.revealGettingStarted();
 		}
+	}
+
+	async activateMeetingWorkspace(mode?: "reader" | "projects"): Promise<void> {
+		if (mode) {
+			this.settings.meetingWorkspaceMode = mode;
+			await this.saveSettings();
+		}
+		const existing = this.app.workspace.getLeavesOfType(ECHO_NOTES_MEETING_VIEW_TYPE)[0];
+		const leaf = existing ?? this.app.workspace.getLeaf(true);
+		if (!existing) await leaf.setViewState({ type: ECHO_NOTES_MEETING_VIEW_TYPE, active: true });
+		await this.app.workspace.revealLeaf(leaf);
+		if (mode && leaf.view instanceof MeetingWorkspaceView) leaf.view.setMode(mode);
 	}
 
 	getTaskCenterTasks(): EchoNotesTask[] {
@@ -2958,7 +2990,7 @@ export default class EchoNotesPlugin extends Plugin {
 			isDisposed: () => this.unloading
 		});
 		this.analysisService = new AnalysisService(this.app);
-		this.memoryService = new MemoryService(this.app);
+		this.memoryService = new MemoryService(this.app, async (input) => this.meetingWorkspace.registerTranscript(input.transcriptPath, undefined, input.legacyMeetingPath, input.title));
 	}
 
 	/**
@@ -3008,6 +3040,9 @@ export default class EchoNotesPlugin extends Plugin {
 
 	private registerCommands(): void {
 		this.removeRegisteredCommands();
+
+		this.addCommand({ id: "open-meeting-center", name: "打开会议中心", callback: () => { void this.activateMeetingWorkspace(); } });
+		this.addCommand({ id: "open-project-workspace", name: "打开项目工作台", callback: () => { void this.activateMeetingWorkspace("projects"); } });
 
 		this.addCommand({
 			id: "open-task-center",
@@ -3733,7 +3768,12 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			options = { ...options, resumeLocalTask: previous.localTask };
 		}
-		const processingPromise = this.performAudioToTranscript(audioFile, sourceNote, options);
+		const processingPromise = (async () => {
+			const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
+			if (existingTranscript) await this.meetingWorkspace.registerTranscript(existingTranscript.path, audioFile.path);
+			await this.meetingWorkspace.ensureAudio(audioFile.path, audioFile.basename);
+			return this.performAudioToTranscript(audioFile, sourceNote, options);
+		})();
 		this.processingAudio.set(audioFile.path, processingPromise);
 		try {
 			return await processingPromise;
@@ -3791,6 +3831,8 @@ export default class EchoNotesPlugin extends Plugin {
 		let notifiedTranscriptPath: string | null = null;
 		let backlinkNeedsFinalRetry = false;
 		const notifyTranscriptFileReady = async (transcriptFile: TFile, final = false): Promise<void> => {
+			try { await this.meetingWorkspace.registerTranscript(transcriptFile.path, audioFile.path); }
+			catch (error) { new Notice(`转写稿已保留，会议来源登记需要检查：${getErrorMessage(error)}`); }
 			if (notifiedTranscriptPath === transcriptFile.path && (!final || !backlinkNeedsFinalRetry)) {
 				return;
 			}
@@ -5261,6 +5303,7 @@ export default class EchoNotesPlugin extends Plugin {
 		let pcmCapture: RealtimePcmCapture | null = null;
 		let agentPlanSession: AgentPlanRealtimeSession | null = null;
 		let audioPath = "";
+		let catalogRecordingId: string | undefined;
 		const ensureStarting = (): void => {
 			if (this.realtimeUnloading) throw new Error("Echo Notes 插件已停用，实时录音启动已取消。");
 		};
@@ -5281,6 +5324,9 @@ export default class EchoNotesPlugin extends Plugin {
 			ensureStarting();
 			const audioFile = sink.file;
 			const startedAt = Date.now();
+			const startedMonotonic = performance.now();
+			const catalogRecording = await this.meetingWorkspace.recordingStarted(startedAt, audioFile.path);
+			catalogRecordingId = catalogRecording.id;
 			const streamingState: StreamingTranscriptionState = {
 				text: "",
 				provisionalText: "",
@@ -5355,6 +5401,7 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 			const taskId = createTaskId("transcription", audioFile.path, "realtime");
 			const recording: ActiveRealtimeRecording = {
+				catalogRecordingId: catalogRecording.id,
 				audioFile,
 				sourceNote,
 				transcriptFile,
@@ -5366,6 +5413,7 @@ export default class EchoNotesPlugin extends Plugin {
 				pcmCapture,
 				agentPlanSession,
 				startedAt,
+				startedMonotonic,
 				streamingState,
 				stopping: false,
 				writeQueue: Promise.resolve(),
@@ -5415,6 +5463,7 @@ export default class EchoNotesPlugin extends Plugin {
 			this.updateRealtimeUi();
 			new Notice(`已开始实时转写：${audioFile.name}`);
 		} catch (error) {
+			if (catalogRecordingId) await this.meetingWorkspace.catalog.setRecordingState(catalogRecordingId, "interrupted").catch(() => undefined);
 			this.diagnostics.complete(diagnostic.id, "failed", {
 				error: getErrorMessage(error),
 				errorCategory: classifyDiagnosticError(error)
@@ -5442,6 +5491,10 @@ export default class EchoNotesPlugin extends Plugin {
 			return;
 		}
 		recording.stopping = true;
+		const recordingEndedAt = Date.now();
+		const recordingDurationMs = Math.max(0, performance.now() - recording.startedMonotonic);
+		const recordingTiming = { startedAt: recording.startedAt, endedAt: recordingEndedAt, durationMs: recordingDurationMs };
+		const reliableTiming = formatRecordingSessionTiming(recordingTiming) !== null ? recordingTiming : undefined;
 		recording.streamingState.connectionStatus = "正在完成录音和最终识别";
 		this.queueRealtimeTranscriptWrite(recording, true);
 		this.updateRealtimeUi();
@@ -5465,8 +5518,16 @@ export default class EchoNotesPlugin extends Plugin {
 			? Promise.reject(recording.asrError)
 			: recording.agentPlanSession.finish();
 		const [savedAudio, finalAsr] = await Promise.allSettled([audioResult, asrResult]);
+		if (recording.catalogRecordingId) {
+			try {
+				if (savedAudio.status === "fulfilled") await this.meetingWorkspace.recordingSaved(recording.catalogRecordingId, recording.audioFile.path, reliableTiming?.endedAt, reliableTiming?.durationMs);
+				else await this.meetingWorkspace.catalog.setRecordingState(recording.catalogRecordingId, "interrupted");
+			} catch (error) { new Notice(`录音已保留，会议登记需要检查：${getErrorMessage(error)}`); }
+		}
+		try { await this.meetingWorkspace.registerTranscript(recording.transcriptFile.path, recording.audioFile.path); }
+		catch (error) { new Notice(`转写已保留，来源登记需要检查：${getErrorMessage(error)}`); }
 		recording.mediaStream.getTracks().forEach((track) => track.stop());
-		recording.streamingState.processedSeconds = (Date.now() - recording.startedAt) / 1000;
+		recording.streamingState.processedSeconds = recordingDurationMs / 1000;
 
 		const audioSaveError =
 			savedAudio.status === "rejected"

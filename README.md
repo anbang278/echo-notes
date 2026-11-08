@@ -16,6 +16,21 @@ Local prompting (0.4.44 test delivery): companion service 2.1.0 accepts approved
 
 Development status: Qwen baseline, manual hotword/context and speaker-labelled meeting evaluations have local evidence. Candidate model acceptance remains incomplete after resource pressure interrupted Fun-ASR. Meeting evaluation now uses independent resource admission and termination; long candidate runs stay deferred until short smoke tests and machine headroom permit them. Service unit tests pass; complete package verification and test installation are tracked in the active task.
 
+
+## Meeting workspace and evidence in 0.5
+
+The meeting workspace offers a daily reader (B) and a project timeline (C). Switch modes from its header. Both modes share meeting identities, filters, source records and evidence selection. The last mode and display timezone are saved locally.
+
+- Open **Echo Notes: 打开会议中心** or **打开项目工作台** from the command palette. Recording and explicitly registered transcripts create meetings independently of Memory extraction.
+- Link one meeting to multiple registered projects. Existing Markdown notes can become projects while retaining their content.
+- Choose **整理问题材料** to search registered formal transcripts locally, pin or exclude excerpts, inspect their context, save a question and export a self-contained Markdown evidence package.
+- **维护** previews legacy migration and provides journal-based resume and protected rollback. Unknown dates remain visible. Only explicitly selected files and registered folders are inspected.
+- **Agent 连接** controls the optional read-only export policy and complete snapshots. The standalone Node reader and shared Codex/Hermes Skill live in `skills/echo-notes-memory`. See [the reader guide](docs/agent-memory.md).
+
+Browsing, local search and evidence export do not call a model. A source text revision hash verifies its exact text version. Review approval, current business validity and source verification are shown separately. New UI colors follow the active Obsidian theme. The Node CLI is built separately and is not required by the mobile plugin.
+
+The pinned public Skill installation command is finalized after the release source is published and verified. Development verification uses a detached local Skill package. Platform and real-host validation evidence is recorded per delivery.
+
 ## Why Echo Notes
 
 ### Different recordings need different analysis structures

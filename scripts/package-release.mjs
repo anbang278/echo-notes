@@ -1,6 +1,6 @@
-import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, lstat } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { json, validateVerification, sha256, writeJson } from "./lib/delivery-evidence.mjs";
 
@@ -28,6 +28,23 @@ for (const file of releaseFiles) {
 }
 
 await run("zip", ["-r", `../echo-notes-${version}.zip`, ...releaseFiles], stagingDir);
+
+const skillFiles = ["SKILL.md", "scripts/echo-memory.mjs", "references/setup.md", "references/query-contract.md", "references/provenance.md"];
+const skillDirectory = join(distDir, "echo-notes-memory");
+const skillZipPath = join(distDir, `echo-notes-memory-${version}.zip`);
+const skillHashes = {};
+for (const file of skillFiles) {
+	const source = join("skills/echo-notes-memory", file);
+	const info = await lstat(source);
+	if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Skill 包只接受普通文件：${file}`);
+	const destination = join(skillDirectory, file);
+	await mkdir(dirname(destination), { recursive: true });
+	await copyFile(source, destination);
+	skillHashes[file] = sha256(await readFile(destination));
+}
+await run("zip", ["-r", `echo-notes-memory-${version}.zip`, "echo-notes-memory"], distDir);
+await writeJson(join(distDir, "skill-evidence.json"), { schemaVersion: 1, version, source: verification.source, fileHashes: skillHashes, zipSha256: sha256(await readFile(skillZipPath)) });
+console.log(`独立 Skill 包已生成：${skillZipPath}`);
 
 await writeJson(join(distDir, "verification.json"), verification);
 await writeJson(join(distDir, "package-evidence.json"), {

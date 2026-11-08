@@ -30,3 +30,16 @@ for (const name of ["local-asr-enhancement-tests", "local-mlx-jobs-tests", "loca
 }
 
 await import(pathToFileURL(`${process.cwd()}/tests/local-asr-mobile-settings-tests.mjs`).href);
+
+// 0.5 domains use the same registered complete regression entry point.
+for (const [name, entry] of [["catalog-tests", "runCatalogTests"], ["catalog-migration-tests", "runCatalogMigrationTests"], ["workspace-state-tests", "runWorkspaceStateTests"]]) {
+	await esbuild.build({ entryPoints: [`tests/${name}.ts`], bundle: true, format: "esm", platform: "node", outfile: `.tmp/${name}.mjs`, logLevel: "silent" });
+	const suite = await import(pathToFileURL(`${process.cwd()}/.tmp/${name}.mjs`).href);
+	await suite[entry]();
+}
+for (const name of ["evidence-tests", "agent-memory-tests"]) {
+	await esbuild.build({ entryPoints: [`tests/${name}.ts`], bundle: true, format: "esm", platform: "node", outfile: `.tmp/${name}.mjs`, logLevel: "silent" });
+	execFileSync(process.execPath, ["--test", `.tmp/${name}.mjs`], { stdio: "inherit" });
+}
+execFileSync(process.execPath, ["scripts/build-memory-reader.mjs"], { stdio: "inherit" });
+execFileSync(process.execPath, ["--test", "tests/agent-memory-cli-tests.mjs"], { stdio: "inherit" });
