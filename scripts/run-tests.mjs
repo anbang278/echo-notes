@@ -18,6 +18,17 @@ await esbuild.build({
 await import(pathToFileURL(`${process.cwd()}/.tmp/smoke-tests.mjs`).href);
 await import(pathToFileURL(`${process.cwd()}/tests/local-audio-dataset-tests.mjs`).href);
 
+await esbuild.build({
+	entryPoints: ["tests/openai-official-analysis-tests.ts"],
+	bundle: true,
+	format: "esm",
+	platform: "node",
+	alias: { obsidian: "./tests/fixtures/openai-official-obsidian.ts" },
+	outfile: ".tmp/openai-official-analysis-tests.mjs",
+	logLevel: "silent"
+});
+execFileSync(process.execPath, ["--test", ".tmp/openai-official-analysis-tests.mjs"], { stdio: "inherit" });
+
 for (const name of ["local-asr-enhancement-tests", "local-mlx-jobs-tests", "local-streaming-tests", "local-task-lifecycle-tests", "local-asr-lifecycle-tests", "local-asr-discovery-tests"]) {
 	await esbuild.build({ entryPoints: [`tests/${name}.ts`], bundle: true, format: "esm", platform: "node", outfile: `.tmp/${name}.mjs`, logLevel: "silent" });
 	if (name === "local-task-lifecycle-tests") {

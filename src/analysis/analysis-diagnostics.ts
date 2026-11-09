@@ -1,4 +1,5 @@
 import { isInsecureRemoteBaseUrl } from "../security/upload-preview";
+import { OPENAI_OFFICIAL_BASE_URL, getOpenAIOfficialModelOption, isOpenAIOfficialBaseUrl } from "./openai-model-catalog";
 import {
 	AGENTPLAN_ANALYSIS_BASE_URL,
 	AGENTPLAN_ANALYSIS_MODELS,
@@ -103,6 +104,27 @@ export function diagnoseAnalysisProviderSettings(
 			severity: "info",
 			title: "OpenCode Go 订阅凭证",
 			detail: "请先订阅 OpenCode Go 并使用对应 API Key；密钥在 Echo Notes 中按服务商与用途隔离保存。"
+		});
+	}
+	if (providerId === "openai-official") {
+		if (baseUrl && !isOpenAIOfficialBaseUrl(baseUrl)) {
+			items.push({
+				severity: "error",
+				title: "OpenAI 官方分析地址不正确",
+				detail: `请使用固定官方基础地址 ${OPENAI_OFFICIAL_BASE_URL}。`
+			});
+		}
+		if (model && !getOpenAIOfficialModelOption(model)) {
+			items.push({
+				severity: "error",
+				title: "OpenAI 官方分析模型不在支持清单中",
+				detail: "请从分析模型下拉框选择支持的 OpenAI 官方模型。"
+			});
+		}
+		items.push({
+			severity: "info",
+			title: "OpenAI 官方分析配置",
+			detail: "使用 OpenAI 开放平台 API Key 与 Responses 标准计费接口，密钥按分析用途和服务商隔离保存。模型权限以当前 OpenAI 项目为准。"
 		});
 	}
 	if (estimatedCharacters !== undefined && estimatedCharacters > 120000) {

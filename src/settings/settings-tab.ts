@@ -34,6 +34,13 @@ import {
 } from "../providers/provider-diagnostics";
 import { captureHotkeyFromKeyboardEvent } from "../getting-started/getting-started-hotkeys";
 import { diagnoseAnalysisProviderSettings } from "../analysis/analysis-diagnostics";
+import {
+	OPENAI_OFFICIAL_MODELS,
+	OPENAI_OFFICIAL_PRICE_CHECKED_AT,
+	OPENAI_OFFICIAL_PRICING_URL,
+	formatOpenAIOfficialModelLabel,
+	getOpenAIOfficialModelOption
+} from "../analysis/openai-model-catalog";
 import { diagnoseMemoryProviderSettings } from "../memory/memory-provider";
 import { getSanitizedErrorMessage } from "../security/redaction";
 import {
@@ -2489,7 +2496,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 
 		const isAgentPlanAnalysis = this.plugin.settings.analysisProvider === "volcengine-agentplan";
 		const isOpenCodeGoAnalysis = this.plugin.settings.analysisProvider === "opencode-go";
-		const usesFixedAnalysisBaseUrl = isAgentPlanAnalysis || isOpenCodeGoAnalysis;
+		const isOpenAIOfficialAnalysis = this.plugin.settings.analysisProvider === "openai-official";
+		const usesFixedAnalysisBaseUrl = isAgentPlanAnalysis || isOpenCodeGoAnalysis || isOpenAIOfficialAnalysis;
 		const analysisApiKeyDescription = createFragment();
 		analysisApiKeyDescription.appendText(
 			isAgentPlanAnalysis
@@ -2534,7 +2542,30 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						? "选择 OpenCode Go 当前文档列出的模型；不同模型会自动使用对应的 API 协议。"
 					: "用于生成纪要分析的文本模型。"
 			);
-		if (isAgentPlanAnalysis || isOpenCodeGoAnalysis) {
+		if (isOpenAIOfficialAnalysis) {
+			const updatePriceDescription = (): void => {
+				const option = getOpenAIOfficialModelOption(this.plugin.settings.analysisModel);
+				if (!option) return;
+				const description = createFragment();
+				description.appendText(`${formatOpenAIOfficialModelLabel(option)}。USD / 百万 tokens，Standard 标准短上下文参考价，核验于 ${OPENAI_OFFICIAL_PRICE_CHECKED_AT}。缓存、长上下文等按官方计费，分块分析会多次调用。`);
+				description.createEl("a", {
+					text: "OpenAI 官方价格",
+					attr: { href: OPENAI_OFFICIAL_PRICING_URL, target: "_blank", rel: "noopener noreferrer" }
+				});
+				analysisModelSetting.setDesc(description);
+			};
+			updatePriceDescription();
+			analysisModelSetting.addDropdown((dropdown) => {
+				for (const option of OPENAI_OFFICIAL_MODELS) {
+					dropdown.addOption(option.id, formatOpenAIOfficialModelLabel(option));
+				}
+				return dropdown.setValue(this.plugin.settings.analysisModel).onChange(async (value) => {
+					this.plugin.settings.analysisModel = value;
+					await this.plugin.saveSettings();
+					updatePriceDescription();
+				});
+			});
+		} else if (isAgentPlanAnalysis || isOpenCodeGoAnalysis) {
 			analysisModelSetting.addDropdown((dropdown) => {
 				const options = isAgentPlanAnalysis ? AGENTPLAN_ANALYSIS_MODELS : OPENCODE_GO_ANALYSIS_MODELS;
 				for (const option of options) {
@@ -2571,7 +2602,9 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		const baseUrlSetting = new Setting(advancedEl)
 			.setName("分析 Base URL")
 			.setDesc(
-				isAgentPlanAnalysis
+				isOpenAIOfficialAnalysis
+					? "OpenAI 官方基础地址，使用 Responses API（/responses）。"
+					: isAgentPlanAnalysis
 					? "AgentPlan OpenAI-compatible Chat API 专属地址；使用普通方舟地址不会抵扣 AgentPlan 套餐额度。"
 					: isOpenCodeGoAnalysis
 						? "OpenCode Go 官方基础地址；模型会自动路由至 Chat Completions、Responses 或 Messages 接口。"
@@ -3785,7 +3818,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 	}
 
 	private appendProviderSignupLink(desc: DocumentFragment, provider: string): void {
-		const linkConfig = provider === "opencode-go"
+		const linkConfig = provider === "openai-official"
+			? {
+				text: "获取 OpenAI API Key",
+				href: "https://platform.openai.com/api-keys"
+			}
+			: provider === "opencode-go"
 			? {
 				text: "获取 OpenCode Go API Key",
 				href: "https://opencode.ai/go?ref=YD4XM7Z5CY"

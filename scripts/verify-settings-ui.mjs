@@ -3138,6 +3138,8 @@ async function verifySiliconFlowUpgradeUnload(page) {
 		return plugin.settings.offlineTranscription.model;
 	}, PLUGIN_ID);
 	await page.locator(selector).waitFor();
+	// Earlier synthetic transcription notices can overlap this modal's action.
+	await page.evaluate(() => document.querySelectorAll(".notice").forEach((notice) => notice.remove()));
 	await page.locator(selector).getByRole("button", { name: "一键更换并转写" }).click();
 	await page.locator(selector).getByText("正在保存…").waitFor();
 	await page.evaluate(async (pluginId) => {
@@ -3943,6 +3945,7 @@ async function verifyTabs(page) {
 				"opencode-go",
 				"aliyun-bailian",
 				"deepseek",
+				"openai-official",
 				"volcengine-agentplan",
 				"ollama",
 				"lm-studio",
@@ -3958,6 +3961,7 @@ async function verifyTabs(page) {
 				"【推荐】OpenCode Go",
 				"阿里百炼（Alibaba Bailian）",
 				"DeepSeek",
+				"OpenAI 官方",
 				"火山引擎 AgentPlan",
 				"Ollama",
 				"LM Studio",
@@ -4195,6 +4199,113 @@ async function verifyTabs(page) {
 	}
 	}
 	await pickerModal.waitFor({ state: "detached" });
+}
+
+async function verifyOpenAIOfficialSettings(page) {
+	const secretIds = ["echo-notes-analysis-api-key-openai-official", "echo-notes-analysis-api-key-custom-openai-compatible"];
+	const snapshot = await page.evaluate(({ id, secretIds }) => {
+		const plugin = window.app.plugins.plugins[id];
+		return {
+			settings: JSON.stringify(plugin.settings),
+			navigation: { activeSettingsStage: plugin.settingTab.activeSettingsStage, activeAnalysisSettingsSection: plugin.settingTab.activeAnalysisSettingsSection },
+			secrets: secretIds.map((key) => window.app.secretStorage.getSecret(key))
+		};
+	}, { id: PLUGIN_ID, secretIds });
+	const layouts = [];
+	try {
+		await page.evaluate((id) => {
+			const plugin = window.app.plugins.plugins[id];
+			plugin.settings.analysisEnabled = true;
+			window.app.secretStorage.setSecret("echo-notes-analysis-api-key-custom-openai-compatible", "isolated-custom-analysis-key");
+			plugin.settingTab.showDestination("analysis-model");
+		}, PLUGIN_ID);
+		await selectSettingOption(page, "分析服务商", "openai-official");
+		let modelSetting = await getActiveSetting(page, "分析模型");
+		assert(await modelSetting.locator('select:not([aria-hidden="true"])').inputValue() === "gpt-6.1-sol", "OpenAI 官方默认模型应为 Sol");
+		assert(JSON.stringify(await getSettingOptionValues(page, "分析模型")) === JSON.stringify([
+			"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra"
+		]), "OpenAI 官方模型清单不正确");
+		const labels = await getSettingOptionLabels(page, "分析模型");
+		for (const [index, [input, output]] of [["2", "10"], ["1", "5"], ["0.10", "0.50"], ["10", "50"]].entries()) {
+			assert(labels[index].includes(`输入 $${input} / 输出 $${output}`), `OpenAI 官方模型价格错误 ${labels[index]}`);
+		}
+		await modelSetting.locator('select:not([aria-hidden="true"])').selectOption("gpt-6.1-terra");
+		await page.waitForFunction((id) => window.app.plugins.plugins[id].settings.analysisModel === "gpt-6.1-terra", PLUGIN_ID);
+		assert((await modelSetting.locator(".setting-item-description").textContent()).includes("输入 $1 / 输出 $5"), "已选模型价格未更新");
+		await page.evaluate(async (id) => {
+			window.app.setting.close();
+			window.app.setting.open();
+			await window.app.setting.openTabById(id);
+		}, PLUGIN_ID);
+		await getActivePanel(page).getByRole("tab", { name: "模型配置", exact: true }).waitFor();
+		modelSetting = await getActiveSetting(page, "分析模型");
+		assert(await modelSetting.locator('select:not([aria-hidden="true"])').inputValue() === "gpt-6.1-terra", "重开设置丢失官方模型选择");
+		const saved = await page.evaluate(async (id) => (await window.app.plugins.plugins[id].loadData()).analysisModel, PLUGIN_ID);
+		assert(saved === "gpt-6.1-terra", "官方模型选择未持久化");
+		const advanced = getActivePanel(page).locator('.echo-notes-settings-section-panel:not([hidden]) .echo-notes-settings-advanced').first();
+		await advanced.locator("summary").click();
+		const baseUrl = (await getActiveSetting(page, "分析 Base URL")).locator("input");
+		assert(await baseUrl.isDisabled() && await baseUrl.inputValue() === "https://api.openai.com/v1", "OpenAI 官方地址必须固定");
+		const keySetting = await getActiveSetting(page, "分析 API Key");
+		assert(await keySetting.getByRole("link", { name: "获取 OpenAI API Key" }).getAttribute("href") === "https://platform.openai.com/api-keys", "OpenAI 密钥链接不正确");
+		const keyInput = keySetting.locator('input[type="password"]');
+		await keyInput.fill("isolated-official-analysis-key");
+		await keyInput.blur();
+		await keySetting.locator(".echo-notes-secret-save-status").filter({ hasText: "已安全保存" }).waitFor();
+		await selectSettingOption(page, "分析服务商", "custom-openai-compatible");
+		assert(await page.evaluate((id) => window.app.plugins.plugins[id].getAnalysisApiKey(), PLUGIN_ID) === "isolated-custom-analysis-key", "自定义接口密钥隔离失败");
+		await selectSettingOption(page, "分析服务商", "openai-official");
+		assert(await page.evaluate((id) => window.app.plugins.plugins[id].getAnalysisApiKey(), PLUGIN_ID) === "isolated-official-analysis-key", "官方密钥隔离失败");
+		const viewports = [...VIEWPORTS, { ...VIEWPORTS[0], name: "desktop-panel-554", panelWidth: 554 }];
+		for (const viewport of viewports) {
+			for (const theme of THEMES) {
+				await setViewportMode(page, viewport, theme);
+				const fixture = viewport.panelWidth ? await page.addStyleTag({ content: `
+					.modal.mod-settings { width: 900px !important; }
+					.echo-notes-settings-shell { width: 596px !important; max-width: none !important; }
+				` }) : null;
+				try {
+					const metrics = await getActivePanel(page).evaluate((panel) => {
+						const item = [...panel.querySelectorAll(".setting-item")].find((item) => item.querySelector(".setting-item-name")?.textContent === "分析模型");
+						const description = item.querySelector(".setting-item-description");
+						const link = description.querySelector("a");
+						return {
+							panelWidth: panel.getBoundingClientRect().width,
+							panelOverflow: panel.scrollWidth - panel.clientWidth,
+							documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+							descriptionOverflow: description.scrollWidth - description.clientWidth,
+							text: description.textContent,
+							priceLink: link?.getAttribute("href"),
+							linkRel: link?.getAttribute("rel")
+						};
+					});
+					assert(metrics.panelOverflow <= 1 && metrics.documentOverflow <= 1 && metrics.descriptionOverflow <= 1,
+						`OpenAI 模型配置溢出 ${viewport.name}/${theme} ${JSON.stringify(metrics)}`);
+					if (viewport.panelWidth) assert(Math.abs(metrics.panelWidth - viewport.panelWidth) <= 1, "554px 设置面板夹具不正确");
+					for (const text of ["输入 $2 / 输出 $10", "USD / 百万 tokens", "Standard", "2026-11-09", "长上下文", "分块"]) {
+						assert(metrics.text.includes(text), `OpenAI 价格说明缺少 ${text}`);
+					}
+					assert(metrics.priceLink === "https://developers.openai.com/api/docs/pricing" && metrics.linkRel.includes("noopener"), "官方价格链接不正确");
+					const fileName = `openai-official-${viewport.name}-${theme}.png`;
+					await getActivePanel(page).screenshot({ path: path.join(OUTPUT_DIR, fileName) });
+					layouts.push({ viewport: viewport.name, theme, fileName, metrics });
+				} finally {
+					if (fixture) await fixture.evaluate((element) => element.remove());
+				}
+			}
+		}
+		return { models: labels, savedSelection: true, isolatedSecrets: true, layouts };
+	} finally {
+		await page.evaluate(async ({ id, secretIds, snapshot }) => {
+			for (const [index, secretId] of secretIds.entries()) window.app.secretStorage.setSecret(secretId, snapshot.secrets[index] ?? "");
+			const plugin = window.app.plugins.plugins[id];
+			plugin.settings = JSON.parse(snapshot.settings);
+			await plugin.saveSettings();
+			Object.assign(plugin.settingTab, snapshot.navigation);
+			plugin.settingTab.display();
+		}, { id: PLUGIN_ID, secretIds, snapshot });
+		await setViewportMode(page, VIEWPORTS[0], "light");
+	}
 }
 
 async function reopenSettings(page) {
@@ -6352,6 +6463,7 @@ try {
 	await verifyIntroduction(page);
 	await verifyTabs(page);
 	await reopenSettings(page);
+	const openAIOfficialSettings = await verifyOpenAIOfficialSettings(page);
 	const responsiveSettingsLayouts = await verifySettingsLayout(page, {
 		pluginId: PLUGIN_ID, outputDir: OUTPUT_DIR, getActivePanel, setViewportMode, viewports: VIEWPORTS
 	});
@@ -6440,6 +6552,7 @@ try {
 		},
 		gettingStartedInitialLayouts: gettingStartedLayouts.initialLayouts,
 		responsiveSettingsLayouts,
+		openAIOfficialSettings,
 		recordingStorageLayouts,
 		recordingStorageIntegration,
 		recordingSummaryIntegration,

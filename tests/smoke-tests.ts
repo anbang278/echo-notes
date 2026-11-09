@@ -3672,6 +3672,7 @@ assert.deepEqual(Object.keys(ANALYSIS_PROVIDER_LABELS), [
 	"opencode-go",
 	"aliyun-bailian",
 	"deepseek",
+	"openai-official",
 	"volcengine-agentplan",
 	"ollama",
 	"lm-studio",

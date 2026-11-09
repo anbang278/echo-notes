@@ -132,7 +132,11 @@ AgentPlan 实时转写的官方 `bigmodel_async` Base URL 和模型保持只读�
 
 当硅基流动仍使用默认模型 `FunAudioLLM/SenseVoiceSmall` 时，每个符合条件的离线转写动作会在创建 running 任务、空转写稿、上传或 Provider 请求前显示一次模型选择提醒；同一批次或并发等待者共享这一次提醒。提醒提供上面四个新模型 ID；本次关闭会保持旧模型，不会强制迁移，下次符合条件的动作仍会提醒。用户可以保存所选模型或“不再提醒”。提醒等待期间若外部修改了 Provider、Base URL 或模型，旧选择不会覆盖新配置，需重新发起转写。历史 `TeleAI/TeleSpeechASR` 值仍作为自定义兼容模型保留，不会被强制替换，也不宣称已下线。
 
-AI 纪要分析按顺序支持硅基流动、**OpenCode Go**、阿里百炼、DeepSeek、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`；切换到 OpenCode Go 时默认使用 `deepseek-v4-flash`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。OpenCode Go 仅用于 AI 分析，固定使用官方 Base URL `https://opencode.ai/zen/go/v1`，模型选择器采用当前对接文档快照：Grok 4.5、GLM-5.2/5.1、GPT 5.6 Luna、Kimi K3/K2.7 Code/K2.6、MiMo-V2.5/Pro、MiniMax M3/M2.7、Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus、DeepSeek V4 Pro/Flash、Hy3。插件会按模型自动路由到文档规定的 Chat Completions、Responses 或 Messages 接口。可用模型、订阅额度和数据留存政策可能变化，发送内容前请查阅 [OpenCode Go 对接文档](https://opencode.ai/docs/zh-cn/go)。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
+AI 纪要分析按顺序支持硅基流动、**OpenCode Go**、阿里百炼、DeepSeek、OpenAI 官方、火山引擎 AgentPlan、Ollama、LM Studio 和自定义兼容接口。全局默认仍是阿里百炼 `deepseek-v4-pro`；切换到 OpenCode Go 时默认使用 `deepseek-v4-flash`，硅基流动默认模型为 `Qwen/Qwen3.5-4B`。OpenCode Go 仅用于 AI 分析，固定使用官方 Base URL `https://opencode.ai/zen/go/v1`，模型选择器采用当前对接文档快照：Grok 4.5、GLM-5.2/5.1、GPT 5.6 Luna、Kimi K3/K2.7 Code/K2.6、MiMo-V2.5/Pro、MiniMax M3/M2.7、Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus、DeepSeek V4 Pro/Flash、Hy3。插件会按模型自动路由到文档规定的 Chat Completions、Responses 或 Messages 接口。可用模型、订阅额度和数据留存政策可能变化，发送内容前请查阅 [OpenCode Go 对接文档](https://opencode.ai/docs/zh-cn/go)。选择 AgentPlan 后固定使用套餐专属 Base URL `https://ark.cn-beijing.volces.com/api/plan/v3`，并可从套餐当前支持的文本模型中选择豆包 Seed 2.0 Mini/Lite/Pro、豆包 Seed Evolving、DeepSeek V4、MiniMax M2.7/M3、GLM-5.2、Kimi K2.6/K2.7 Code/K3 等型号。Kimi K3 需要 Medium 及以上套餐，尝鲜模型在高峰期可能出现限流。AgentPlan 分析与 AgentPlan ASR 的配置和密钥仍按用途隔离。
+
+选择 **OpenAI 官方** 后使用固定地址 `https://api.openai.com/v1/responses`，默认模型为 `gpt-6.1-sol`。模型下拉在每项后标注输入和输出单价，单位为美元 / 百万 tokens。2026-11-09 核验的 Standard 标准短上下文参考价分别为 Sol $2/$10、Terra $1/$5、Luna $0.10/$0.50、Astra $10/$50。缓存、超长上下文等按官方费率计费，分块分析会产生多次请求费用。价格随版本核验更新。详见 [OpenAI 官方价格](https://developers.openai.com/api/docs/pricing)。
+
+OpenAI 分析将转写文本和模板指令发送给官方接口，密钥按分析用途独立保存。请求采用 Standard 处理、medium 推理和 `store: false`，关闭后续 API 检索所需的响应存储。API 处理适用 OpenAI 当前的数据留存政策。密钥可从 [OpenAI Platform](https://platform.openai.com/api-keys) 获取，数据规则见 [OpenAI 数据控制文档](https://developers.openai.com/api/docs/guides/your-data)。
 
 AgentPlan 套餐官方限定文本生成与向量化能力用于 AI 工具场景。使用 Echo Notes 接入前，请确认你的使用方式符合当前套餐规则；在非 AI 工具或不符合规则的场景中使用专属 Base URL 和 API Key，可能触发订阅停用或账号限制。
 
@@ -145,11 +149,12 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 - MOSI 转写地址：`https://api.mosi.cn/v1/audio/transcriptions`
 - 火山引擎 AgentPlan 实时 ASR 地址：`wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
 - 火山引擎 AgentPlan 文本分析地址：`https://ark.cn-beijing.volces.com/api/plan/v3`
+- OpenAI 官方文本分析地址为 `https://api.openai.com/v1/responses`
 - OpenCode Go 文本分析地址：`https://opencode.ai/zen/go/v1`（具体 API 路径由所选模型决定）
 - Ollama 转写默认地址：`http://localhost:11434/v1`
 - LM Studio 转写默认地址：`http://localhost:1234/v1`
 - AI 分析默认地址：`https://dashscope.aliyuncs.com/compatible-mode/v1`
-- 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL；OpenCode Go 与 AgentPlan 的专属地址保持只读。
+- 其他 AI 分析地址使用所选分析 Provider 配置的 Base URL；OpenAI 官方、OpenCode Go 与 AgentPlan 使用固定的服务商地址。
 - Echo Memory 使用独立选择的记忆 Provider Base URL，并调用其 OpenAI-compatible `/chat/completions` 端点。
 
 离线转写会把所选音频发送到当前离线 Provider。百炼新模型先获取短期 OSS 表单凭证，把本地文件上传到百炼临时存储，再用 `oss://` 地址提交异步任务；临时凭证仅存在于内存，不写入设置、任务或日志。开启说话人分离时，Echo Notes 会先生成整段 16 千赫兹单声道 WAV；超过 2 小时、解码失败或内存不足会阻止提交，不会静默降级。选择 MOSI 时，Echo Notes 会以 multipart 方式把音频上传到 `api.mosi.cn`，使用同步非流式请求。Vault 中不会生成临时分段文件。

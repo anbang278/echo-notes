@@ -1,4 +1,9 @@
 import type { Hotkey, Modifier } from "obsidian";
+import {
+	OPENAI_OFFICIAL_BASE_URL,
+	OPENAI_OFFICIAL_DEFAULT_MODEL,
+	getOpenAIOfficialModelOption
+} from "../analysis/openai-model-catalog";
 import { SILICONFLOW_DEFAULT_TRANSCRIPTION_MODEL_ID } from "../providers/siliconflow-model-catalog";
 import { normalizeSiliconFlowUpgradeNoticeDismissed } from "../providers/siliconflow-model-upgrade-policy";
 import {
@@ -30,12 +35,13 @@ export type AnalysisProviderId =
 	| "opencode-go"
 	| "aliyun-bailian"
 	| "deepseek"
+	| "openai-official"
 	| "volcengine-agentplan"
 	| "ollama"
 	| "lm-studio"
 	| "custom-openai-compatible";
 
-export type MemoryProviderId = Exclude<AnalysisProviderId, "opencode-go">;
+export type MemoryProviderId = Exclude<AnalysisProviderId, "opencode-go" | "openai-official">;
 
 export const REMOVED_ANALYSIS_PROVIDER_IDS = [
 	"openai",
@@ -358,6 +364,7 @@ export const ANALYSIS_PROVIDER_LABELS: Record<AnalysisProviderId, string> = {
 	"opencode-go": "【推荐】OpenCode Go",
 	"aliyun-bailian": "阿里百炼（Alibaba Bailian）",
 	deepseek: "DeepSeek",
+	"openai-official": "OpenAI 官方",
 	"volcengine-agentplan": "火山引擎 AgentPlan",
 	ollama: "Ollama",
 	"lm-studio": "LM Studio",
@@ -417,6 +424,10 @@ export const ANALYSIS_PROVIDER_DEFAULTS: Record<AnalysisProviderId, Pick<EchoNot
 	deepseek: {
 		analysisBaseUrl: "https://api.deepseek.com/v1",
 		analysisModel: "deepseek-v4-pro"
+	},
+	"openai-official": {
+		analysisBaseUrl: OPENAI_OFFICIAL_BASE_URL,
+		analysisModel: OPENAI_OFFICIAL_DEFAULT_MODEL
 	},
 	"volcengine-agentplan": {
 		analysisBaseUrl: AGENTPLAN_ANALYSIS_BASE_URL,
@@ -1406,6 +1417,10 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 				? rawAnalysisModel
 				: analysisDefaults.analysisModel
 			: rawAnalysisModel || analysisDefaults.analysisModel;
+	if (settings.analysisProvider === "openai-official") {
+		settings.analysisBaseUrl = OPENAI_OFFICIAL_BASE_URL;
+		settings.analysisModel = getOpenAIOfficialModelOption(rawAnalysisModel)?.id ?? OPENAI_OFFICIAL_DEFAULT_MODEL;
+	}
 	settings.analysisEnabled = typeof raw.analysisEnabled === "boolean" ? raw.analysisEnabled : oldAutoAnalyze;
 	settings.redactTranscriptBeforeAnalysis =
 		typeof raw.redactTranscriptBeforeAnalysis === "boolean"
