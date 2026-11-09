@@ -4249,29 +4249,57 @@ async function verifyOpenAIOfficialSettings(page) {
 		const keySetting = await getActiveSetting(page, "分析 API Key");
 		assert(await keySetting.getByRole("link", { name: "获取 OpenAI API Key" }).getAttribute("href") === "https://platform.openai.com/api-keys", "OpenAI 密钥链接不正确");
 		const keyInput = keySetting.locator('input[type="password"]');
-		// Reproduce the blur-save window while the Provider switch is persisting.
+		// Hold the Provider save so the old input remains mounted throughout the check.
 		await page.evaluate((id) => {
 			const plugin = window.app.plugins.plugins[id];
 			const save = plugin.saveSettings;
 			window.__echoNotesOfficialSave = save;
-			plugin.saveSettings = async function (...args) {
-				await new Promise((resolve) => setTimeout(resolve, 150));
-				return save.apply(this, args);
+			plugin.saveSettings = function (...args) {
+				return new Promise((resolve, reject) => {
+					window.__echoNotesReleaseOfficialSave = () => save.apply(this, args).then(resolve, reject);
+				});
 			};
 		}, PLUGIN_ID);
+		let switching;
 		try {
 			await keyInput.fill("isolated-official-analysis-key");
 			await keyInput.blur();
-			await selectSettingOption(page, "分析服务商", "custom-openai-compatible");
+			switching = selectSettingOption(page, "分析服务商", "custom-openai-compatible");
+			await page.waitForFunction(() => typeof window.__echoNotesReleaseOfficialSave === "function");
+			assert(await keyInput.isDisabled(), "切换保存期间旧密钥输入必须禁用");
+			assert(await (await getActiveSetting(page, "分析服务商")).locator('select:not([aria-hidden="true"])').isDisabled(), "切换保存期间必须防止重复切换");
 		} finally {
-			await page.evaluate((id) => {
+			await page.evaluate(async (id) => {
+				await window.__echoNotesReleaseOfficialSave?.();
 				window.app.plugins.plugins[id].saveSettings = window.__echoNotesOfficialSave;
 				delete window.__echoNotesOfficialSave;
+				delete window.__echoNotesReleaseOfficialSave;
 			}, PLUGIN_ID);
+			await switching;
 		}
 		assert(await page.evaluate((id) => window.app.plugins.plugins[id].getAnalysisApiKey(), PLUGIN_ID) === "isolated-custom-analysis-key", "自定义接口密钥隔离失败");
 		await selectSettingOption(page, "分析服务商", "openai-official");
 		assert(await page.evaluate((id) => window.app.plugins.plugins[id].getAnalysisApiKey(), PLUGIN_ID) === "isolated-official-analysis-key", "官方密钥隔离失败");
+		await page.evaluate((id) => {
+			const plugin = window.app.plugins.plugins[id];
+			window.__echoNotesOfficialSave = plugin.saveSettings;
+			plugin.saveSettings = async () => { throw new Error("synthetic-analysis-save-failure"); };
+		}, PLUGIN_ID);
+		try {
+			await (await getActiveSetting(page, "分析服务商")).locator('select:not([aria-hidden="true"])').selectOption("custom-openai-compatible");
+			await page.waitForFunction((id) => {
+				const provider = document.querySelector('[data-echo-notes-guide-target="analysis-provider"] select:not([aria-hidden="true"])');
+				return window.app.plugins.plugins[id].settings.analysisProvider === "openai-official"
+					&& provider?.value === "openai-official" && !provider.disabled;
+			}, PLUGIN_ID);
+			assert(!(await (await getActiveSetting(page, "分析 API Key")).locator("input").isDisabled()), "保存失败后必须恢复密钥控件");
+		} finally {
+			await page.evaluate((id) => {
+				window.app.plugins.plugins[id].saveSettings = window.__echoNotesOfficialSave;
+				delete window.__echoNotesOfficialSave;
+				document.querySelectorAll(".notice").forEach((notice) => notice.remove());
+			}, PLUGIN_ID);
+		}
 		const viewports = [...VIEWPORTS, { ...VIEWPORTS[0], name: "desktop-panel-554", panelWidth: 554 }];
 		for (const viewport of viewports) {
 			for (const theme of THEMES) {

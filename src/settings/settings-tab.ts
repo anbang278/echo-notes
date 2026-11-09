@@ -2486,14 +2486,33 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						if (!isAnalysisProviderId(value)) {
 							return;
 						}
-						if (!await this.flushDeferredTextSaves("analysis-")) {
-							dropdown.setValue(this.plugin.settings.analysisProvider);
-							return;
+						const previous = {
+							analysisProvider: this.plugin.settings.analysisProvider,
+							analysisBaseUrl: this.plugin.settings.analysisBaseUrl,
+							analysisModel: this.plugin.settings.analysisModel
+						};
+						const controls = Array.from(containerEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>("input, select, button"));
+						const disabled = controls.map((control) => control.disabled);
+						controls.forEach((control) => { control.disabled = true; });
+						try {
+							if (!await this.flushDeferredTextSaves("analysis-")) {
+								dropdown.setValue(previous.analysisProvider);
+								return;
+							}
+							previous.analysisBaseUrl = this.plugin.settings.analysisBaseUrl;
+							previous.analysisModel = this.plugin.settings.analysisModel;
+							this.plugin.settings.analysisProvider = value;
+							this.applyAnalysisProviderDefaults(value);
+							await this.plugin.saveSettings();
+							this.refreshSettings();
+						} catch (error) {
+							Object.assign(this.plugin.settings, previous);
+							dropdown.setValue(previous.analysisProvider);
+							new Notice(`分析服务商保存失败：${getSanitizedErrorMessage(error)}`);
+							this.refreshSettings();
+						} finally {
+							controls.forEach((control, index) => { control.disabled = disabled[index] ?? false; });
 						}
-						this.plugin.settings.analysisProvider = value;
-						this.applyAnalysisProviderDefaults(value);
-						await this.plugin.saveSettings();
-						this.refreshSettings();
 					})
 			);
 		analysisProviderSetting.settingEl.dataset.echoNotesGuideTarget = "analysis-provider";
