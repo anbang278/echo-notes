@@ -17,9 +17,10 @@ const TIME = "(?:[01]\\d|2[0-3]):[0-5]\\d";
 const DATE = "\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])";
 const TIME_RANGE = `(?:${TIME}–${TIME}|${DATE} ${TIME}–${DATE} ${TIME})`;
 const RECORDING_TIME = new RegExp(`^ {0,3}录音时间：${TIME_RANGE}（(?:不到1分钟|[1-9]\\d*分钟|[1-9]\\d*小时(?:[1-9]\\d*分钟)?)）`);
-const SUMMARY_LABEL = "｜AI 总结：";
+const SUMMARY_LABEL = "AI 总结：";
+const INLINE_SUMMARY_LABEL = `｜${SUMMARY_LABEL}`;
 
-/** Return a minimal edit of the time line, leaving every surrounding byte intact. */
+/** Edit the owned summary, preserving surrounding text and the note's line endings. */
 export function updateRecordingSummaryContent(
 	content: string,
 	match: AudioLinkMatch,
@@ -33,25 +34,35 @@ export function updateRecordingSummaryContent(
 	const lineIndex = match.lineStart - 1;
 	const lines = content.split("\n");
 	const line = lines[lineIndex].replace(/\r$/, "");
+	const standalone = line.startsWith(SUMMARY_LABEL);
+	const timeIndex = standalone ? lineIndex - 1 : lineIndex;
+	if (timeIndex < 0) return skipped("missing-recording-time");
+	const timeLine = lines[timeIndex].replace(/\r$/, "");
 	const lineOffset = lines.slice(0, lineIndex).reduce((offset, value) => offset + value.length + 1, 0);
-	const beforeLine = content.slice(0, lineOffset);
+	const beforeLine = lines.slice(0, timeIndex).join("\n");
 	if (beforeLine.lastIndexOf("<!--") > beforeLine.lastIndexOf("-->")) return skipped("missing-recording-time");
 	if (/^(?: {4}|\t)/.test(lines[match.lineStart])) return skipped("unsupported-audio-context");
-	const timing = RECORDING_TIME.exec(line);
+	const timing = RECORDING_TIME.exec(timeLine);
 	if (!timing) return skipped("missing-recording-time");
+	if (standalone && (timeLine.includes(SUMMARY_LABEL) || timeLine.includes("echo-notes-recording-summary"))) {
+		return skipped("ambiguous-summary-label");
+	}
 
 	const start = line.indexOf(RECORDING_SUMMARY_START);
 	const end = line.indexOf(RECORDING_SUMMARY_END);
 	const hasMarker = line.includes("echo-notes-recording-summary");
 	if (hasMarker && (
-		start < timing[0].length || end < start + RECORDING_SUMMARY_START.length
+		standalone || start < timing[0].length || end < start + RECORDING_SUMMARY_START.length
 		|| line.indexOf(RECORDING_SUMMARY_START, start + RECORDING_SUMMARY_START.length) !== -1
 		|| line.indexOf(RECORDING_SUMMARY_END, end + RECORDING_SUMMARY_END.length) !== -1
 		|| line.split("echo-notes-recording-summary").length !== 3
-		|| !line.slice(start + RECORDING_SUMMARY_START.length, end).startsWith(SUMMARY_LABEL)
+		|| !line.slice(start + RECORDING_SUMMARY_START.length, end).startsWith(INLINE_SUMMARY_LABEL)
 	)) return skipped("malformed-summary-marker");
 
-	const text = `${SUMMARY_LABEL}${normalized}`;
+	if (line.split(SUMMARY_LABEL).length > 2) return skipped("ambiguous-summary-label");
+	const label = standalone ? SUMMARY_LABEL : INLINE_SUMMARY_LABEL;
+	const newline = lines[lineIndex].endsWith("\r") ? "\r\n" : "\n";
+	const text = `${standalone ? "" : newline}${SUMMARY_LABEL}${normalized}`;
 	let from = line.length;
 	let to = line.length;
 	let previousSummary: string | undefined;
@@ -59,16 +70,17 @@ export function updateRecordingSummaryContent(
 		from = start;
 		to = end + RECORDING_SUMMARY_END.length;
 	} else {
-		const labelIndex = line.indexOf(SUMMARY_LABEL);
+		const labelIndex = line.indexOf(label);
 		if (labelIndex !== -1) {
-			if (line.indexOf(SUMMARY_LABEL, labelIndex + SUMMARY_LABEL.length) !== -1) return skipped("ambiguous-summary-label");
-			const candidates = Array.from(new Set(knownSummaries)).filter((candidate) => line.startsWith(`${SUMMARY_LABEL}${candidate}`, labelIndex));
+			const candidates = Array.from(new Set(knownSummaries)).filter((candidate) => line.startsWith(`${label}${candidate}`, labelIndex));
 			if (candidates.length > 1) return skipped("ambiguous-summary-boundary");
 			previousSummary = candidates[0];
-			if (!previousSummary && knownSummaries.length === 0 && line.slice(labelIndex) === text) previousSummary = normalized;
+			if (!previousSummary && knownSummaries.length === 0 && line.slice(labelIndex) === `${label}${normalized}`) previousSummary = normalized;
 			if (!previousSummary) return skipped("untracked-summary");
 			from = labelIndex;
-			to = labelIndex + SUMMARY_LABEL.length + previousSummary.length;
+			to = labelIndex + label.length + previousSummary.length;
+		} else if (line.includes(SUMMARY_LABEL)) {
+			return skipped("untracked-summary");
 		}
 	}
 	if (line.slice(from, to) === text) return { status: "already-present", content, previousSummary };

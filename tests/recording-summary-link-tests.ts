@@ -12,8 +12,9 @@ const TIME = "录音时间：08:54–09:16（22分钟）";
 const AUDIO = "![[meeting.m4a]]";
 const SUMMARY = "新员工通过模拟客户沟通练习销售话术和表达语气";
 const NEW_SUMMARY = "团队核对项目实施进度并确认接口联调安排";
-const plain = (text = SUMMARY) => `｜AI 总结：${text}`;
-const legacy = (text = SUMMARY) => `${RECORDING_SUMMARY_START}${plain(text)}${RECORDING_SUMMARY_END}`;
+const plain = (text = SUMMARY) => `AI 总结：${text}`;
+const inline = (text = SUMMARY) => `｜${plain(text)}`;
+const legacy = (text = SUMMARY) => `${RECORDING_SUMMARY_START}｜AI 总结：${text}${RECORDING_SUMMARY_END}`;
 
 function update(content: string, summary = SUMMARY, known: readonly string[] = []) {
 	return updateRecordingSummaryContent(content, parseAudioLinks(content)[0], summary, known);
@@ -82,7 +83,7 @@ function fixture(initial = `${TIME}\n${AUDIO}\n结尾`) {
 		getLine: (line: number) => (ownContent ?? content).split("\n")[line].replace(/\r$/, ""),
 		replaceRange: (text: string, from: { line: number; ch: number }, to: { line: number; ch: number }) => {
 			if (fail) throw new Error("editor write failed");
-			assert.equal(from.line, to.line, "摘要只能更新时间行");
+			assert.equal(from.line, to.line, "摘要只需单行范围编辑，插入文本可包含换行");
 			const lines = content.split("\n");
 			const offset = lines.slice(0, from.line).reduce((total, line) => total + line.length + 1, 0);
 			content = `${content.slice(0, offset + from.ch)}${text}${content.slice(offset + to.ch)}`;
@@ -115,29 +116,43 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 		const original = `前言\n${TIME}${suffix}\n${AUDIO}\n后记`;
 		const first = update(original);
 		assert.equal(first.status, "inserted");
-		assert.equal(first.content, `前言\n${TIME}${suffix}${plain()}\n${AUDIO}\n后记`);
+		assert.equal(first.content, `前言\n${TIME}${suffix}\n${plain()}\n${AUDIO}\n后记`);
 		assert.equal(update(first.content).status, "already-present");
 		const changed = update(`${first.content.replace(`\n${AUDIO}`, ` 手写后缀\n${AUDIO}`)}`, NEW_SUMMARY, [SUMMARY]);
 		assert.equal(changed.status, "updated");
-		assert.equal(changed.content, `前言\n${TIME}${suffix}${plain(NEW_SUMMARY)} 手写后缀\n${AUDIO}\n后记`);
+		assert.equal(changed.content, `前言\n${TIME}${suffix}\n${plain(NEW_SUMMARY)} 手写后缀\n${AUDIO}\n后记`);
 	}
 	const longLegacy = "新悦部门面向新员工开展销售话术对练，通过模拟客户沟通练习提问顺序、话术衔接和表达语气，帮助新人熟悉实际销售沟通方式。";
 	const migrated = update(`${TIME}：手写前缀${legacy(longLegacy)} 手写后缀\n${AUDIO}`);
 	assert.equal(migrated.status, "updated");
-	assert.equal(migrated.content, `${TIME}：手写前缀${plain()} 手写后缀\n${AUDIO}`);
+	assert.equal(migrated.content, `${TIME}：手写前缀\n${plain()} 手写后缀\n${AUDIO}`);
 	assert.equal(migrated.content.includes("<!--"), false, "原笔记摘要不能包含隐藏标记");
-	assert.equal(update(`${TIME}${plain(NEW_SUMMARY)} 人工后缀\n${AUDIO}`).reason, "untracked-summary");
+	assert.equal(update(`${TIME}\n${plain(NEW_SUMMARY)} 人工后缀\n${AUDIO}`).reason, "untracked-summary");
 	const longest = "新员工通过模拟客户沟通练习销售话术和表达语气";
 	const shorter = "新员工通过模拟客户沟通练习销售话术";
-	assert.equal(update(`${TIME}${plain(longest)} 手写后缀\n${AUDIO}`, NEW_SUMMARY, [shorter, longest]).reason,
+	assert.equal(update(`${TIME}\n${plain(longest)} 手写后缀\n${AUDIO}`, NEW_SUMMARY, [shorter, longest]).reason,
 		"ambiguous-summary-boundary", "重叠快照不能根据前缀长度认领人工后缀");
-	assert.equal(update(`${TIME}${plain()}${plain(NEW_SUMMARY)}\n${AUDIO}`).reason, "ambiguous-summary-label");
+	assert.equal(update(`${TIME}\n${plain()}${plain(NEW_SUMMARY)}\n${AUDIO}`).reason, "ambiguous-summary-label");
+	for (const duplicate of [inline(), legacy(), `${RECORDING_SUMMARY_START}损坏`]) {
+		const original = `${TIME}${duplicate}\n${plain()}\n${AUDIO}`;
+		assert.equal(update(original).reason, "ambiguous-summary-label");
+		assert.equal(update(original).content, original);
+	}
+	for (const original of [
+		`${TIME}${inline()}${inline(NEW_SUMMARY)}\n${AUDIO}`,
+		`${TIME}\n${plain()}${RECORDING_SUMMARY_START}\n${AUDIO}`,
+		`${TIME}\n${plain()}\n${plain(NEW_SUMMARY)}\n${AUDIO}`,
+		`${plain()}\n${AUDIO}`
+	]) {
+		assert.equal(update(original).status, "skipped", "不认领损坏或无法唯一定位的独立摘要行");
+		assert.equal(update(original).content, original);
+	}
 	const hiddenTime = `<!--\n${TIME} -->\n${AUDIO}`;
 	assert.equal(update(hiddenTime).reason, "missing-recording-time");
 	assert.equal(update(`    ${TIME}\n    ${AUDIO}`).status, "skipped");
 	assert.equal(update(`${TIME}\n    ${AUDIO}`).reason, "unsupported-audio-context");
 	const crlf = `${TIME}：手写\r\n${AUDIO}\r\n结束\r\n`;
-	assert.equal(update(crlf).content, `${TIME}：手写${plain()}\r\n${AUDIO}\r\n结束\r\n`);
+	assert.equal(update(crlf).content, `${TIME}：手写\r\n${plain()}\r\n${AUDIO}\r\n结束\r\n`);
 	const crossDay = `录音时间：2026-11-04 23:50–2026-11-05 00:10（20分钟）\n${AUDIO}`;
 	assert.equal(update(crossDay).status, "inserted");
 	for (const timing of ["录音时间：08:54–09:16（不到1分钟）", "录音时间：08:54–10:54（2小时）", "录音时间：08:54–10:55（2小时1分钟）"]) {
@@ -158,7 +173,7 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 	const anchor = disk.anchor();
 	disk.setContent(`新增前言\n${TIME}：仍需保留\n${AUDIO}\n结尾`);
 	assert.equal((await disk.writeSummary(anchor, SUMMARY)).status, "inserted");
-	assert.equal(disk.content(), `新增前言\n${TIME}：仍需保留${plain()}\n${AUDIO}\n结尾`);
+	assert.equal(disk.content(), `新增前言\n${TIME}：仍需保留\n${plain()}\n${AUDIO}\n结尾`);
 	assert.equal((await disk.writeSummary(anchor, SUMMARY)).status, "already-present");
 	assert.equal((await disk.writeSummary(anchor, NEW_SUMMARY)).status, "updated");
 
@@ -166,7 +181,7 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 	assert.equal((await markdown.writeSummary(markdown.anchor(), SUMMARY)).status, "inserted");
 	const multi = fixture(`${TIME}\n![[other.m4a]]\n${TIME}：第二段\n${AUDIO}`);
 	await multi.writeSummary(multi.anchor(), SUMMARY);
-	assert.equal(multi.content(), `${TIME}\n![[other.m4a]]\n${TIME}：第二段${plain()}\n${AUDIO}`);
+	assert.equal(multi.content(), `${TIME}\n![[other.m4a]]\n${TIME}：第二段\n${plain()}\n${AUDIO}`);
 
 	const editor = fixture();
 	editor.setEditors([editor.createEditor()]);
@@ -236,7 +251,7 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 	assert.equal(queued.counts().mutationCount, 1, "摘要和回链必须共用同一文件队列");
 	release();
 	await Promise.all([first, second]);
-	assert.equal(queued.content(), `${TIME}${plain()}\n${AUDIO}\n[[transcript]]\n结尾`);
+	assert.equal(queued.content(), `${TIME}\n${plain()}\n${AUDIO}\n[[transcript]]\n结尾`);
 
 	const snapshotFailure = fixture();
 	snapshotFailure.setFailSnapshot();
@@ -244,34 +259,34 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 	assert.equal(snapshotFailure.content(), `${TIME}\n${AUDIO}\n结尾`);
 	assert.equal(snapshotFailure.counts().diskWrites, 0);
 
-	const recoverable = fixture(`${TIME}：手写前缀${plain()} 手写后缀\n${AUDIO}`);
+	const recoverable = fixture(`${TIME}：手写前缀\n${plain()} 手写后缀\n${AUDIO}`);
 	recoverable.setTranscript(writeRecordingSummaryWriteback(recoverable.transcript(), [SUMMARY])!);
 	recoverable.setFail();
 	assert.equal((await recoverable.writeSummary(recoverable.anchor(), NEW_SUMMARY)).status, "failed");
 	assert.deepEqual(readRecordingSummaryWriteback(recoverable.transcript()), [NEW_SUMMARY, SUMMARY]);
-	assert.equal(recoverable.content(), `${TIME}：手写前缀${plain()} 手写后缀\n${AUDIO}`);
+	assert.equal(recoverable.content(), `${TIME}：手写前缀\n${plain()} 手写后缀\n${AUDIO}`);
 	recoverable.setFail(false);
 	assert.equal((await recoverable.writeSummary(recoverable.anchor(), NEW_SUMMARY)).status, "updated");
-	assert.equal(recoverable.content(), `${TIME}：手写前缀${plain(NEW_SUMMARY)} 手写后缀\n${AUDIO}`);
+	assert.equal(recoverable.content(), `${TIME}：手写前缀\n${plain(NEW_SUMMARY)} 手写后缀\n${AUDIO}`);
 	assert.deepEqual(readRecordingSummaryWriteback(recoverable.transcript()), [NEW_SUMMARY]);
 
 	const shortOwned = "新悦新员工销售话术与表达语气对练";
 	const handwrittenSuffix = "与提问练习";
 	const extendedSummary = shortOwned + handwrittenSuffix;
 	for (const useEditor of [false, true]) {
-		const extending = fixture(`${TIME}${plain(shortOwned)}${handwrittenSuffix}\n${AUDIO}`);
+		const extending = fixture(`${TIME}\n${plain(shortOwned)}${handwrittenSuffix}\n${AUDIO}`);
 		extending.setTranscript(writeRecordingSummaryWriteback(extending.transcript(), [shortOwned])!);
 		if (useEditor) extending.setEditors([extending.createEditor()]);
 		assert.equal((await extending.writeSummary(extending.anchor(), extendedSummary)).status, "updated");
-		assert.equal(extending.content(), `${TIME}${plain(extendedSummary)}${handwrittenSuffix}\n${AUDIO}`,
+		assert.equal(extending.content(), `${TIME}\n${plain(extendedSummary)}${handwrittenSuffix}\n${AUDIO}`,
 			"新摘要包含旧摘要及人工后缀时仍须保留原人工后缀");
 		assert.deepEqual(readRecordingSummaryWriteback(extending.transcript()), [extendedSummary]);
 		assert.equal((await extending.writeSummary(extending.anchor(), NEW_SUMMARY)).status, "updated");
-		assert.equal(extending.content(), `${TIME}${plain(NEW_SUMMARY)}${handwrittenSuffix}\n${AUDIO}`,
+		assert.equal(extending.content(), `${TIME}\n${plain(NEW_SUMMARY)}${handwrittenSuffix}\n${AUDIO}`,
 			"后续更新不得删除上一轮保护的人工后缀");
 		assert.deepEqual(readRecordingSummaryWriteback(extending.transcript()), [NEW_SUMMARY]);
 	}
-	const completedOldRound = fixture(`${TIME}${plain(shortOwned)}${handwrittenSuffix}\n${AUDIO}`);
+	const completedOldRound = fixture(`${TIME}\n${plain(shortOwned)}${handwrittenSuffix}\n${AUDIO}`);
 	completedOldRound.setTranscript(writeRecordingSummaryWriteback(completedOldRound.transcript(), [shortOwned])!);
 	let activeRound = true;
 	completedOldRound.setAfterProcess(() => { activeRound = false; });
@@ -279,8 +294,8 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 	assert.equal(activeRound, false);
 	assert.deepEqual(readRecordingSummaryWriteback(completedOldRound.transcript()), [extendedSummary],
 		"来源已写成功后即使轮次变化，仍需记账收敛，避免双候选阻塞下一轮");
-	assert.equal(completedOldRound.content(), `${TIME}${plain(extendedSummary)}${handwrittenSuffix}\n${AUDIO}`);
-	const convergenceFailure = fixture(`${TIME}${plain(shortOwned)}${handwrittenSuffix}\n${AUDIO}`);
+	assert.equal(completedOldRound.content(), `${TIME}\n${plain(extendedSummary)}${handwrittenSuffix}\n${AUDIO}`);
+	const convergenceFailure = fixture(`${TIME}\n${plain(shortOwned)}${handwrittenSuffix}\n${AUDIO}`);
 	convergenceFailure.setTranscript(writeRecordingSummaryWriteback(convergenceFailure.transcript(), [shortOwned])!);
 	convergenceFailure.setBeforeSnapshot(() => {
 		if (convergenceFailure.counts().snapshotWrites === 1) convergenceFailure.setFailSnapshot();
@@ -289,24 +304,45 @@ export async function runRecordingSummaryLinkTests(): Promise<void> {
 	assert.equal(sourceWritten.status, "updated", "快照收敛失败不能逆转已成功的来源写入");
 	assert.equal(sourceWritten.reason, "writeback-state-pending");
 	assert.deepEqual(readRecordingSummaryWriteback(convergenceFailure.transcript()), [extendedSummary, shortOwned]);
-	const safeContent = `${TIME}${plain(extendedSummary)}${handwrittenSuffix}\n${AUDIO}`;
+	const safeContent = `${TIME}\n${plain(extendedSummary)}${handwrittenSuffix}\n${AUDIO}`;
 	assert.equal(convergenceFailure.content(), safeContent);
 	convergenceFailure.setFailSnapshot(false);
 	convergenceFailure.setBeforeSnapshot(() => undefined);
 	assert.equal((await convergenceFailure.writeSummary(convergenceFailure.anchor(), NEW_SUMMARY)).reason, "ambiguous-summary-boundary");
 	assert.equal(convergenceFailure.content(), safeContent, "未收敛的前缀歧义必须跳过而不能吞掉人工内容");
-	const plainMigration = fixture(`${TIME}${plain()}\n${AUDIO}`);
+	const plainMigration = fixture(`${TIME}\n${plain()}\n${AUDIO}`);
 	assert.equal((await plainMigration.writeSummary(plainMigration.anchor(), SUMMARY)).status, "already-present");
 	assert.deepEqual(readRecordingSummaryWriteback(plainMigration.transcript()), [SUMMARY]);
+	const sameInline = update(`${TIME}${inline()}\n${AUDIO}`);
+	assert.equal(sameInline.status, "updated", "相同摘要的旧行内布局仍须迁移");
+	assert.equal(sameInline.content, `${TIME}\n${plain()}\n${AUDIO}`);
+	assert.equal(update(`${TIME}${inline(NEW_SUMMARY)} 人工后缀\n${AUDIO}`).reason, "untracked-summary");
+	assert.equal(update(`${TIME}${inline(longest)} 手写后缀\n${AUDIO}`, NEW_SUMMARY, [shorter, longest]).reason,
+		"ambiguous-summary-boundary");
+	for (const ending of ["\n", "\r\n"]) {
+		for (const useEditor of [false, true]) {
+			for (const oldSummary of [inline(), legacy(longLegacy)]) {
+				for (const next of [SUMMARY, NEW_SUMMARY]) {
+					const oldInline = fixture(`${TIME}：手写前缀${oldSummary} 手写后缀${ending}${AUDIO}${ending}结尾${ending}`);
+					oldInline.setTranscript(writeRecordingSummaryWriteback(oldInline.transcript(), [SUMMARY])!);
+					if (useEditor) oldInline.setEditors([oldInline.createEditor()]);
+					assert.equal((await oldInline.writeSummary(oldInline.anchor(), next)).status, "updated");
+					assert.equal(oldInline.content(), `${TIME}：手写前缀${ending}${plain(next)} 手写后缀${ending}${AUDIO}${ending}结尾${ending}`);
+					assert.equal((await oldInline.writeSummary(oldInline.anchor(), next)).status, "already-present");
+					assert.deepEqual(readRecordingSummaryWriteback(oldInline.transcript()), [next]);
+				}
+			}
+		}
+	}
 	const legacyMigration = fixture(`${TIME}${legacy(longLegacy)} 手写后缀\n${AUDIO}`);
 	assert.equal((await legacyMigration.writeSummary(legacyMigration.anchor(), SUMMARY)).status, "updated");
-	assert.equal(legacyMigration.content(), `${TIME}${plain()} 手写后缀\n${AUDIO}`);
+	assert.equal(legacyMigration.content(), `${TIME}\n${plain()} 手写后缀\n${AUDIO}`);
 	assert.deepEqual(readRecordingSummaryWriteback(legacyMigration.transcript()), [SUMMARY]);
 
-	const unknownNewPrefix = fixture(`${TIME}${plain()} 未知内容可能属于人工摘要\n${AUDIO}`);
+	const unknownNewPrefix = fixture(`${TIME}\n${plain()} 未知内容可能属于人工摘要\n${AUDIO}`);
 	assert.equal((await unknownNewPrefix.writeSummary(unknownNewPrefix.anchor(), SUMMARY)).reason, "untracked-summary");
 	assert.equal(unknownNewPrefix.counts().snapshotWrites, 0, "无快照时不能认领仅与新摘要前缀相同的人工内容");
-	const unknownPlain = fixture(`${TIME}${plain(NEW_SUMMARY)} 手写后缀\n${AUDIO}`);
+	const unknownPlain = fixture(`${TIME}\n${plain(NEW_SUMMARY)} 手写后缀\n${AUDIO}`);
 	assert.equal((await unknownPlain.writeSummary(unknownPlain.anchor(), SUMMARY)).reason, "untracked-summary");
 	assert.equal(unknownPlain.counts().snapshotWrites, 0);
 

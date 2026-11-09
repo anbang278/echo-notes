@@ -99,7 +99,8 @@ export async function verifyRecordingSummary(page, pluginId) {
 				task.kind === "analysis" && task.targetPath === transcript.path);
 			const checkPlainSummaries = (content, count) => {
 				check(!content.includes(start) && !content.includes(end), "来源笔记仍包含摘要HTML标记");
-				check(content.split("｜AI 总结：").length - 1 === count, "来源笔记摘要数量异常");
+				check(!content.includes("｜AI 总结："), "摘要仍使用旧行内分隔符");
+				check(content.split("\n").filter((line) => line.startsWith("AI 总结：")).length === count, "来源笔记独立摘要行数量异常");
 			};
 			try {
 				plugin.settings = {
@@ -142,7 +143,7 @@ export async function verifyRecordingSummary(page, pluginId) {
 				await app.workspace.getLeaf(false).openFile(transcriptA);
 				await plugin.runAnalysisBatch(transcriptA, [template("basic")]);
 				let content = await readNote(note);
-				check(content.includes(`${manual}｜AI 总结：${summaries.basic}`), "首轮摘要没有保留手写说明并写入时间行");
+				check(content.includes(`${manual}\nAI 总结：${summaries.basic}\n${audioLink(audioA, notePath)}`), "首轮摘要未在时间和音频之间独立成行");
 				checkPlainSummaries(content, 1);
 				check((await app.vault.read(transcriptA)).includes("echo_notes_recording_summary"), "摘要未持久化到转写技术信息");
 				check(tasksFor(transcriptA).every((task) => task.status === "success"), "首轮分析未记录为成功");
@@ -150,15 +151,23 @@ export async function verifyRecordingSummary(page, pluginId) {
 				check(untouchedSecond === "录音时间：10:00–10:30（30分钟）", "首轮摘要写入了其他录音");
 
 				await app.workspace.getLeaf(false).openFile(note);
-				const noteEditor = app.workspace.getLeavesOfType("markdown").find((leaf) => leaf.view.file === note).view.editor;
+				const noteLeaf = app.workspace.getLeavesOfType("markdown").find((leaf) => leaf.view.file === note);
+				await noteLeaf.setViewState({ type: "markdown", state: { file: note.path, mode: "source", source: false } });
+				const noteEditor = noteLeaf.view.editor;
+				await waitFor(() => {
+					const visibleLines = Array.from(noteLeaf.view.contentEl.querySelectorAll(".cm-line"));
+					const time = visibleLines.find((line) => line.textContent.startsWith("录音时间：08:54"));
+					const summary = visibleLines.find((line) => line.textContent.startsWith(`AI 总结：${summaries.basic}`));
+					return time && summary && summary.getBoundingClientRect().top > time.getBoundingClientRect().top;
+				}, "实时预览中时间和AI摘要没有分行展示");
 				const handwrittenSuffix = "；手写补充保留。";
-				const firstTimeLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("录音时间：08:54"));
-				noteEditor.replaceRange(handwrittenSuffix, { line: firstTimeLine, ch: noteEditor.getLine(firstTimeLine).length });
+				const firstSummaryLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("AI 总结："));
+				noteEditor.replaceRange(handwrittenSuffix, { line: firstSummaryLine, ch: noteEditor.getLine(firstSummaryLine).length });
 				await plugin.runAnalysisBatch(transcriptA, [template("repeated", "basic")]);
 				content = await readNote(note);
 				check(content.includes(summaries.repeated) && !content.includes(summaries.basic), "重新分析未更新原摘要");
 				checkPlainSummaries(content, 1);
-				check(content.includes(`${manual}｜AI 总结：${summaries.repeated}${handwrittenSuffix}`), "重新分析改写了摘要前后手写说明");
+				check(content.includes(`${manual}\nAI 总结：${summaries.repeated}${handwrittenSuffix}`), "重新分析改写了摘要前后手写说明");
 				await plugin.runAnalysisBatch(transcriptB, [template("second")]);
 				content = await readNote(note);
 				checkPlainSummaries(content, 2);
@@ -275,13 +284,39 @@ export async function verifyRecordingSummary(page, pluginId) {
 				const legacySuffix = "迁移后手写。";
 				const secondTimeLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("录音时间：10:00"));
 				noteEditor.replaceRange(`${legacyPrefix}${start}｜AI 总结：${oldLongSummary}${end}${legacySuffix}`,
-					{ line: secondTimeLine, ch: 0 }, { line: secondTimeLine, ch: noteEditor.getLine(secondTimeLine).length });
+					{ line: secondTimeLine, ch: 0 }, { line: secondTimeLine + 1, ch: noteEditor.getLine(secondTimeLine + 1).length });
 				await plugin.runAnalysisBatch(transcriptB, [template("migration")]);
 				content = await readNote(note);
 				checkPlainSummaries(content, 2);
-				check(content.includes(`${legacyPrefix}｜AI 总结：${summaries.migration}${legacySuffix}`),
+				check(content.includes(`${legacyPrefix}\nAI 总结：${summaries.migration}${legacySuffix}`),
 					"旧版标记迁移未保留前后手写文字并替换为短摘要");
 				check(!content.includes(oldLongSummary), "旧版长摘要迁移后仍存在");
+				await noteLeaf.view.save();
+				await noteLeaf.setViewState({ type: "markdown", state: { file: note.path, mode: "preview" } });
+				await waitFor(() => {
+					const preview = noteLeaf.view.contentEl.querySelector(".markdown-preview-view");
+					if (!preview) return false;
+					const textRange = (prefix) => {
+						const walker = document.createTreeWalker(preview, NodeFilter.SHOW_TEXT);
+						for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+							const offset = node.textContent.indexOf(prefix);
+							if (offset < 0) continue;
+							const range = document.createRange();
+							range.setStart(node, offset);
+							range.setEnd(node, offset + prefix.length);
+								return range;
+						}
+						return undefined;
+					};
+					const time = textRange("录音时间：08:54");
+					const summary = textRange(`AI 总结：${summaries.shared}`);
+					if (!time || !summary) return false;
+					const between = document.createRange();
+					between.setStart(time.endContainer, time.endOffset);
+					between.setEnd(summary.startContainer, summary.startOffset);
+					return between.cloneContents().querySelector("br") !== null
+						&& summary.getBoundingClientRect().top > time.getBoundingClientRect().top;
+				}, "阅读视图中时间和AI摘要没有分行展示");
 				return {
 					requestToSourceWriteback: true, manualTextPreserved: true, idempotentEditorUpdate: true,
 					multipleRecordings: true, missingTimeKeepsAnalysisSuccess: true,
@@ -290,7 +325,8 @@ export async function verifyRecordingSummary(page, pluginId) {
 					delayedSourceKeepsBothAnalyses: true, duplicateAnalysisSharesPromise: true,
 					automaticCreateWaitsForSource: true, sourceNoteHasNoHtmlMarkers: true,
 					shortSummary15To30Characters: true, legacyMarkersMigratedWithManualText: true,
-					manualPrefixAndSuffixPreserved: true
+					manualPrefixAndSuffixPreserved: true, standaloneSummaryLine: true,
+					livePreviewLineBreak: true, readingViewLineBreak: true
 				};
 			} finally {
 				await Promise.allSettled([...plugin.processingAnalyses.values()]);

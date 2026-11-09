@@ -24,6 +24,7 @@ const envelope = (summary: string): string => `${RECORDING_SUMMARY_START}\n${sum
 export function runRecordingSummaryAnalysisTests(): void {
 	const durableSummary = "新悦新员工销售话术与沟通语气培训";
 	assert.equal(normalizeRecordingSummary(`｜AI 总结：${durableSummary}`), undefined, "模型返回保留标签时不能生成重复标签并阻断后续更新");
+	assert.equal(normalizeRecordingSummary(`AI 总结：${durableSummary}`), undefined, "独立行标签也必须由写回逻辑统一添加");
 	for (const ending of ["\n", "\r\n"]) {
 		const transcript = ["---", "type: audio-transcript", "custom: keep", "---", "合成转写正文", ""].join(ending);
 		const snapshot = writeRecordingSummaryWriteback(transcript, [durableSummary]);

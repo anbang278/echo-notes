@@ -11,7 +11,7 @@ export function normalizeRecordingSummary(value: string): string | undefined {
 	if (characters.length < RECORDING_SUMMARY_MIN_CHARACTERS || characters.length > RECORDING_SUMMARY_MAX_CHARACTERS) return undefined;
 	if (/[\u2028\u2029<>`[\]\\*]/u.test(summary)
 		|| characters.some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-		|| summary.includes("%%") || summary.includes("__") || summary.includes("｜AI 总结：")
+		|| summary.includes("%%") || summary.includes("__") || summary.includes("AI 总结：")
 		|| /^#{1,6}\s/u.test(summary)) return undefined;
 	return summary;
 }
