@@ -1023,7 +1023,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						if (!isOfflineTranscriptionProviderId(value)) {
 							return;
 						}
-						if (!await this.flushDeferredTranscriptionSaves()) {
+						if (!await this.flushDeferredTextSaves("transcription-")) {
 							dropdown.setValue(this.plugin.settings.offlineTranscription.provider);
 							return;
 						}
@@ -1290,7 +1290,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 				.setDesc("高级能力：识别安装目录并配置按需启停，在「能力增强」中管理。")
 				.setClass("echo-notes-local-asr-jump")
 				.addButton(button => button.setButtonText("前往能力增强 →").onClick(async () => {
-					if (!await this.flushDeferredTranscriptionSaves()) return;
+					if (!await this.flushDeferredTextSaves("transcription-")) return;
 					this.showDestination("transcription-local-asr");
 					this.settingsContainerEl?.querySelector<HTMLElement>('[data-capability-tab="local-asr"]')?.focus({ preventScroll: true });
 					this.settingsContainerEl?.querySelector('[aria-label="录音转写配置分类"]')?.scrollIntoView({ block: "start" });
@@ -1508,7 +1508,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			toggle.onChange(async (enabled) => {
 				if (synchronizing) return;
 				// Flush an address edit before binding this action to its service. Await the native click.
-				await this.flushDeferredTranscriptionSaves();
+				await this.flushDeferredTextSaves("transcription-");
 				if (!serviceBlock.isConnected) return;
 				persist(enabled, true, !enabled);
 				syncToggle();
@@ -2484,6 +2484,10 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.analysisProvider)
 					.onChange(async (value) => {
 						if (!isAnalysisProviderId(value)) {
+							return;
+						}
+						if (!await this.flushDeferredTextSaves("analysis-")) {
+							dropdown.setValue(this.plugin.settings.analysisProvider);
 							return;
 						}
 						this.plugin.settings.analysisProvider = value;
@@ -3671,8 +3675,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private async flushDeferredTranscriptionSaves(): Promise<boolean> {
-		const keys = [...this.deferredSaveTimers.keys()].filter((key) => key.startsWith("transcription-"));
+	private async flushDeferredTextSaves(prefix: "transcription-" | "analysis-"): Promise<boolean> {
+		const keys = [...this.deferredSaveTimers.keys()].filter((key) => key.startsWith(prefix));
 		for (const key of keys) {
 			if (await this.deferredSaveCallbacks.get(key)?.() === false) return false;
 		}

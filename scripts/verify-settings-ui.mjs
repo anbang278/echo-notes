@@ -4249,10 +4249,26 @@ async function verifyOpenAIOfficialSettings(page) {
 		const keySetting = await getActiveSetting(page, "分析 API Key");
 		assert(await keySetting.getByRole("link", { name: "获取 OpenAI API Key" }).getAttribute("href") === "https://platform.openai.com/api-keys", "OpenAI 密钥链接不正确");
 		const keyInput = keySetting.locator('input[type="password"]');
-		await keyInput.fill("isolated-official-analysis-key");
-		await keyInput.blur();
-		await keySetting.locator(".echo-notes-secret-save-status").filter({ hasText: "已安全保存" }).waitFor();
-		await selectSettingOption(page, "分析服务商", "custom-openai-compatible");
+		// Reproduce the blur-save window while the Provider switch is persisting.
+		await page.evaluate((id) => {
+			const plugin = window.app.plugins.plugins[id];
+			const save = plugin.saveSettings;
+			window.__echoNotesOfficialSave = save;
+			plugin.saveSettings = async function (...args) {
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				return save.apply(this, args);
+			};
+		}, PLUGIN_ID);
+		try {
+			await keyInput.fill("isolated-official-analysis-key");
+			await keyInput.blur();
+			await selectSettingOption(page, "分析服务商", "custom-openai-compatible");
+		} finally {
+			await page.evaluate((id) => {
+				window.app.plugins.plugins[id].saveSettings = window.__echoNotesOfficialSave;
+				delete window.__echoNotesOfficialSave;
+			}, PLUGIN_ID);
+		}
 		assert(await page.evaluate((id) => window.app.plugins.plugins[id].getAnalysisApiKey(), PLUGIN_ID) === "isolated-custom-analysis-key", "自定义接口密钥隔离失败");
 		await selectSettingOption(page, "分析服务商", "openai-official");
 		assert(await page.evaluate((id) => window.app.plugins.plugins[id].getAnalysisApiKey(), PLUGIN_ID) === "isolated-official-analysis-key", "官方密钥隔离失败");
@@ -4294,7 +4310,7 @@ async function verifyOpenAIOfficialSettings(page) {
 				}
 			}
 		}
-		return { models: labels, savedSelection: true, isolatedSecrets: true, layouts };
+		return { models: labels, savedSelection: true, isolatedSecrets: true, immediateSwitchPreservesKey: true, layouts };
 	} finally {
 		await page.evaluate(async ({ id, secretIds, snapshot }) => {
 			for (const [index, secretId] of secretIds.entries()) window.app.secretStorage.setSecret(secretId, snapshot.secrets[index] ?? "");
