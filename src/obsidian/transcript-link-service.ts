@@ -28,6 +28,32 @@ export interface RecordingSummaryWriteResult {
 	reason?: string;
 }
 
+export function getRecordingSummaryWriteResultMessage(result: RecordingSummaryWriteResult): string {
+	const messages: Record<string, string> = {
+		"invalid-writeback-state": "摘要回写记录无法读取，请检查转写稿中的回写记录",
+		"writeback-state-failed": "摘要回写记录保存失败，请检查转写稿是否可写后重试",
+		"write-failed": "来源笔记写入失败，请检查文件是否可写后重试",
+		"source-missing": "来源笔记已删除或发生变化，请核对转写稿的来源链接",
+		"transcript-missing": "转写稿已删除或发生变化，请重新打开当前转写稿",
+		"audio-missing": "来源录音引用已失效，请核对笔记中的录音链接",
+		"initially-ambiguous": "来源笔记中同一录音被引用多次，请保留唯一引用后重试",
+		"ambiguous-audio": "来源笔记中同一录音被引用多次，请保留唯一引用后重试",
+		"multiple-audio-on-line": "同一行包含多个录音，请分行后重试",
+		"missing-recording-time": "录音上方缺少可识别的录音时间行，请核对格式后重试",
+		"untracked-summary": "已有摘要无法确认为插件生成内容，请保留人工内容并核对摘要记录",
+		"ambiguous-summary-boundary": "已有摘要边界不唯一，已保留人工内容，请核对摘要记录",
+		"ambiguous-summary-label": "录音附近存在重复摘要标签，请核对后重试",
+		"malformed-summary-marker": "旧摘要标记不完整，请核对后重试",
+		"multiple-source-editors": "来源笔记的多个编辑器内容不一致，请保存后重试",
+		"source-editor-opened": "来源编辑器状态发生变化，请保存后重试",
+		"unsupported-audio-context": "录音位于不支持的缩进区域，请核对录音段落",
+		"invalid-summary": "短摘要格式无效，请重新分析",
+		"plugin-unloaded": "插件已停用，请启用后重试",
+		"stale-analysis": "已有新的分析任务，本次摘要回写已跳过"
+	};
+	return messages[result.reason ?? ""] ?? "摘要回写未完成，请保存笔记后重试";
+}
+
 interface TranscriptLinkServiceOptions {
 	withMutatingFile: (file: TFile, operation: () => Promise<void>) => Promise<void>;
 	isDisposed: () => boolean;

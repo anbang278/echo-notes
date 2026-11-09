@@ -35,23 +35,32 @@ export async function verifyRecordingSummary(page, pluginId) {
 			const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 			const system = body.messages?.find((message) => message.role === "system")?.content ?? "";
 			const user = body.messages?.find((message) => message.role === "user")?.content ?? "";
-			const key = /\[summary-host-case:([a-z-]+)\]/.exec(user)?.[1];
+			const key = /\[summary-host-case:([a-z-]+)\]/.exec(user)?.[1] ?? /正文-([a-z-]+)。/.exec(user)?.[1];
+			const chunk = user.includes("阶段任务：这是长转写稿");
+			const recovery = !system.includes(START) && !chunk;
 			assert(key, "录音摘要 Mock 请求缺少场景标识");
-			assert(system.includes(START) && system.includes(END), "最终分析请求缺少摘要输出契约");
-			assert(/15[–-]30/.test(system) && (system.includes("主题") || system.includes("用途")), "摘要提示缺少主题用途或15–30字要求");
-			calls.push(key);
+			if (!recovery && !chunk) assert(system.includes(START) && system.includes(END), "最终分析请求缺少摘要输出契约");
+			assert.equal(body.model, "isolated-summary-model", "同一任务补请求更换了模型");
+			if (recovery && key === "recovery-settings") assert(!user.includes("13800138000"), "补请求没有沿用原任务脱敏设置");
+			if (!chunk) assert(/15[–-]30/.test(system) && (system.includes("主题") || system.includes("用途")), "摘要提示缺少主题用途或15–30字要求");
+			calls.push(recovery ? `${key}:recovery` : chunk ? `${key}:chunk` : key);
 			const finish = () => {
 				completions.push(key);
-				if (key === "failure") {
+				if (key === "failure" || (key === "recovery-failure" && recovery)) {
 					response.writeHead(500, { "content-type": "application/json" });
 					response.end(JSON.stringify({ error: { message: "isolated summary host failure" } }));
 					return;
 				}
-				const summary = key === "missing" ? "" : `\n\n${START}${summaries[key]}${END}`;
+				const candidate = key === "too-long" ? "一".repeat(31)
+					: key === "bad-format" ? `**${summaries.basic}**` : summaries[key];
+				const summary = candidate ? `\n\n${START}${candidate}${END}` : "";
+				const content = recovery ? key === "recovery-invalid" ? "过短" : summaries.repeated
+					: `## 合成分析\n\n正文-${key}。${key === "recovery-settings" ? " 客户电话13800138000。" : ""}${chunk ? "" : summary}`;
 				response.writeHead(200, { "content-type": "application/json", "x-request-id": `summary-host-${calls.length}` });
-				response.end(JSON.stringify({ choices: [{ message: { content: `## 合成分析\n\n正文-${key}。${summary}` } }] }));
+				response.end(JSON.stringify({ choices: [{ message: { content } }] }));
 			};
-			if (key === "first" || key === "old" || key === "shared") setTimeout(finish, key === "first" ? 150 : 450);
+			if ((key === "recovery-manual" || key === "recovery-stale") && recovery) setTimeout(finish, 450);
+			else if (key === "first" || key === "old" || key === "shared") setTimeout(finish, key === "first" ? 150 : 450);
 			else finish();
 		} catch (error) {
 			response.writeHead(500, { "content-type": "application/json" });
@@ -160,6 +169,9 @@ export async function verifyRecordingSummary(page, pluginId) {
 					const summary = visibleLines.find((line) => line.textContent.startsWith(`AI 总结：${summaries.basic}`));
 					return time && summary && summary.getBoundingClientRect().top > time.getBoundingClientRect().top;
 				}, "实时预览中时间和AI摘要没有分行展示");
+				await app.fileManager.processFrontMatter(transcriptA, (frontmatter) => { frontmatter.synthetic_roundtrip = "native"; });
+				const nativeYaml = await app.vault.read(transcriptA);
+				check(nativeYaml.includes(`echo_notes_recording_summary_writeback: '[`), "原生属性重写未产生需要验证的单引号摘要快照");
 				const handwrittenSuffix = "；手写补充保留。";
 				const firstSummaryLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("AI 总结："));
 				noteEditor.replaceRange(handwrittenSuffix, { line: firstSummaryLine, ch: noteEditor.getLine(firstSummaryLine).length });
@@ -179,10 +191,68 @@ export async function verifyRecordingSummary(page, pluginId) {
 				await plugin.runAnalysisBatch(transcriptA, [template("first"), template("later")]);
 				content = await readNote(note);
 				check(content.includes(summaries.first) && !content.includes(summaries.later), "多模板按完成顺序而非输入顺序选择摘要");
-				const beforeMissing = content;
+
 				await plugin.runAnalysisBatch(transcriptA, [template("missing")]);
-				check(await readNote(note) === beforeMissing, "无有效摘要时改变了已有笔记");
+				check((await readNote(note)).includes(summaries.repeated) && !((await readNote(note)).includes(summaries.first)), "无有效摘要时没有通过一次补生成更新摘要");
+				check((await app.vault.read(transcriptA)).includes("正文-missing。"), "补生成覆盖了完整纪要正文");
 				check(tasksFor(transcriptA).find((task) => task.recovery?.templateId === "summary-host-missing")?.status === "success", "无摘要使主分析失败");
+				for (const key of ["too-long", "bad-format"]) {
+					await plugin.runAnalysisBatch(transcriptA, [template(key)]);
+					check((await readNote(note)).includes(summaries.repeated), `${key} 未完成一次补生成`);
+					check((await app.vault.read(transcriptA)).includes(`正文-${key}。`), "补生成覆盖了分析正文");
+				}
+				for (const key of ["recovery-failure", "recovery-invalid"]) {
+					const before = await readNote(note);
+					await plugin.runAnalysisBatch(transcriptA, [template(key)]);
+					check(await readNote(note) === before, "补生成失败改写了已有摘要");
+					check((await app.vault.read(transcriptA)).includes(`正文-${key}。`), "补生成失败丢失完整纪要");
+					const task = tasksFor(transcriptA).find((task) => task.recovery?.templateId === `summary-host-${key}`);
+					check(task?.status === "success" && /补生成|长度/.test(task.stage), "补生成失败未保留成功状态和准确原因");
+				}
+				const originalWrite = plugin.analysisService.writeAnalysisToTranscript;
+				plugin.settings.redactTranscriptBeforeAnalysis = true;
+				try {
+					plugin.analysisService.writeAnalysisToTranscript = async function (...args) {
+						const saved = await originalWrite.apply(this, args);
+						if (args[1].id === "summary-host-recovery-settings") {
+							plugin.settings.analysisBaseUrl = `${baseUrl}/changed`;
+							plugin.settings.analysisModel = "changed-model";
+							plugin.settings.redactTranscriptBeforeAnalysis = false;
+							plugin.settings.analysisChunkCharacters = 1;
+						}
+						return saved;
+					};
+					await plugin.runAnalysisBatch(transcriptA, [template("recovery-settings")]);
+					check((await app.vault.read(transcriptA)).includes(summaries.repeated), "设置变化后补生成没有沿用原任务配置");
+				} finally {
+					plugin.analysisService.writeAnalysisToTranscript = originalWrite;
+					plugin.settings.analysisBaseUrl = baseUrl;
+					plugin.settings.analysisModel = "isolated-summary-model";
+					plugin.settings.redactTranscriptBeforeAnalysis = false;
+					plugin.settings.analysisChunkCharacters = 20000;
+				}
+				const manualRecovery = plugin.runAnalysisBatch(transcriptA, [template("recovery-manual")]);
+				await waitFor(async () => (await app.vault.read(transcriptA)).includes("正文-recovery-manual。"), "补请求前完整纪要未落盘");
+				await app.vault.process(transcriptA, (text) => text.replace("正文-recovery-manual。", "正文-recovery-manual。等待期间人工批注。"));
+				await manualRecovery;
+				check((await app.vault.read(transcriptA)).includes("等待期间人工批注。"), "补摘要覆盖了等待期间人工编辑");
+				const staleRecovery = plugin.runAnalysisBatch(transcriptA, [template("recovery-stale")]);
+				await waitFor(() => tasksFor(transcriptA).some((task) => task.recovery?.templateId === "summary-host-recovery-stale" && task.stage.includes("正在补生成")), "旧批次没有进入补生成阶段");
+				await plugin.runAnalysisBatch(transcriptA, [template("newer", "recovery-newer")]);
+				await staleRecovery;
+				check((await readNote(note)).includes(summaries.newer), "迟到的补摘要覆盖新批次");
+				plugin.settings.analysisLongTextEnabled = true;
+				plugin.settings.analysisChunkCharacters = 1200;
+				const chunkAudio = await app.vault.createBinary(`${root}/长录音.wav`, new ArrayBuffer(44));
+				const chunkNotePath = `${root}/长录音来源.md`;
+				const chunkNote = await app.vault.create(chunkNotePath, `录音时间：11:00–12:00（1小时）\n${audioLink(chunkAudio, chunkNotePath)}\n`);
+				const chunkTranscript = await plugin.transcriptService.writeSuccessTranscript(chunkAudio, chunkNote,
+					{ text: source.repeat(40), provider: "isolated-host", model: "synthetic-transcript" });
+				await waitFor(async () => (await plugin.transcriptLinkService.captureTranscriptSourceAnchor(chunkTranscript))?.initialReferenceCount === 1, "长录音来源未就绪");
+				await plugin.runAnalysisBatch(chunkTranscript, [template("chunked")]);
+				check((await readNote(chunkNote)).includes(summaries.repeated), `长文本最终汇总未补生成短摘要 ${JSON.stringify(tasksFor(chunkTranscript))}`);
+				plugin.settings.analysisLongTextEnabled = false;
+				plugin.settings.analysisChunkCharacters = 20000;
 				await plugin.runAnalysisBatch(transcriptA, [template("failure"), template("later", "fallback")]);
 				check((await readNote(note)).includes(summaries.later), "首模板失败时未采用后续成功摘要");
 
@@ -291,6 +361,15 @@ export async function verifyRecordingSummary(page, pluginId) {
 				check(content.includes(`${legacyPrefix}\nAI 总结：${summaries.migration}${legacySuffix}`),
 					"旧版标记迁移未保留前后手写文字并替换为短摘要");
 				check(!content.includes(oldLongSummary), "旧版长摘要迁移后仍存在");
+				const englishLegacy = "Review O'Brien customer onboarding, validate sales training notes and clarify service handoffs with the delivery team.";
+				check(Array.from(englishLegacy).length > 100 && Array.from(englishLegacy).length <= 150, "原生历史快照夹具长度错误");
+				const legacyLine = noteEditor.getValue().split("\n").findIndex((line) => line.startsWith("录音时间：10:00"));
+				noteEditor.replaceRange(`AI 总结：${englishLegacy}${legacySuffix}`, { line: legacyLine + 1, ch: 0 }, { line: legacyLine + 1, ch: noteEditor.getLine(legacyLine + 1).length });
+				await app.fileManager.processFrontMatter(transcriptB, (frontmatter) => {
+					frontmatter.echo_notes_recording_summary_writeback = JSON.stringify([englishLegacy]);
+				});
+				await plugin.runAnalysisBatch(transcriptB, [template("migration", "migration-native")]);
+				check((await readNote(note)).includes(`${legacyPrefix}\nAI 总结：${summaries.migration}${legacySuffix}`), "原生 YAML 长摘要快照未安全迁移");
 				await noteLeaf.view.save();
 				await noteLeaf.setViewState({ type: "markdown", state: { file: note.path, mode: "preview" } });
 				await waitFor(() => {
@@ -320,7 +399,9 @@ export async function verifyRecordingSummary(page, pluginId) {
 				return {
 					requestToSourceWriteback: true, manualTextPreserved: true, idempotentEditorUpdate: true,
 					multipleRecordings: true, missingTimeKeepsAnalysisSuccess: true,
-					multiTemplateInputOrder: true, missingSummaryKeepsAnalysisSuccess: true,
+					multiTemplateInputOrder: true, missingSummaryKeepsAnalysisSuccess: true, nativeYamlRoundtrip: true, nativeHistoricalSnapshot: true, recoverySettingsSnapshot: true, oneSummaryRecovery: true,
+					invalidSummaryRecovery: true, recoveryFailureKeepsAnalysis: true, recoveryPreservesManualEdits: true,
+					staleRecoveryCannotOverwrite: true, chunkedSummaryRecovery: true,
 					failedTemplateFallback: true, staleBatchCannotOverwrite: true, retryUpdatesSummary: true,
 					delayedSourceKeepsBothAnalyses: true, duplicateAnalysisSharesPromise: true,
 					automaticCreateWaitsForSource: true, sourceNoteHasNoHtmlMarkers: true,
@@ -348,7 +429,11 @@ export async function verifyRecordingSummary(page, pluginId) {
 				}
 			}
 		}, { id: pluginId, baseUrl: `http://127.0.0.1:${address.port}/v1`, summaries, start: START, end: END });
-		assert.equal(calls.length, 16, `摘要宿主验收请求次数异常，实际为 ${calls.length}`);
+		for (const key of ["missing", "too-long", "bad-format", "recovery-failure", "recovery-invalid", "recovery-manual", "recovery-stale", "recovery-settings", "chunked"]) {
+			assert.equal(calls.filter((call) => call === `${key}:recovery`).length, 1, `${key} 必须恰好补生成一次`);
+		}
+		assert.equal(calls.filter((key) => key.endsWith(":recovery")).length, 9, "正常摘要不能触发额外请求");
+		assert(calls.filter((key) => key === "chunked:chunk").length > 1, "必须覆盖多分块提取");
 		assert.equal(calls.filter((key) => key === "shared").length, 1, "同模板并发批次发起了重复 HTTP 请求");
 		assert(completions.indexOf("later") < completions.indexOf("first"), "多模板 Mock 未产生乱序返回");
 		assert(completions.indexOf("newer") < completions.indexOf("old"), "新旧批次 Mock 未产生迟到旧结果");

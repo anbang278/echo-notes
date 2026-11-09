@@ -1,5 +1,6 @@
 import { runRecordingSummaryAnalysisTests } from "./recording-summary-analysis-tests";
 import { runRecordingSummaryLinkTests } from "./recording-summary-link-tests";
+import { runRecordingSummaryRecoveryTests } from "./recording-summary-recovery-tests";
 import { runLocalOpenAISettingsTests } from "./local-openai-settings-tests";
 import assert from "node:assert/strict";
 import { runRecordingStorageTests } from "./recording-storage-tests";
@@ -7256,3 +7257,4 @@ console.log("Smoke tests passed.");
 
 await runRecordingSummaryAnalysisTests();
 await runRecordingSummaryLinkTests();
+await runRecordingSummaryRecoveryTests();

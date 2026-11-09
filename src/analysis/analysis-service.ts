@@ -11,6 +11,7 @@ import {
 	renderTranscriptAnalysisWithTechnicalInfo
 } from "./analysis-output";
 import type { AnalysisResult } from "./analysis-provider";
+import { readTranscriptTechnicalItem, updateTranscriptRecordingSummary } from "./analysis-technical";
 import type { AnalysisTextChunk } from "./analysis-chunking";
 import {
 	readResumableAnalysisResults,
@@ -37,7 +38,7 @@ export class AnalysisService {
 		template: AnalysisTemplateConfig,
 		result: AnalysisResult,
 		copyLanguage: CopyLanguage
-	): Promise<void> {
+	): Promise<string | undefined> {
 		const copy = getLocalizedCopy(copyLanguage);
 		const transcriptTitle = getTranscriptTitle(transcriptFile);
 		const { analysisBlock, technicalBlock } = renderTranscriptAnalysisWithTechnicalInfo({
@@ -48,8 +49,9 @@ export class AnalysisService {
 			copyLanguage
 		});
 
-		await this.app.vault.process(transcriptFile, (content) =>
-			insertOrReplaceTranscriptAnalysis(
+		let technicalItem: string | undefined;
+		await this.app.vault.process(transcriptFile, (content) => {
+			const updated = insertOrReplaceTranscriptAnalysis(
 				content,
 				analysisBlock,
 				template.id,
@@ -57,8 +59,29 @@ export class AnalysisService {
 				[formatSectionHeading(copy.transcriptHeading, transcriptTitle), copy.transcriptHeading],
 				technicalBlock,
 				copyLanguage
-			)
-		);
+			);
+			technicalItem = readTranscriptTechnicalItem(updated, template.id);
+			return updated;
+		});
+		return technicalItem;
+	}
+
+	async writeRecordingSummaryToTranscript(
+		transcriptFile: TFile,
+		templateId: string,
+		summary: string,
+		expectedItem: string,
+		isCurrent: () => boolean
+	): Promise<boolean> {
+		let saved = false;
+		await this.app.vault.process(transcriptFile, (content) => {
+			if (!isCurrent()) return content;
+			const updated = updateTranscriptRecordingSummary(content, templateId, summary, expectedItem);
+			if (updated === undefined) return content;
+			saved = true;
+			return updated;
+		});
+		return saved;
 	}
 
 	async readResumableChunkResults(

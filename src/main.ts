@@ -17,7 +17,9 @@ import {
 	type MarkdownFileInfo
 } from "obsidian";
 import { createAnalysisProvider } from "./analysis/analysis-provider-registry";
-import type { AnalysisResult, ChunkedAnalysisProvider } from "./analysis/analysis-provider";
+import type { AnalysisInput, AnalysisProvider, AnalysisResult, ChunkedAnalysisProvider } from "./analysis/analysis-provider";
+import { recoverRecordingSummary } from "./analysis/recording-summary-recovery";
+import { getRecordingSummaryIssueMessage } from "./analysis/recording-summary";
 import { analyzeChunkSequence } from "./analysis/analysis-chunked-service";
 import { AnalysisService } from "./analysis/analysis-service";
 import { readTranscriptRecordingSummary } from "./analysis/analysis-technical";
@@ -70,7 +72,7 @@ import { createAudioLinkFingerprints } from "./audio/audio-link-fingerprint";
 import { parseAudioLinks, type AudioLinkMatch } from "./audio/audio-link-parser";
 import { EditorService } from "./obsidian/editor-service";
 import { LinkService } from "./obsidian/link-service";
-import { TranscriptLinkService, type SourceAudioAnchor, type TranscriptLinkResult } from "./obsidian/transcript-link-service";
+import { TranscriptLinkService, getRecordingSummaryWriteResultMessage, type SourceAudioAnchor, type TranscriptLinkResult } from "./obsidian/transcript-link-service";
 import { getMissingRealtimeLinkLines } from "./obsidian/realtime-link-insertion";
 import {
 	type GettingStartedGuideActions,
@@ -435,7 +437,7 @@ export default class EchoNotesPlugin extends Plugin {
 	private localCancellationConfirmations?: Map<string, LocalCancellationConfirmation>;
 	private localCleanupRequests?: Map<string, Promise<void>>;
 	private processingAnalyses = new Map<string, Promise<boolean>>();
-	private analysisSummaryRounds = new Map<TFile, symbol>();
+	private analysisSummaryRounds = new Map<TFile, ReadonlySet<string>>();
 	private activeMemoryTasks = new Map<string, ActiveMemoryTask>();
 	private mutatingFiles = new Set<string>();
 	private markdownDebounceTimers = new Map<string, number>();
@@ -4671,7 +4673,7 @@ export default class EchoNotesPlugin extends Plugin {
 		retryOfSessionId?: string,
 		extractMemory = true
 	): Promise<void> {
-		const round = Symbol();
+		const round = new Set(templates.map((template) => template.id));
 		this.analysisSummaryRounds.set(transcriptFile, round);
 		const isCurrent = () => !this.unloading && this.analysisSummaryRounds.get(transcriptFile) === round;
 		try {
@@ -4696,20 +4698,34 @@ export default class EchoNotesPlugin extends Plugin {
 			try {
 				const content = await this.app.vault.read(transcriptFile);
 				if (!isCurrent()) return;
-				const summary = successfulTemplateIds
-					.map((templateId) => readTranscriptRecordingSummary(content, templateId))
-					.find((value) => value !== undefined);
-				if (!summary) {
-					new Notice("AI 分析已保存，本次未返回有效的录音摘要。可重新分析重试。");
+				const selected = successfulTemplateIds
+					.map((templateId) => ({ templateId, summary: readTranscriptRecordingSummary(content, templateId) }))
+					.find((value) => value.summary !== undefined);
+				if (!selected?.summary) {
+					const task = this.taskCenter.getTask(createTaskId("analysis", transcriptFile.path, successfulTemplateIds[0]));
+					new Notice(task?.stage ?? "AI 分析已保存，本次未返回有效的录音摘要。可重新分析重试。");
 					return;
 				}
+				const taskId = createTaskId("analysis", transcriptFile.path, selected.templateId);
+				const task = this.taskCenter.getTask(taskId);
 				if (!anchor) {
+					this.taskCenter.updateTask(taskId, { stage: "AI 分析已保存，来源笔记未定位，录音摘要未回写" });
 					new Notice("AI 分析已保存，未能定位录音的来源笔记，摘要未回写。");
 					return;
 				}
-				const write = await this.transcriptLinkService.insertRecordingSummary(anchor, summary, isCurrent, transcriptFile);
+				const write = await this.transcriptLinkService.insertRecordingSummary(anchor, selected.summary, isCurrent, transcriptFile);
+				if (!isCurrent()) return;
+				if (task?.diagnosticSessionId) {
+					this.diagnostics.record(task.diagnosticSessionId, "result", "recording-summary-writeback", {
+						status: write.status, reason: write.reason
+					});
+				}
 				if ((write.status === "skipped" || write.status === "failed") && isCurrent()) {
-					new Notice("AI 分析已保存，录音摘要未回写。请检查来源笔记中的录音时间与唯一音频引用后重新分析。");
+					const message = `AI 分析已保存，录音摘要未回写。${getRecordingSummaryWriteResultMessage(write)}。`;
+					this.taskCenter.updateTask(taskId, { stage: message });
+					new Notice(message);
+				} else {
+					this.taskCenter.updateTask(taskId, { stage: "AI 分析与录音摘要已写入" });
 				}
 			} catch (error) {
 				this.log("录音摘要回写失败", error);
@@ -4803,14 +4819,16 @@ export default class EchoNotesPlugin extends Plugin {
 			return false;
 		}
 
+		const analysisSettings = { ...this.settings };
 		const templateTitle = template.name;
 		try {
+			const analysisApiKey = this.getAnalysisApiKey();
 			await this.markGettingStartedRunning("analysis", transcriptFile.path);
 			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
 				markTranscriptAnalysisPending(content, {
 					templateId: template.id,
-					provider: this.settings.analysisProvider,
-					model: this.settings.analysisModel,
+					provider: analysisSettings.analysisProvider,
+					model: analysisSettings.analysisModel,
 					timestamp: new Date().toISOString()
 				})
 			);
@@ -4819,8 +4837,8 @@ export default class EchoNotesPlugin extends Plugin {
 				await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
 					markTranscriptAnalysisFailed(content, {
 						templateId: template.id,
-						provider: this.settings.analysisProvider,
-						model: this.settings.analysisModel,
+						provider: analysisSettings.analysisProvider,
+						model: analysisSettings.analysisModel,
 						timestamp: new Date().toISOString(),
 						error: "转写稿内容为空"
 					})
@@ -4837,38 +4855,38 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 
 			const diagnostics = diagnoseAnalysisProviderSettings(
-				this.settings,
-				this.getAnalysisApiKey(),
+				analysisSettings,
+				analysisApiKey,
 				transcriptText.length
 			);
 			if (!diagnostics.canAttemptAnalysis) {
 				throw new Error(diagnostics.items.filter((item) => item.severity === "error").map((item) => item.detail).join("；"));
 			}
 			this.diagnostics.record(diagnosticSessionId, "configuration", "analysis-configuration", {
-				provider: this.settings.analysisProvider,
-				baseUrl: this.settings.analysisBaseUrl,
-				model: this.settings.analysisModel,
-				keyPresent: Boolean(this.getAnalysisApiKey().trim()),
+				provider: analysisSettings.analysisProvider,
+				baseUrl: analysisSettings.analysisBaseUrl,
+				model: analysisSettings.analysisModel,
+				keyPresent: Boolean(analysisApiKey.trim()),
 				templateType: template.builtin ? "builtin" : "custom",
 				inputCharacters: transcriptText.length,
-				redactTranscriptBeforeAnalysis: this.settings.redactTranscriptBeforeAnalysis,
+				redactTranscriptBeforeAnalysis: analysisSettings.redactTranscriptBeforeAnalysis,
 				localChecks: diagnostics.items.map((item) => ({ severity: item.severity, title: item.title }))
 			});
-			const provider = createAnalysisProvider(this.settings, this.getAnalysisApiKey());
-			const analysisTranscriptText = this.settings.redactTranscriptBeforeAnalysis
+			const provider = createAnalysisProvider(analysisSettings, analysisApiKey);
+			const analysisTranscriptText = analysisSettings.redactTranscriptBeforeAnalysis
 				? redactAnalysisInputText(transcriptText)
 				: transcriptText;
 			const analysisInput = {
 				template,
 				transcriptTitle: transcriptFile.basename,
 				transcriptText: analysisTranscriptText,
-				copyLanguage: this.settings.copyLanguage,
+				copyLanguage: analysisSettings.copyLanguage,
 				includeRecordingSummary: true,
 				diagnostics: this.diagnostics.getSink(diagnosticSessionId)
 			};
-			const chunks = this.settings.analysisLongTextEnabled
+			const chunks = analysisSettings.analysisLongTextEnabled
 				? splitAnalysisText(analysisTranscriptText, {
-						maxCharacters: this.settings.analysisChunkCharacters,
+						maxCharacters: analysisSettings.analysisChunkCharacters,
 						overlapCharacters: 400
 					})
 				: [];
@@ -4882,7 +4900,7 @@ export default class EchoNotesPlugin extends Plugin {
 				chunked: chunks.length > 1,
 				inputCharacters: analysisTranscriptText.length
 			});
-			if (!this.settings.analysisLongTextEnabled && analysisTranscriptText.length > this.settings.analysisChunkCharacters) {
+			if (!analysisSettings.analysisLongTextEnabled && analysisTranscriptText.length > analysisSettings.analysisChunkCharacters) {
 				throw new Error("转写稿超过单次分析安全长度，且长文本分块已关闭。请开启长文本分块分析或拆分转写稿。");
 			}
 			let result: AnalysisResult;
@@ -4891,7 +4909,7 @@ export default class EchoNotesPlugin extends Plugin {
 					transcriptPath: transcriptFile.path,
 					analysisText: analysisTranscriptText,
 					template,
-					settings: this.settings,
+					settings: analysisSettings,
 					overlapCharacters: 400
 				});
 				const resumeResults = await this.analysisService.readResumableChunkResults(
@@ -4958,11 +4976,11 @@ export default class EchoNotesPlugin extends Plugin {
 			} else {
 				result = await provider.analyze(analysisInput);
 			}
-			await this.analysisService.writeAnalysisToTranscript(
+			const technicalItem = await this.analysisService.writeAnalysisToTranscript(
 				transcriptFile,
 				template,
 				result,
-				this.settings.copyLanguage
+				analysisSettings.copyLanguage
 			);
 			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
 				markTranscriptAnalysisDone(content, {
@@ -4972,6 +4990,9 @@ export default class EchoNotesPlugin extends Plugin {
 					timestamp: new Date().toISOString()
 				})
 			);
+			const summaryDetail = result.recordingSummary ? undefined : await this.recoverAnalysisRecordingSummary(
+				transcriptFile, template, provider, analysisInput, result, technicalItem, diagnosticSessionId, analysisSettings
+			);
 			try {
 				await this.analysisService.clearAnalysisCheckpoint(transcriptFile, template.id);
 			} catch (error) {
@@ -4979,7 +5000,7 @@ export default class EchoNotesPlugin extends Plugin {
 			}
 			this.taskCenter.updateTask(analysisTaskId, {
 				status: "success",
-				stage: `${templateTitle} 已写入转写稿`,
+				stage: `${templateTitle} 已写入转写稿${summaryDetail ? `，${summaryDetail}` : ""}`,
 				provider: result.provider,
 				model: result.model,
 				traceId: result.traceId,
@@ -4995,8 +5016,8 @@ export default class EchoNotesPlugin extends Plugin {
 			await this.updateTranscriptAnalysisMetadata(transcriptFile, (content) =>
 				markTranscriptAnalysisFailed(content, {
 					templateId: template.id,
-					provider: this.settings.analysisProvider,
-					model: this.settings.analysisModel,
+					provider: analysisSettings.analysisProvider,
+					model: analysisSettings.analysisModel,
 					timestamp: new Date().toISOString(),
 					error: message
 				})
@@ -5017,6 +5038,61 @@ export default class EchoNotesPlugin extends Plugin {
 			return false;
 		} finally {
 			this.processingAnalyses.delete(processingKey);
+		}
+	}
+
+	private async recoverAnalysisRecordingSummary(
+		transcriptFile: TFile,
+		template: AnalysisTemplateConfig,
+		provider: AnalysisProvider,
+		input: AnalysisInput,
+		result: AnalysisResult,
+		technicalItem: string | undefined,
+		diagnosticSessionId: string,
+		analysisSettings: EchoNotesSettings
+	): Promise<string> {
+		const isCurrent = () => !this.unloading
+			&& this.app.vault.getAbstractFileByPath(transcriptFile.path) === transcriptFile
+			&& Boolean(this.analysisSummaryRounds.get(transcriptFile)?.has(template.id));
+		this.diagnostics.record(diagnosticSessionId, "result", "recording-summary-parsed", {
+			reason: result.recordingSummaryIssue ?? "missing", characters: result.recordingSummaryCharacters
+		});
+		try {
+			if (!isCurrent()) return "已有新任务，本次短摘要补生成已跳过";
+			if (technicalItem === undefined) return "摘要技术记录无法定位，请重新分析";
+			const anchor = await this.transcriptLinkService.captureTranscriptSourceAnchor(transcriptFile);
+			const sourceIsCurrent = () => isCurrent() && anchor?.initialReferenceCount === 1
+				&& this.app.vault.getAbstractFileByPath(anchor.sourceNote.path) === anchor.sourceNote
+				&& this.app.vault.getAbstractFileByPath(anchor.audioFile.path) === anchor.audioFile;
+			if (!sourceIsCurrent()) return "录音来源已变化，短摘要补生成已跳过，请核对来源链接";
+			this.taskCenter.updateTask(createTaskId("analysis", transcriptFile.path, template.id), {
+				stage: "完整纪要已保存，正在补生成录音短摘要（1/1）"
+			});
+			this.diagnostics.record(diagnosticSessionId, "progress", "recording-summary-recovery-started", { requestCount: 1 });
+			const source = analysisSettings.redactTranscriptBeforeAnalysis ? redactAnalysisInputText(result.text) : result.text;
+			const recovery = await recoverRecordingSummary(provider, input, source, analysisSettings.analysisChunkCharacters, sourceIsCurrent);
+			this.diagnostics.record(diagnosticSessionId, "result", "recording-summary-recovery-finished", {
+				reason: recovery.reason, characters: recovery.characters,
+				traceId: recovery.traceId, errorCode: recovery.errorCode, recovered: Boolean(recovery.summary)
+			});
+			if (!sourceIsCurrent()) return "已有新任务或来源变化，短摘要补写已跳过";
+			if (!recovery.summary) {
+				if (recovery.reason === "request-failed") return "短摘要补生成请求失败，可重新分析重试";
+				if (recovery.reason === "stale-analysis") return "已有新任务，短摘要补写已跳过";
+				return `${getRecordingSummaryIssueMessage(recovery.reason ?? "missing")}，一次补生成已结束，可重新分析重试`;
+			}
+			const currentAnchor = await this.transcriptLinkService.captureTranscriptSourceAnchor(transcriptFile);
+			if (!sourceIsCurrent() || currentAnchor?.initialReferenceCount !== 1
+				|| currentAnchor.sourceNote !== anchor?.sourceNote || currentAnchor.audioFile !== anchor.audioFile) {
+				return "录音来源已变化，短摘要补写已跳过，请核对来源链接";
+			}
+			const saved = await this.analysisService.writeRecordingSummaryToTranscript(
+				transcriptFile, template.id, recovery.summary, technicalItem, sourceIsCurrent
+			);
+			return saved ? "短摘要已通过一次补生成保存" : "摘要技术记录已变化，短摘要补写已跳过";
+		} catch {
+			this.diagnostics.record(diagnosticSessionId, "result", "recording-summary-recovery-save-failed", { reason: "write-failed" });
+			return "短摘要补生成或保存失败，可重新分析重试";
 		}
 	}
 

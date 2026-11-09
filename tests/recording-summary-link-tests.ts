@@ -112,6 +112,25 @@ function fixture(initial = `${TIME}\n${AUDIO}\n结尾`) {
 }
 
 export async function runRecordingSummaryLinkTests(): Promise<void> {
+	for (const ending of ["\n", "\r\n"]) {
+		const old = "培训部门员工自行使用业务系统生成健康方案，并核对操作入口与报告结果的完整流程。";
+		for (const summaries of [[SUMMARY], [SUMMARY, old], ["团队讨论 O'Brien 客户接口联调与项目安排"]]) {
+			const scalar = JSON.stringify(summaries).replace(/'/g, "''");
+			const yaml = ["---", "custom: keep", `${RECORDING_SUMMARY_WRITEBACK_FIELD}: '${scalar}'`, "---", "正文", ""].join(ending);
+			assert.deepEqual(readRecordingSummaryWriteback(yaml), summaries, "必须读取 Obsidian 重写后的单引号 YAML 快照与历史长摘要");
+			const changed = writeRecordingSummaryWriteback(yaml, [NEW_SUMMARY, summaries[0]]);
+			assert.ok(changed);
+			assert.deepEqual(readRecordingSummaryWriteback(changed), [NEW_SUMMARY, summaries[0]]);
+			assert.ok(changed.endsWith(`正文${ending}`));
+		}
+		const historical = fixture(`${TIME}${inline(old)} 手写后缀${ending}${AUDIO}`);
+		historical.setTranscript(["---", `${RECORDING_SUMMARY_WRITEBACK_FIELD}: '${JSON.stringify([old])}'`, "---", ""].join(ending));
+		assert.equal((await historical.writeSummary(historical.anchor(), SUMMARY)).status, "updated");
+		assert.equal(historical.content(), `${TIME}${ending}${plain()} 手写后缀${ending}${AUDIO}`);
+	}
+	for (const field of ["[]", "null", "'[]'", "'not json'", `'${JSON.stringify([SUMMARY])}'\n${RECORDING_SUMMARY_WRITEBACK_FIELD}: '${JSON.stringify([SUMMARY])}'`]) {
+		assert.equal(readRecordingSummaryWriteback(`---\n${RECORDING_SUMMARY_WRITEBACK_FIELD}: ${field}\n---\n`), null);
+	}
 	for (const suffix of ["", "：", "：手写说明。", "  "]) {
 		const original = `前言\n${TIME}${suffix}\n${AUDIO}\n后记`;
 		const first = update(original);

@@ -1,4 +1,4 @@
-import { normalizeRecordingSummary } from "../analysis/recording-summary";
+import { normalizeHistoricalRecordingSummary, normalizeRecordingSummary } from "../analysis/recording-summary";
 
 export const RECORDING_SUMMARY_WRITEBACK_FIELD = "echo_notes_recording_summary_writeback";
 
@@ -30,11 +30,14 @@ export function readRecordingSummaryWriteback(content: string): string[] | null 
 	if (fields.length === 0) return [];
 	if (fields.length !== 1) return null;
 	try {
-		const scalar: unknown = JSON.parse(fields[0][1].trim());
+		const encoded = fields[0][1].trim();
+		const scalar: unknown = /^'(?:[^']|'')*'$/.test(encoded)
+			? encoded.slice(1, -1).replace(/''/g, "'")
+			: JSON.parse(encoded);
 		if (typeof scalar !== "string") return null;
 		const values: unknown = JSON.parse(scalar);
 		if (!Array.isArray(values) || values.length < 1 || values.length > 2) return null;
-		if (!values.every((value: unknown) => typeof value === "string" && normalizeRecordingSummary(value) === value)) return null;
+		if (!values.every((value: unknown) => typeof value === "string" && normalizeHistoricalRecordingSummary(value) === value)) return null;
 		return Array.from(new Set(values as string[]));
 	} catch {
 		return null;
@@ -44,7 +47,8 @@ export function readRecordingSummaryWriteback(content: string): string[] | null 
 /** Keep source-note ownership outside per-template analysis blocks. */
 export function writeRecordingSummaryWriteback(content: string, summaries: readonly string[]): string | null {
 	const values = Array.from(new Set(summaries));
-	if (values.length < 1 || values.length > 2 || values.some((value) => normalizeRecordingSummary(value) !== value)) return null;
+	if (values.length < 1 || values.length > 2 || normalizeRecordingSummary(values[0]) !== values[0]
+		|| values.some((value) => normalizeHistoricalRecordingSummary(value) !== value)) return null;
 	if (readRecordingSummaryWriteback(content) === null) return null;
 	const range = findFrontmatter(content);
 	const field = `${RECORDING_SUMMARY_WRITEBACK_FIELD}: ${JSON.stringify(JSON.stringify(values))}`;

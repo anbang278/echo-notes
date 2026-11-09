@@ -56,6 +56,39 @@ export function renderTranscriptTechnicalInfo(input: RenderTranscriptTechnicalIn
 }
 
 export function readTranscriptRecordingSummary(content: string, templateId: AnalysisTemplateId): string | undefined {
+	const item = readTranscriptTechnicalItem(content, templateId);
+	if (item === undefined) return undefined;
+	const fields = [...item.matchAll(/^- \[echo_notes_recording_summary:: ([^\r\n]*)\]\r?$/gm)];
+	return fields.length === 1 ? normalizeRecordingSummary(fields[0][1]) : undefined;
+}
+
+export function readTranscriptTechnicalItem(content: string, templateId: AnalysisTemplateId): string | undefined {
+	const range = getTranscriptTechnicalItemRange(content, templateId);
+	return range ? content.slice(range.start, range.end) : undefined;
+}
+
+/** Merge only the owned field if the saved technical item still belongs to this result. */
+export function updateTranscriptRecordingSummary(
+	content: string,
+	templateId: AnalysisTemplateId,
+	summary: string,
+	expectedItem: string
+): string | undefined {
+	if (!normalizeRecordingSummary(summary)) return undefined;
+	const range = getTranscriptTechnicalItemRange(content, templateId);
+	if (!range || content.slice(range.start, range.end) !== expectedItem) return undefined;
+	const field = renderDataviewInlineField("echo_notes_recording_summary", summary);
+	const existing = [...expectedItem.matchAll(/^- \[echo_notes_recording_summary:: [^\r\n]*\]\r?$/gm)];
+	if (existing.length > 1) return undefined;
+	const anchor = existing[0] ?? [...expectedItem.matchAll(/^- \[echo_notes_analysis_generated_at:: [^\r\n]*\]\r?$/gm)][0];
+	if (!anchor) return undefined;
+	const ending = anchor[0].endsWith("\r") ? "\r" : "";
+	const replacement = existing.length ? `${field}${ending}` : `${anchor[0]}\n${field}${ending}`;
+	const item = `${expectedItem.slice(0, anchor.index)}${replacement}${expectedItem.slice(anchor.index + anchor[0].length)}`;
+	return `${content.slice(0, range.start)}${item}${content.slice(range.end)}`;
+}
+
+function getTranscriptTechnicalItemRange(content: string, templateId: AnalysisTemplateId): { start: number; end: number } | undefined {
 	if (content.split(TRANSCRIPT_TECHNICAL_START).length !== 2 || content.split(TRANSCRIPT_TECHNICAL_END).length !== 2) return undefined;
 	const sectionStart = content.indexOf(TRANSCRIPT_TECHNICAL_START);
 	const sectionEnd = content.indexOf(TRANSCRIPT_TECHNICAL_END);
@@ -67,9 +100,8 @@ export function readTranscriptRecordingSummary(content: string, templateId: Anal
 	const itemStart = section.indexOf(startMarker);
 	const itemEnd = section.indexOf(endMarker);
 	if (itemEnd <= itemStart) return undefined;
-	const item = section.slice(itemStart + startMarker.length, itemEnd);
-	const fields = [...item.matchAll(/^- \[echo_notes_recording_summary:: ([^\r\n]*)\]\r?$/gm)];
-	return fields.length === 1 ? normalizeRecordingSummary(fields[0][1]) : undefined;
+	const offset = sectionStart + TRANSCRIPT_TECHNICAL_START.length;
+	return { start: offset + itemStart + startMarker.length, end: offset + itemEnd };
 }
 
 export function insertTranscriptTechnicalSection(

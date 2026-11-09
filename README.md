@@ -439,6 +439,8 @@ An unfinished analysis checkpoint may contain up to 12,000 characters of derived
 
 To run analysis manually, open a `.transcript.md` file and run `Echo Notes: Analyze current transcript with selected template`, then choose any enabled template.
 
+If the final analysis has no valid recording summary, Echo Notes saves the full analysis first and makes at most one additional summary-only request per template, using the generated analysis. This request uses the same Provider, model, credentials, redaction setting, and remaining 15-minute task budget. It can add one model charge. Recovery failure keeps the saved analysis and existing source-note summary available. Diagnostics distinguish summary validation, recovery, and source-note writeback failures without saving response content.
+
 Echo Notes writes AI analysis into a controlled block before the transcript section. Running the same template again replaces that template's existing result instead of stacking duplicates; different matched templates are appended inside the same AI analysis block.
 
 For analysis written with the current format, the AI analysis block contains only the template heading and generated content. Dataview inline fields prefixed with `echo_notes_analysis_` and the generated-at, Provider, model, and Trace ID summary are written once at the end of the same `.transcript.md` file under a visible `Echo Notes Technical Info` section. These fields make template id, template name, template version, provider, model, generated time, and trace id queryable without parsing the generated Markdown body. Transcripts generated before this layout change keep their original structure.

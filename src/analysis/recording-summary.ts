@@ -5,15 +5,51 @@ export const RECORDING_SUMMARY_END = "<!-- echo-notes-recording-summary:end -->"
 export const RECORDING_SUMMARY_MIN_CHARACTERS = 15;
 export const RECORDING_SUMMARY_MAX_CHARACTERS = 30;
 
-export function normalizeRecordingSummary(value: string): string | undefined {
+export type RecordingSummaryIssue = "missing" | "empty" | "length" | "format" | "envelope";
+
+export interface RecordingSummaryResponse {
+	text: string;
+	recordingSummary?: string;
+	recordingSummaryIssue?: RecordingSummaryIssue;
+	recordingSummaryCharacters?: number;
+}
+
+/** Earlier releases stored summaries up to 150 characters as ownership snapshots. */
+export function normalizeHistoricalRecordingSummary(value: string): string | undefined {
 	const summary = value.trim();
-	const characters = Array.from(summary);
-	if (characters.length < RECORDING_SUMMARY_MIN_CHARACTERS || characters.length > RECORDING_SUMMARY_MAX_CHARACTERS) return undefined;
-	if (/[\u2028\u2029<>`[\]\\*]/u.test(summary)
-		|| characters.some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
-		|| summary.includes("%%") || summary.includes("__") || summary.includes("AI 总结：")
-		|| /^#{1,6}\s/u.test(summary)) return undefined;
+	if (!summary || Array.from(summary).length > 150 || hasUnsafeSummaryFormat(summary)) return undefined;
 	return summary;
+}
+
+export function normalizeRecordingSummary(value: string): string | undefined {
+	return getRecordingSummaryIssue(value) ? undefined : value.trim();
+}
+
+export function getRecordingSummaryIssue(value: string): RecordingSummaryIssue | undefined {
+	const summary = value.trim();
+	if (!summary) return "empty";
+	if (hasUnsafeSummaryFormat(summary)) return "format";
+	const length = Array.from(summary).length;
+	if (length < RECORDING_SUMMARY_MIN_CHARACTERS || length > RECORDING_SUMMARY_MAX_CHARACTERS) return "length";
+	return undefined;
+}
+
+export function getRecordingSummaryIssueMessage(issue: RecordingSummaryIssue): string {
+	const messages: Record<RecordingSummaryIssue, string> = {
+		missing: "模型未返回短摘要",
+		empty: "模型返回了空短摘要",
+		length: "短摘要长度不符合 15–30 字要求",
+		format: "短摘要包含多行或不支持的格式",
+		envelope: "短摘要输出标记不完整或不唯一"
+	};
+	return messages[issue];
+}
+
+function hasUnsafeSummaryFormat(summary: string): boolean {
+	return /[\u2028\u2029<>`[\]\\*]/u.test(summary)
+		|| Array.from(summary).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
+		|| summary.includes("%%") || summary.includes("__") || summary.includes("AI 总结：")
+		|| /^#{1,6}\s/u.test(summary);
 }
 
 export function createRecordingSummaryPrompt(copyLanguage: CopyLanguage): string {
@@ -44,21 +80,28 @@ export function createRecordingSummaryPrompt(copyLanguage: CopyLanguage): string
 export function parseRecordingSummaryResponse(
 	text: string,
 	includeRecordingSummary = false
-): { text: string; recordingSummary?: string } {
+): RecordingSummaryResponse {
 	if (!includeRecordingSummary) return { text };
 	const starts = text.split(RECORDING_SUMMARY_START).length - 1;
 	const ends = text.split(RECORDING_SUMMARY_END).length - 1;
 	const start = text.indexOf(RECORDING_SUMMARY_START);
 	const end = text.indexOf(RECORDING_SUMMARY_END);
 	const paired = starts === 1 && ends === 1 && end > start;
-	const recordingSummary = paired && !text.slice(end + RECORDING_SUMMARY_END.length).trim()
-		? normalizeRecordingSummary(text.slice(start + RECORDING_SUMMARY_START.length, end))
-		: undefined;
+	const validEnvelope = paired && !text.slice(end + RECORDING_SUMMARY_END.length).trim();
+	const candidate = validEnvelope ? text.slice(start + RECORDING_SUMMARY_START.length, end).trim() : "";
+	const issue = starts === 0 && ends === 0 ? "missing"
+		: validEnvelope ? getRecordingSummaryIssue(candidate) : "envelope";
 
 	// Remove only the dedicated envelope. A dangling start belongs to the appended summary.
 	let body = text.replace(/<!-- echo-notes-recording-summary:start -->[\s\S]*?<!-- echo-notes-recording-summary:end -->/g, "");
 	const danglingStart = body.indexOf(RECORDING_SUMMARY_START);
 	if (danglingStart !== -1) body = body.slice(0, danglingStart);
 	body = body.split(RECORDING_SUMMARY_END).join("");
-	return { text: body.trimEnd(), ...(recordingSummary ? { recordingSummary } : {}) };
+	return {
+		text: body.trimEnd(),
+		...(issue ? {
+			recordingSummaryIssue: issue,
+			...(validEnvelope ? { recordingSummaryCharacters: Array.from(candidate).length } : {})
+		} : { recordingSummary: candidate })
+	};
 }

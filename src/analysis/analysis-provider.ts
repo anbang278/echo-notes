@@ -1,5 +1,6 @@
 import type { AnalysisTemplateConfig, CopyLanguage } from "../settings/settings";
 import type { DiagnosticSink } from "../diagnostics/diagnostic-types";
+import type { RecordingSummaryIssue } from "./recording-summary";
 
 export interface AnalysisInput {
 	template: AnalysisTemplateConfig;
@@ -16,6 +17,8 @@ export interface AnalysisResult {
 	model: string;
 	traceId?: string;
 	recordingSummary?: string;
+	recordingSummaryIssue?: RecordingSummaryIssue;
+	recordingSummaryCharacters?: number;
 	raw?: unknown;
 }
 

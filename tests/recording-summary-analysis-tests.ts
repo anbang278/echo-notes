@@ -16,12 +16,18 @@ import {
 	RECORDING_SUMMARY_MIN_CHARACTERS,
 	RECORDING_SUMMARY_START,
 	normalizeRecordingSummary,
+	getRecordingSummaryIssue,
 	parseRecordingSummaryResponse
 } from "../src/analysis/recording-summary";
 
 const envelope = (summary: string): string => `${RECORDING_SUMMARY_START}\n${summary}\n${RECORDING_SUMMARY_END}`;
 
 export function runRecordingSummaryAnalysisTests(): void {
+	assert.equal(parseRecordingSummaryResponse("纪要正文", true).recordingSummaryIssue, "missing", "缺少摘要必须提供可诊断原因");
+	assert.equal(parseRecordingSummaryResponse(`纪要正文\n${envelope("过短")}`, true).recordingSummaryIssue, "length");
+	assert.equal(parseRecordingSummaryResponse(`纪要正文\n${envelope("")}`, true).recordingSummaryIssue, "empty");
+	assert.equal(parseRecordingSummaryResponse(`纪要正文\n${envelope("**新员工销售话术培训与客户沟通对练**")}`, true).recordingSummaryIssue, "format");
+	assert.equal(parseRecordingSummaryResponse(`纪要正文\n${RECORDING_SUMMARY_START}未闭合`, true).recordingSummaryIssue, "envelope");
 	const durableSummary = "新悦新员工销售话术与沟通语气培训";
 	assert.equal(normalizeRecordingSummary(`｜AI 总结：${durableSummary}`), undefined, "模型返回保留标签时不能生成重复标签并阻断后续更新");
 	assert.equal(normalizeRecordingSummary(`AI 总结：${durableSummary}`), undefined, "独立行标签也必须由写回逻辑统一添加");
@@ -73,7 +79,7 @@ export function runRecordingSummaryAnalysisTests(): void {
 	const summary = "新悦新员工销售话术与表达语气对练";
 	const body = "## 培训内容\n\n练习客户问答。\n\n## 后续\n\n安排下一次对练。";
 	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n\n${envelope(summary)}\n`, true), { text: body, recordingSummary: summary });
-	assert.deepEqual(parseRecordingSummaryResponse(body, true), { text: body });
+	assert.deepEqual(parseRecordingSummaryResponse(body, true), { text: body, recordingSummaryIssue: "missing" });
 	const unrequested = `${body}\n${envelope(summary)}`;
 	assert.deepEqual(parseRecordingSummaryResponse(unrequested), { text: unrequested }, "其他调用保持原始响应");
 
@@ -97,13 +103,13 @@ export function runRecordingSummaryAnalysisTests(): void {
 	];
 	for (const value of invalid) {
 		assert.equal(normalizeRecordingSummary(value), undefined, `应拒绝 ${JSON.stringify(value)}`);
-		assert.deepEqual(parseRecordingSummaryResponse(`${body}\n\n${envelope(value)}`, true), { text: body }, "异常摘要仍保留分析正文");
+		assert.deepEqual(parseRecordingSummaryResponse(`${body}\n\n${envelope(value)}`, true), { text: body, recordingSummaryIssue: getRecordingSummaryIssue(value), recordingSummaryCharacters: Array.from(value.trim()).length }, "异常摘要仍保留分析正文");
 	}
-	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${envelope(summary)}\n${envelope("另一个摘要")}`, true), { text: body });
-	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${RECORDING_SUMMARY_START}\n未闭合摘要`, true), { text: body });
-	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${RECORDING_SUMMARY_END}`, true), { text: body });
-	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${envelope(summary)}\n追加正文`, true), { text: `${body}\n\n追加正文` }, "不丢弃封套之后的正文");
-	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${RECORDING_SUMMARY_END}\n${RECORDING_SUMMARY_START}摘要`, true), { text: body });
+	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${envelope(summary)}\n${envelope("另一个摘要")}`, true), { text: body, recordingSummaryIssue: "envelope" });
+	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${RECORDING_SUMMARY_START}\n未闭合摘要`, true), { text: body, recordingSummaryIssue: "envelope" });
+	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${RECORDING_SUMMARY_END}`, true), { text: body, recordingSummaryIssue: "envelope" });
+	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${envelope(summary)}\n追加正文`, true), { text: `${body}\n\n追加正文`, recordingSummaryIssue: "envelope" }, "不丢弃封套之后的正文");
+	assert.deepEqual(parseRecordingSummaryResponse(`${body}\n${RECORDING_SUMMARY_END}\n${RECORDING_SUMMARY_START}摘要`, true), { text: body, recordingSummaryIssue: "envelope" });
 
 	const technicalInput = {
 		templateId: "work-minutes",

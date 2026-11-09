@@ -28,6 +28,7 @@ import { parseOpenAIOfficialAnalysisResponse } from "../src/analysis/openai-offi
 import { diagnoseAnalysisProviderSettings } from "../src/analysis/analysis-diagnostics";
 import { ANALYSIS_TASK_TIMEOUT_MS } from "../src/analysis/analysis-timeout";
 import { RECORDING_SUMMARY_END, RECORDING_SUMMARY_START } from "../src/analysis/recording-summary";
+import { recoverRecordingSummary } from "../src/analysis/recording-summary-recovery";
 import { insertOrReplaceTranscriptAnalysis, renderTranscriptAnalysisWithTechnicalInfo } from "../src/analysis/analysis-output";
 import { readTranscriptRecordingSummary } from "../src/analysis/analysis-technical";
 import { createAnalysisCheckpointIdentity } from "../src/analysis/analysis-checkpoint";
@@ -70,6 +71,64 @@ const response = (json: unknown, status = 200, traceId = "req-synthetic"): Reque
 beforeEach(() => {
 	resetRequests();
 	Object.defineProperty(globalThis, "window", { configurable: true, value: { setTimeout, clearTimeout } });
+});
+
+test("summary-only recovery reuses all three provider transports", async () => {
+	const summary = "团队核对项目实施进度并确认接口联调安排";
+	for (const id of ["custom-openai-compatible", "opencode-go", "openai-official"] as const) {
+		resetRequests();
+		const config = id === "openai-official" ? settings() : {
+			...DEFAULT_SETTINGS, analysisProvider: id, analysisBaseUrl: "https://fixture.invalid/v1",
+			analysisModel: id === "opencode-go" ? "glm-5.2" : "fixture-model"
+		};
+		const provider = createAnalysisProvider(config, apiKey);
+		const makeData = (text: string) => id === "openai-official" ? completed(text) : { choices: [{ message: { content: text } }] };
+		queueResponse(response(makeData("## 纪要\n\n完整合成纪要。")));
+		const main = await provider.analyze(input);
+		assert.equal(main.recordingSummaryIssue, "missing");
+		queueResponse(response(makeData(summary)));
+		const recovered = await recoverRecordingSummary(provider, input, main.text, 1000, () => true);
+		assert.equal(recovered.summary, summary, id);
+		assert.equal(requests.length, 2, id);
+		const second = JSON.parse(requests[1].body!);
+		assert.equal(JSON.stringify(second).includes(RECORDING_SUMMARY_START), false);
+		assert.equal(JSON.stringify(second).includes(privateText), false);
+		assert.equal(JSON.stringify(second).includes("完整合成纪要"), true);
+	}
+});
+
+test("supplemental failures never forward an echoed analysis into diagnostics", async () => {
+	for (const id of ["custom-openai-compatible", "opencode-go", "openai-official"] as const) {
+		resetRequests();
+		const config = id === "openai-official" ? settings() : {
+			...DEFAULT_SETTINGS, analysisProvider: id, analysisBaseUrl: "https://fixture.invalid/v1",
+			analysisModel: id === "opencode-go" ? "glm-5.2" : "fixture-model"
+		};
+		const provider = createAnalysisProvider(config, apiKey);
+		queueResponse(response({ error: { message: privateText } }, 500));
+		const events: unknown[] = [];
+		const recovery = await recoverRecordingSummary(provider, { ...input,
+			diagnostics: { event: (...event) => { events.push(event); } }
+		}, "已保存的合成纪要", 1000, () => true);
+		assert.equal(recovery.reason, "request-failed");
+		assert.equal(recovery.errorCode, "api_error");
+		assert.equal(JSON.stringify(events).includes(privateText), false, id);
+		assert.equal(requests.length, 1);
+	}
+});
+
+test("summary recovery keeps the original provider deadline", async () => {
+	let now = 1000;
+	mock.method(Date, "now", () => now);
+	const provider = createAnalysisProvider(settings(), apiKey);
+	queueResponse(response(completed("完整合成纪要")));
+	const analysis = await provider.analyze(input);
+	now += ANALYSIS_TASK_TIMEOUT_MS;
+	const recovery = await recoverRecordingSummary(provider, input, analysis.text, 1000, () => true);
+	assert.equal(recovery.reason, "request-failed");
+	assert.equal(recovery.errorCode, "timeout");
+	assert.equal(requests.length, 1, "超出原预算不能另开补生成请求");
+	assert.equal(analysis.text, "完整合成纪要");
 });
 
 afterEach(() => {
