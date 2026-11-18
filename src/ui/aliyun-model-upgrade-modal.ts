@@ -15,6 +15,7 @@ export const ALIYUN_UPGRADE_CONFIG_CHANGED = "转写配置已变化，请关闭�
 export class AliyunModelUpgradeModal extends Modal {
 	private resolved = false;
 	private saving = false;
+	private closeDescription: (() => boolean) | null = null;
 
 	constructor(
 		app: App,
@@ -66,17 +67,14 @@ export class AliyunModelUpgradeModal extends Modal {
 			if (!heading.matches(":hover")) showDescription(false);
 		});
 		modelInfo.addEventListener("click", () => showDescription(description.hidden));
-		this.contentEl.addEventListener("pointerdown", event => {
+		this.modalEl.addEventListener("pointerdown", event => {
 			if (event.target instanceof Node && !heading.contains(event.target)) showDescription(false);
 		});
-		this.scope.register([], "Escape", () => {
-			if (description.hidden) {
-				this.close();
-			} else {
-				showDescription(false);
-			}
-			return false;
-		});
+		this.closeDescription = () => {
+			if (description.hidden) return false;
+			showDescription(false);
+			return true;
+		};
 
 		const pricing = this.contentEl.createEl("p", { cls: "echo-notes-aliyun-pricing-reference" });
 		pricing.createSpan({ text: ALIYUN_ASR_PRICE_REFERENCE });
@@ -144,6 +142,7 @@ export class AliyunModelUpgradeModal extends Modal {
 	}
 
 	close(): void {
+		if (this.closeDescription?.()) return;
 		if (!this.saving) super.close();
 	}
 
@@ -153,6 +152,7 @@ export class AliyunModelUpgradeModal extends Modal {
 	}
 
 	onClose(): void {
+		this.closeDescription = null;
 		this.contentEl.empty();
 		if (!this.resolved) {
 			this.resolved = true;
