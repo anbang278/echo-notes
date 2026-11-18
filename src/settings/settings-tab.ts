@@ -50,6 +50,7 @@ import {
 } from "../ui/status-indicator";
 import { SettingsSpotlight, type SettingsSpotlightStep } from "./settings-spotlight";
 import type { MemoryInboxContext } from "../memory/memory-service";
+import { ALIYUN_ASR_MODELS } from "../providers/aliyun-model-upgrade";
 import {
 	ANALYSIS_PROVIDER_DEFAULTS,
 	ANALYSIS_PROVIDER_LABELS,
@@ -1066,12 +1067,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (!isRealtime && config.provider === "aliyun-bailian") {
 			new Setting(containerEl)
 				.setName("转写模型")
-				.setDesc("3.1 北京区参考价为输入 0.8 元/百万 Token、输出 2.7 元/百万 Token。长录音版通过百炼临时存储异步转写。")
+				.setDesc(`当前模型 ${config.model}。3.1 北京区参考价为输入 0.8 元/百万 Token、输出 2.7 元/百万 Token。长录音版通过百炼临时存储异步转写。`)
 				.addDropdown((dropdown) => {
 					for (const model of ALIYUN_TRANSCRIPTION_MODELS) {
 						dropdown.addOption(
 							model,
-							model === ALIYUN_FILETRANS_MODEL ? `${model}（新装默认）` : isAliyunFiletransModel(model) ? model : `${model}（旧兼容）`
+							model === ALIYUN_FILETRANS_MODEL ? `${ALIYUN_ASR_MODELS[model].name}（新装默认）` : ALIYUN_ASR_MODELS[model].name
 						);
 					}
 					return dropdown.setValue(config.model).onChange(async (value) => {

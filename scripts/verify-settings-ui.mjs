@@ -6012,7 +6012,7 @@ async function captureViewports(page) {
 			const targets = [
 				{ key: "mode", name: "转写模式", longestOptionText: "实时转写" },
 				{ key: "provider", name: "服务商", longestOptionText: "【推荐】阿里百炼（Alibaba Bailian）" },
-				{ key: "model", name: "转写模型", longestOptionText: "qwen-audio-3.1-asr-flash-filetrans（新装默认）" }
+				{ key: "model", name: "转写模型", longestOptionText: "Qwen-Audio 3.1 · 长录音（新装默认）" }
 			];
 			const result = {};
 			for (const target of targets) {
