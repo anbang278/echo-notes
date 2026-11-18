@@ -3768,8 +3768,7 @@ async function verifyTabs(page) {
 	await page.waitForFunction((pluginId) => (
 		window.app.plugins.plugins[pluginId].settings.siliconflowSenseVoiceUpgradeNoticeDismissed === false
 	), PLUGIN_ID);
-	assert(await activePanel.getByText("模型升级提醒", { exact: true }).count() === 0,
-		"恢复提醒后设置行应随偏好清除而隐藏");
+	await activePanel.getByText("模型升级提醒", { exact: true }).waitFor({ state: "detached", timeout: 10_000 });
 
 	await selectSettingOption(page, "服务商", "mosi");
 	const fixedTranscriptionModel = (await getActiveSetting(page, "转写模型")).locator('input[type="text"]');
