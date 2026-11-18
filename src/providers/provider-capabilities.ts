@@ -1,5 +1,5 @@
 import { isProviderId, type TranscriptionMode, type TranscriptionProviderId } from "../settings/settings";
-import { ALIYUN_FILETRANS_MODEL, LOCAL_OPENAI_TRANSCRIPTION_MODEL, LOCAL_OPENAI_DIARIZATION_MODEL } from "../settings/settings";
+import { ALIYUN_TRANSCRIPTION_MODELS, isAliyunFiletransModel, LOCAL_OPENAI_TRANSCRIPTION_MODEL, LOCAL_OPENAI_DIARIZATION_MODEL } from "../settings/settings";
 import { SILICONFLOW_TRANSCRIPTION_MODELS } from "./siliconflow-model-catalog";
 
 export type ProviderUploadMode =
@@ -125,7 +125,7 @@ export const TRANSCRIPTION_PROVIDER_CAPABILITIES: Record<TranscriptionProviderId
 		supportsContextEnhancement: true,
 		uploadMode: "temporary-oss-url",
 		endpointShape: "dashscope-async-filetrans",
-		recommendedModels: [ALIYUN_FILETRANS_MODEL, "qwen3-asr-flash"],
+		recommendedModels: [...ALIYUN_TRANSCRIPTION_MODELS],
 		notes: [
 			"本地文件先上传到百炼临时 OSS（最高 1GB、48 小时有效），再提交异步任务并轮询结果。",
 			"支持即时热词、input.context、句子/词级时间戳和说话人分离；Memory 增强默认关闭。",
@@ -182,7 +182,7 @@ export function getTranscriptionProviderCapability(
 	model?: string
 ): ProviderCapability {
 	const normalizedProviderId = isProviderId(providerId) ? providerId : "aliyun-bailian";
-	if (normalizedProviderId === "aliyun-bailian" && model && model !== ALIYUN_FILETRANS_MODEL) {
+	if (normalizedProviderId === "aliyun-bailian" && model && !isAliyunFiletransModel(model)) {
 		return createAliyunLegacyCapability();
 	}
 	const capability = TRANSCRIPTION_PROVIDER_CAPABILITIES[normalizedProviderId];
@@ -263,7 +263,7 @@ function createAliyunLegacyCapability(): ProviderCapability {
 		supportsStreaming: false,
 		uploadMode: "base64-data-url",
 		endpointShape: "chat-audio",
-		recommendedModels: [ALIYUN_FILETRANS_MODEL, "qwen3-asr-flash"],
+		recommendedModels: [...ALIYUN_TRANSCRIPTION_MODELS],
 		notes: [
 			"旧模型整段音频先编码为 Base64 Data URL。",
 			"编码后超过 10 MB 时本地解码并切成 16 kHz mono WAV 分段。"

@@ -6798,3 +6798,213 @@ button.echo-notes-memory-tool:hover {
 		display: none;
 	}
 }
+
+.echo-notes-aliyun-upgrade-dialog {
+	width: min(690px, calc(100% - 36px));
+}
+
+.echo-notes-aliyun-upgrade-dialog .modal-title {
+	font-size: var(--font-ui-large);
+	margin-inline-end: 30px;
+}
+
+.echo-notes-aliyun-upgrade-provider {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	margin-bottom: 4px;
+}
+
+.echo-notes-aliyun-model-comparison {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+
+.echo-notes-aliyun-model-card {
+	min-width: 0;
+	padding: 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 9px;
+}
+
+.echo-notes-aliyun-model-card.is-candidate {
+	border-color: color-mix(in srgb, var(--interactive-accent) 44%, var(--background-modifier-border));
+	background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
+}
+
+.echo-notes-aliyun-model-state {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+	margin-bottom: 4px;
+}
+
+.echo-notes-aliyun-model-card.is-candidate .echo-notes-aliyun-model-state {
+	color: var(--text-accent);
+}
+
+.echo-notes-aliyun-model-heading {
+	position: relative;
+}
+
+.echo-notes-aliyun-model-heading h3 {
+	margin: 0;
+	font-size: var(--font-ui-medium);
+	line-height: 1.35;
+}
+
+.echo-notes-aliyun-model-card.is-candidate h3 {
+	padding-inline-end: 40px;
+}
+
+.echo-notes-aliyun-model-id {
+	display: block;
+	margin-top: 3px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-aliyun-model-capabilities {
+	margin: 8px 0 10px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-aliyun-model-info {
+	position: absolute;
+	inset-inline-end: -8px;
+	inset-block-start: 50%;
+	translate: 0 -50%;
+	width: 44px;
+	min-height: 44px;
+}
+
+.echo-notes-aliyun-upgrade button.echo-notes-aliyun-model-info:not(.mod-cta) {
+	padding: 0;
+	color: var(--text-accent);
+	background: transparent;
+	box-shadow: none;
+}
+
+.echo-notes-aliyun-model-description {
+	position: absolute;
+	z-index: 1;
+	inset-inline: 0;
+	inset-block-start: calc(50% + 18px);
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	box-shadow: var(--shadow-s);
+	font-size: var(--font-ui-small);
+	overflow-wrap: anywhere;
+}
+
+.echo-notes-aliyun-model-price {
+	margin: 0;
+	padding-top: 8px;
+	border-top: 1px solid var(--background-modifier-border);
+	font-variant-numeric: tabular-nums;
+}
+
+.echo-notes-aliyun-model-price > div {
+	display: flex;
+	align-items: baseline;
+	gap: 9px;
+}
+
+.echo-notes-aliyun-model-price dt,
+.echo-notes-aliyun-model-price small {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-aliyun-model-price dt {
+	flex-shrink: 0;
+}
+
+.echo-notes-aliyun-model-price dd {
+	margin: 0;
+	font-weight: var(--font-semibold);
+}
+
+.echo-notes-aliyun-model-price small {
+	font-weight: var(--font-normal);
+}
+
+.echo-notes-aliyun-pricing-reference {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px 12px;
+	margin: 9px 0 12px;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-aliyun-upgrade-effect {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.echo-notes-aliyun-upgrade-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 13px;
+}
+
+.echo-notes-aliyun-upgrade-actions button {
+	min-height: 44px;
+	white-space: normal;
+}
+
+.echo-notes-aliyun-upgrade-actions button.echo-notes-aliyun-upgrade-quiet {
+	margin-inline-end: auto;
+	padding-inline: 5px;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.echo-notes-aliyun-upgrade button:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+@media (width <= 580px) {
+	.echo-notes-aliyun-upgrade-dialog {
+		width: calc(100% - 26px);
+		padding: 16px;
+	}
+
+	.echo-notes-aliyun-model-comparison {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 8px;
+	}
+
+	.echo-notes-aliyun-model-card {
+		padding: 11px 12px;
+	}
+}
+
+@media (width <= 420px) {
+	.echo-notes-aliyun-upgrade-actions {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+	}
+
+	.echo-notes-aliyun-upgrade-actions .echo-notes-aliyun-upgrade-quiet {
+		grid-column: 1 / -1;
+	}
+
+	.echo-notes-aliyun-upgrade-actions button {
+		padding-inline: 6px;
+	}
+}

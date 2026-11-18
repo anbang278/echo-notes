@@ -55,6 +55,7 @@ import {
 	ANALYSIS_PROVIDER_LABELS,
 	AGENTPLAN_ANALYSIS_MODELS,
 	ALIYUN_FILETRANS_MODEL,
+	isAliyunFiletransModel,
 	ALIYUN_TRANSCRIPTION_MODELS,
 	MEMORY_PROVIDER_LABELS,
 	LOCAL_OPENAI_DIARIZATION_MODEL,
@@ -1065,12 +1066,12 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		if (!isRealtime && config.provider === "aliyun-bailian") {
 			new Setting(containerEl)
 				.setName("转写模型")
-				.setDesc("新模型使用临时对象存储与异步 HTTP；旧 qwen3-ASR-Flash 保留原有兼容链路。")
+				.setDesc("3.1 北京区参考价为输入 0.8 元/百万 Token、输出 2.7 元/百万 Token。长录音版通过百炼临时存储异步转写。")
 				.addDropdown((dropdown) => {
 					for (const model of ALIYUN_TRANSCRIPTION_MODELS) {
 						dropdown.addOption(
 							model,
-							model === ALIYUN_FILETRANS_MODEL ? `${model}（推荐）` : `${model}（旧兼容）`
+							model === ALIYUN_FILETRANS_MODEL ? `${model}（新装默认）` : isAliyunFiletransModel(model) ? model : `${model}（旧兼容）`
 						);
 					}
 					return dropdown.setValue(config.model).onChange(async (value) => {
@@ -1079,6 +1080,23 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 						this.refreshSettings();
 					});
 				});
+
+			if (this.plugin.settings.aliyunFiletrans31UpgradeNoticeDismissed) {
+				new Setting(containerEl)
+					.setName("3.1 升级提醒")
+					.setDesc("提醒已关闭。恢复后，下次手动用旧版发起转写时可选择新版。")
+					.addButton((button) => button.setButtonText("恢复提醒").onClick(async () => {
+						button.setDisabled(true);
+						this.plugin.settings.aliyunFiletrans31UpgradeNoticeDismissed = false;
+						try {
+							await this.plugin.saveSettings();
+						} catch (error) {
+							this.plugin.settings.aliyunFiletrans31UpgradeNoticeDismissed = true;
+							new Notice(`提醒设置保存失败：${getSanitizedErrorMessage(error)}`);
+						}
+						this.refreshSettings();
+					}));
+			}
 
 		} else if (!isRealtime && isLocalOpenAI) {
 			this.renderLocalOpenAIModelSetting(containerEl, config);
@@ -1866,7 +1884,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		} else if (isAgentPlan || config.provider === "local-openai-compatible") {
 			enabled = true;
 			this.renderTranscriptionCapabilityStatus(heading, view);
-		} else if (config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL) {
+		} else if (config.provider === "aliyun-bailian" && isAliyunFiletransModel(config.model)) {
 			const filetrans = config.aliyunFiletrans!;
 			enabled = filetrans.diarizationEnabled;
 			heading.addToggle((toggle) => toggle.setValue(enabled).onChange(async (value) => {
@@ -1912,7 +1930,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 		const heading = this.renderCapabilityPanelHeading(containerEl, "术语增强", "提高专有名词、人名和项目名的识别稳定性。仅发送作用域匹配且已批准的内容。");
-		if (!(capability.supportsNativeHotwords && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL)) {
+		if (!(capability.supportsNativeHotwords && config.provider === "aliyun-bailian" && isAliyunFiletransModel(config.model))) {
 			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
 			this.renderTranscriptionCapabilityEmptyState(containerEl, "当前模型不提供原生热词接口。切换服务或模型后可用。", "前往转写服务", () => this.navigateToTranscriptionService());
 			return;
@@ -1954,7 +1972,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			return;
 		}
 		const heading = this.renderCapabilityPanelHeading(containerEl, "上下文增强", "使用已批准的固定 Prompt 和记忆内容；发起转写时会把生效内容发送给当前服务商，共用 400 字预算。");
-		if (!(capability.supportsContextEnhancement && config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL)) {
+		if (!(capability.supportsContextEnhancement && config.provider === "aliyun-bailian" && isAliyunFiletransModel(config.model))) {
 			this.renderTranscriptionCapabilityStatus(heading, { state: "unsupported", stateLabel: "当前模型不支持" });
 			this.renderTranscriptionCapabilityEmptyState(containerEl, "当前模型不提供上下文增强接口。切换服务或模型后可用。", "前往转写服务", () => this.navigateToTranscriptionService());
 			return;
@@ -2163,7 +2181,7 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 		config: TranscriptionConfig,
 		capability: ReturnType<typeof getTranscriptionProviderCapability>
 	): TranscriptionCapabilityView[] {
-		const isAliyunFiletrans = config.provider === "aliyun-bailian" && config.model === ALIYUN_FILETRANS_MODEL;
+		const isAliyunFiletrans = config.provider === "aliyun-bailian" && isAliyunFiletransModel(config.model);
 		const filetrans = isAliyunFiletrans ? config.aliyunFiletrans : undefined;
 		const enhancementFlags = config.provider === "local-openai-compatible" ? config.localEnhancement : filetrans;
 		const speakerEnabled = config.provider === "volcengine-agentplan" ||
@@ -3808,8 +3826,8 @@ export class EchoNotesSettingTab extends PluginSettingTab {
 			case "volcengine-agentplan":
 				return "AgentPlan ASR 优化双流 WebSocket 端点；实时写入确定分句并保留二遍高精度结果，仅支持 Obsidian 桌面端。";
 			case "aliyun-bailian":
-				return this.getSelectedTranscriptionConfig().model === ALIYUN_FILETRANS_MODEL
-					? "阿里百炼服务域名。新模型会在该域名下调用 /api/v1/uploads、异步提交与任务查询接口。"
+				return isAliyunFiletransModel(this.getSelectedTranscriptionConfig().model)
+					? "阿里百炼服务域名。可填写北京共享域名，或从百炼控制台复制业务空间的 API Host。长录音版在此地址申请上传凭证、提交和查询任务。"
 					: "旧 qwen3-asr-flash 的 OpenAI 兼容地址；也可只填写 https://dashscope.aliyuncs.com。";
 			case "ollama":
 				return "Ollama OpenAI 兼容基础地址，默认 http://localhost:11434/v1。需确认本地服务支持音频转写接口。";

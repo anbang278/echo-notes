@@ -69,7 +69,7 @@ export function runLocalOpenAISettingsTests(): void {
 	assert.equal(malformed.offlineTranscriptionByProvider["local-openai-compatible"]?.model, "kept");
 	assert.doesNotMatch(JSON.stringify(malformed.offlineTranscriptionByProvider), /must-not-copy|private|apiKey|raw/);
 	assert.deepEqual(normalizeEchoNotesSettings({ offlineTranscriptionByProvider: [] }).offlineTranscription,
-		DEFAULT_SETTINGS.offlineTranscription);
+		{ ...DEFAULT_SETTINGS.offlineTranscription, model: "qwen-audio-3.0-asr-flash-filetrans" });
 	assert.deepEqual(DEFAULT_SETTINGS.offlineTranscriptionByProvider, {}, "Normalization must not mutate defaults");
 
 	const aliyun = normalizeEchoNotesSettings({

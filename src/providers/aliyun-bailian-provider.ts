@@ -10,6 +10,7 @@ import {
 } from "../audio/audio-segmenter";
 import {
 	ALIYUN_FILETRANS_MODEL,
+	isAliyunFiletransModel,
 	DEFAULT_ALIYUN_FILETRANS_SETTINGS,
 	type TranscriptionConfig
 } from "../settings/settings";
@@ -82,7 +83,7 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 		if (!isSupportedAudioFile(input.audioFile)) {
 			throw new TranscriptionError("unsupported_format", `不支持的音频格式：${input.audioFile.extension}`);
 		}
-		if (this.settings.model === ALIYUN_FILETRANS_MODEL) {
+		if (isAliyunFiletransModel(this.settings.model)) {
 			return this.transcribeFiletrans(input);
 		}
 
@@ -232,6 +233,7 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 					};
 				}
 				if (task.status === "FAILED" || task.status === "CANCELED" || task.status === "UNKNOWN") {
+					await input.onProgress?.({ type: "filetrans-task-status", task, traceId, pollDelayMs: 0 });
 					throw new AliyunFiletransProtocolError(`百炼异步转写任务结束：${task.status}`, {
 						requestId: traceId,
 						remoteStatus: task.status
@@ -256,7 +258,12 @@ export class AliyunBailianQwenAsrProvider implements TranscriptionProvider {
 			}
 			if (error instanceof AliyunFiletransProtocolError) {
 				if (error.status !== undefined) {
-					throw createHttpTranscriptionError("阿里百炼", error.status, error.message, error.requestId ?? traceId);
+					const workspaceHint = this.settings.model === ALIYUN_FILETRANS_MODEL &&
+						new URL(this.settings.baseUrl).hostname === "dashscope.aliyuncs.com" &&
+						(error.status === 403 || error.status === 404)
+						? " 请核对 3.1 模型权限。若共享域名不可用，在百炼控制台复制业务空间的 API Host，填入转写 Base URL。"
+						: "";
+					throw createHttpTranscriptionError("阿里百炼", error.status, error.message + workspaceHint, error.requestId ?? traceId);
 				}
 				throw new TranscriptionError("invalid_response", error.message, error.requestId ?? traceId);
 			}

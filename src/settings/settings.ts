@@ -149,12 +149,18 @@ export const MOSI_TRANSCRIPTION_MODEL = "moss-transcribe-diarize";
 export const MOSI_TRANSCRIPTION_VERSION = "moss-transcribe-diarize-20260325";
 export const MOSI_PLAIN_TRANSCRIPTION_MODEL = "moss-transcribe";
 export const MOSI_PLAIN_TRANSCRIPTION_VERSION = "moss-transcribe-v1";
-export const ALIYUN_FILETRANS_MODEL = "qwen-audio-3.0-asr-flash-filetrans";
+export const ALIYUN_FILETRANS_MODEL = "qwen-audio-3.1-asr-flash-filetrans";
+export const ALIYUN_FILETRANS_V30_MODEL = "qwen-audio-3.0-asr-flash-filetrans";
 export const ALIYUN_LEGACY_ASR_MODEL = "qwen3-asr-flash";
 export const ALIYUN_TRANSCRIPTION_MODELS = [
 	ALIYUN_FILETRANS_MODEL,
+	ALIYUN_FILETRANS_V30_MODEL,
 	ALIYUN_LEGACY_ASR_MODEL
 ] as const;
+
+export function isAliyunFiletransModel(model: string): boolean {
+	return model === ALIYUN_FILETRANS_MODEL || model === ALIYUN_FILETRANS_V30_MODEL;
+}
 export const DEFAULT_ALIYUN_FILETRANS_SETTINGS: AliyunFileTranscriptionSettings = {
 	diarizationEnabled: true,
 	hotwordEnhancementEnabled: false,
@@ -306,6 +312,7 @@ export interface EchoNotesSettings {
 	skipExistingTranscript: boolean;
 	confirmBeforeTranscription: boolean;
 	siliconflowSenseVoiceUpgradeNoticeDismissed: boolean;
+	aliyunFiletrans31UpgradeNoticeDismissed: boolean;
 	autoTranscribeOnAudioLink: boolean;
 	autoTranscribeOnAudioCreated: boolean;
 	officialRecorderStartHotkey: EchoNotesHotkeySetting;
@@ -1116,6 +1123,7 @@ export const DEFAULT_SETTINGS: EchoNotesSettings = {
 	skipExistingTranscript: true,
 	confirmBeforeTranscription: false,
 	siliconflowSenseVoiceUpgradeNoticeDismissed: false,
+	aliyunFiletrans31UpgradeNoticeDismissed: false,
 	autoTranscribeOnAudioLink: false,
 	autoTranscribeOnAudioCreated: false,
 	// Community plugins must not claim default hotkeys. Users can opt in from settings.
@@ -1315,6 +1323,9 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 		: DEFAULT_SETTINGS.offlineTranscription.provider;
 	const offlineDefaults = getOfflineTranscriptionProviderDefaults(offlineProvider);
 	const shouldPreserveOfflineConfig = isOfflineTranscriptionProviderId(rawOfflineProvider);
+	const offlineDefaultModel = offlineProvider === "aliyun-bailian" && Object.keys(raw).length > 0
+		? ALIYUN_FILETRANS_V30_MODEL
+		: offlineDefaults.model;
 	settings.offlineTranscription = {
 		provider: offlineProvider,
 		baseUrl: shouldPreserveOfflineConfig
@@ -1331,9 +1342,9 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 					? normalizeConfigString(
 							nestedOffline.model,
 							legacyProvider === offlineProvider ? raw.model : undefined,
-							offlineDefaults.model
+							offlineDefaultModel
 						)
-					: offlineDefaults.model,
+					: offlineDefaultModel,
 		language: shouldPreserveOfflineConfig
 			? normalizeConfigString(
 					nestedOffline.language,
@@ -1487,6 +1498,7 @@ export function normalizeEchoNotesSettings(rawData: unknown): EchoNotesSettings 
 	settings.confirmBeforeTranscription =
 		typeof raw.confirmBeforeTranscription === "boolean" ? raw.confirmBeforeTranscription : DEFAULT_SETTINGS.confirmBeforeTranscription;
 	settings.siliconflowSenseVoiceUpgradeNoticeDismissed = normalizeSiliconFlowUpgradeNoticeDismissed(raw.siliconflowSenseVoiceUpgradeNoticeDismissed);
+	settings.aliyunFiletrans31UpgradeNoticeDismissed = raw.aliyunFiletrans31UpgradeNoticeDismissed === true;
 	settings.analysisTemplates = normalizeAnalysisTemplates(raw.analysisTemplates);
 	settings.defaultAnalysisTemplateId = normalizeDefaultAnalysisTemplateId(rawDefaultAnalysisTemplateId, settings.analysisTemplates);
 	settings.officialRecorderStartHotkey = normalizeHotkeySetting(
@@ -1654,7 +1666,9 @@ function normalizeOfflineProviderConfig<Provider extends OfflineTranscriptionPro
 		baseUrl: normalizeConfigString(raw.baseUrl, undefined, defaults.baseUrl),
 		model: provider === "mosi"
 			? getMosiTranscriptionModel(mosiSpeakerDiarizationEnabled)
-			: normalizeConfigString(raw.model, undefined, defaults.model),
+			: normalizeConfigString(raw.model, undefined, provider === "aliyun-bailian" && isRecord(value)
+				? ALIYUN_FILETRANS_V30_MODEL
+				: defaults.model),
 		language: normalizeConfigString(raw.language, undefined, defaults.language),
 		...(provider === "aliyun-bailian"
 			? { aliyunFiletrans: normalizeAliyunFiletransSettings(raw.aliyunFiletrans) }

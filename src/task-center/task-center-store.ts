@@ -374,8 +374,10 @@ function parseRemoteTask(value: unknown): RemoteTranscriptionTaskResume | undefi
 	const status = readEnum(value.status, ["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED", "UNKNOWN"] as const);
 	const submittedAt = readTimestamp(value.submittedAt);
 	const configurationFingerprint = readRequiredString(value.configurationFingerprint);
+	const origin = readOptionalString(value.origin);
+	const safeOrigin = origin && /^https?:\/\/[^/?#@]+$/.test(origin) ? origin : undefined;
 	return taskId && status && submittedAt !== null && configurationFingerprint
-		? { taskId, status, submittedAt, configurationFingerprint }
+		? { taskId, status, submittedAt, configurationFingerprint, ...(safeOrigin ? { origin: safeOrigin } : {}) }
 		: undefined;
 }
 

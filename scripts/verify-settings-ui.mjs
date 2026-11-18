@@ -18,6 +18,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { verifyAliyunUpgrade } from "./verify-aliyun-upgrade.mjs";
 import { verifyLocalAsrLifecycle } from "./verify-local-asr-lifecycle.mjs";
 import { verifyWorkspaceAgentUi, verifyWorkspaceOfflineReader } from "./verify-workspace-agent-ui.mjs";
 import { verifyMeetingWorkspace } from "./verify-workspace-ui.mjs";
@@ -3462,7 +3463,7 @@ async function verifyTabs(page) {
 	);
 	assert(
 		JSON.stringify(await getSettingOptionValues(page, "转写模型")) ===
-			JSON.stringify(["qwen-audio-3.0-asr-flash-filetrans", "qwen3-asr-flash"]),
+			JSON.stringify(["qwen-audio-3.1-asr-flash-filetrans", "qwen-audio-3.0-asr-flash-filetrans", "qwen3-asr-flash"]),
 		"阿里百炼转写模型选项不完整"
 	);
 	await advancedTab.click();
@@ -6012,7 +6013,7 @@ async function captureViewports(page) {
 			const targets = [
 				{ key: "mode", name: "转写模式", longestOptionText: "实时转写" },
 				{ key: "provider", name: "服务商", longestOptionText: "【推荐】阿里百炼（Alibaba Bailian）" },
-				{ key: "model", name: "转写模型", longestOptionText: "qwen-audio-3.0-asr-flash-filetrans（推荐）" }
+				{ key: "model", name: "转写模型", longestOptionText: "qwen-audio-3.1-asr-flash-filetrans（新装默认）" }
 			];
 			const result = {};
 			for (const target of targets) {
@@ -6514,6 +6515,7 @@ try {
 	const localAsrLifecycle = await verifyLocalAsrLifecycle(page, { pluginId: PLUGIN_ID, getActiveSetting, getActivePanel, setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR });
 	const localOpenAISettings = await verifyLocalOpenAISettings(page);
 	await verifySiliconFlowUpgradeModal(page);
+	const aliyunUpgrade = await verifyAliyunUpgrade(page, { pluginId: PLUGIN_ID, setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR });
 	const recordingStorageLayouts = await verifyRecordingStorageSettings(page, {
 		pluginId: PLUGIN_ID, getActiveSetting, selectSettingOption, getActivePanel,
 		setViewportMode, viewports: VIEWPORTS, themes: THEMES, outputDir: OUTPUT_DIR
@@ -6602,6 +6604,7 @@ try {
 		recordingSummaryIntegration,
 		siliconFlowMockChain,
 		localOpenAISettings,
+		aliyunUpgrade,
 		localAsrLifecycle,
 		gettingStartedGuideLayouts: gettingStartedLayouts.guideLayouts,
 		gettingStartedSpotlightLayouts: gettingStartedLayouts.spotlightLayouts,

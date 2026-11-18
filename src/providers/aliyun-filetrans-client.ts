@@ -240,7 +240,7 @@ export async function submitAliyunFiletransTask(
 		});
 	}
 	return {
-		task: { taskId, status, submittedAt, configurationFingerprint },
+		task: { taskId, status, submittedAt, configurationFingerprint, origin: new URL(options.baseUrl).origin },
 		requestId: readOptionalString(root?.request_id)
 	};
 }
@@ -263,12 +263,17 @@ export async function queryAliyunFiletransTask(
 	const root = asRecord(response.json);
 	const output = asRecord(root?.output) ?? root;
 	const status = normalizeRemoteTaskStatus(output?.task_status);
-	const taskId = readOptionalString(output?.task_id) ?? task.taskId;
+	const returnedTaskId = readOptionalString(output?.task_id);
+	if (returnedTaskId && returnedTaskId !== task.taskId) {
+		throw new AliyunFiletransProtocolError("百炼返回的任务 ID 与提交任务不一致。", {
+			requestId: readOptionalString(root?.request_id)
+		});
+	}
 	const results = Array.isArray(output?.results)
 		? output.results.map(parseSubtask).filter((value): value is AliyunFiletransSubtask => Boolean(value))
 		: undefined;
 	return {
-		task: { ...task, taskId, status },
+		task: { ...task, status },
 		requestId: readOptionalString(root?.request_id),
 		results,
 		retryAfter: readHeader(response.headers, "retry-after")
@@ -344,8 +349,8 @@ export function parseAliyunFiletransResult(value: unknown): AliyunFiletransParse
 	const root = asRecord(value);
 	const transcripts = Array.isArray(root?.transcripts) ? root.transcripts.map(asRecord).filter(Boolean) : [];
 	const text = transcripts
-		.map((transcript) => readOptionalString(transcript?.text))
-		.filter((item): item is string => Boolean(item))
+		.map((transcript) => readString(transcript?.text).trim())
+		.filter(Boolean)
 		.join("\n")
 		.trim();
 	if (!text) {
@@ -359,7 +364,7 @@ export function parseAliyunFiletransResult(value: unknown): AliyunFiletransParse
 	);
 	const utterances = hasSpeakers
 		? sentences.map((sentence, index): TranscriptionUtterance | null => {
-			const sentenceText = readOptionalString(sentence?.text);
+			const sentenceText = readString(sentence?.text).trim();
 			if (!sentenceText) {
 				return null;
 			}

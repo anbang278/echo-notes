@@ -3781,7 +3781,7 @@ assert.throws(
 assert.equal(DEFAULT_SETTINGS.transcriptionMode, "offline");
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.provider, "aliyun-bailian");
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.baseUrl, "https://dashscope.aliyuncs.com");
-assert.equal(DEFAULT_SETTINGS.offlineTranscription.model, "qwen-audio-3.0-asr-flash-filetrans");
+assert.equal(DEFAULT_SETTINGS.offlineTranscription.model, "qwen-audio-3.1-asr-flash-filetrans");
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.aliyunFiletrans?.diarizationEnabled, true);
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.aliyunFiletrans?.memoryEnhancementEnabled, false);
 assert.equal(DEFAULT_SETTINGS.offlineTranscription.language, "zh");
@@ -3789,7 +3789,18 @@ assert.equal(DEFAULT_SETTINGS.realtimeTranscription.provider, "volcengine-agentp
 assert.equal(DEFAULT_SETTINGS.realtimeTranscription.inputDeviceId, "");
 assert.equal(DEFAULT_SETTINGS.agentPlanSpeakerLabelStyle, "speaker-with-time");
 assert.equal(DEFAULT_SETTINGS.mosiSpeakerDiarizationEnabled, true);
-assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen-audio-3.0-asr-flash-filetrans");
+assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].model, "qwen-audio-3.1-asr-flash-filetrans");
+assert.equal(normalizeEchoNotesSettings(null).offlineTranscription.model, "qwen-audio-3.1-asr-flash-filetrans");
+assert.equal(normalizeEchoNotesSettings({}).offlineTranscription.model, "qwen-audio-3.1-asr-flash-filetrans");
+assert.equal(normalizeEchoNotesSettings({ provider: "aliyun-bailian" }).offlineTranscription.model, "qwen-audio-3.0-asr-flash-filetrans");
+assert.equal(normalizeEchoNotesSettings({ offlineTranscription: { provider: "aliyun-bailian" } }).offlineTranscription.model, "qwen-audio-3.0-asr-flash-filetrans");
+assert.equal(normalizeEchoNotesSettings({
+	offlineTranscription: { provider: "mosi" },
+	offlineTranscriptionByProvider: { "aliyun-bailian": { baseUrl: "https://workspace.cn-beijing.maas.aliyuncs.com" } },
+	aliyunFiletrans31UpgradeNoticeDismissed: true
+}).offlineTranscriptionByProvider["aliyun-bailian"]?.model, "qwen-audio-3.0-asr-flash-filetrans");
+assert.equal(normalizeEchoNotesSettings({ aliyunFiletrans31UpgradeNoticeDismissed: true }).aliyunFiletrans31UpgradeNoticeDismissed, true);
+assert.equal(normalizeEchoNotesSettings({ aliyunFiletrans31UpgradeNoticeDismissed: "true" }).aliyunFiletrans31UpgradeNoticeDismissed, false);
 assert.equal(PROVIDER_DEFAULTS["aliyun-bailian"].language, "zh");
 assert.equal(PROVIDER_LABELS.siliconflow, "【免费】硅基流动（SiliconFlow）");
 assert.equal(PROVIDER_DEFAULTS.siliconflow.model, "FunAudioLLM/SenseVoiceSmall");
@@ -3951,6 +3962,17 @@ const parsedAliyunResult = parseAliyunFiletransResult({
 	}]
 });
 assert.equal(parsedAliyunResult.text, "你好 Echo Notes");
+const fullAliyunText = `${"完整会议转写。".repeat(300)}稿件结尾`;
+assert.equal(parseAliyunFiletransResult({ transcripts: [{ text: fullAliyunText }] }).text, fullAliyunText);
+assert.equal(parseAliyunFiletransResult({
+	transcripts: [{ text: fullAliyunText, sentences: [{ text: fullAliyunText, speaker_id: 1 }] }]
+}).utterances?.[0].text, fullAliyunText);
+for (const model of ["qwen-audio-3.1-asr-flash-filetrans", "qwen-audio-3.0-asr-flash-filetrans"]) {
+	const capabilities = getTranscriptionProviderCapability("aliyun-bailian", "offline", model);
+	assert.equal(capabilities.endpointShape, "dashscope-async-filetrans");
+	assert.ok(capabilities.supportsAsyncTasks && capabilities.supportsSpeakerDiarization && capabilities.supportsNativeHotwords);
+}
+assert.equal(submittedAliyun.task.origin, "https://dashscope.aliyuncs.com");
 assert.equal(parsedAliyunResult.utterances?.[0].speakerId, "1");
 assert.equal(parsedAliyunResult.utterances?.[0].startSeconds, 0.1);
 assert.deepEqual(parsedAliyunResult.utterances?.[0].words, [{ text: "Echo", startSeconds: 0.5, endSeconds: 0.9 }]);
@@ -6019,7 +6041,7 @@ const removedLegacyTranscriptionProviderSettings = normalizeEchoNotesSettings({
 	model: "whisper-1",
 	language: "en"
 });
-assert.deepEqual(removedLegacyTranscriptionProviderSettings.offlineTranscription, DEFAULT_SETTINGS.offlineTranscription);
+assert.deepEqual(removedLegacyTranscriptionProviderSettings.offlineTranscription, { ...DEFAULT_SETTINGS.offlineTranscription, model: "qwen-audio-3.0-asr-flash-filetrans" });
 for (const provider of Object.keys(OFFLINE_TRANSCRIPTION_PROVIDER_LABELS)) {
 	if (provider === "mosi") {
 		continue;
@@ -6064,7 +6086,7 @@ assert.deepEqual(
 			language: "en"
 		}
 	}).offlineTranscription,
-	DEFAULT_SETTINGS.offlineTranscription
+	{ ...DEFAULT_SETTINGS.offlineTranscription, model: "qwen-audio-3.0-asr-flash-filetrans" }
 );
 const normalizedMosiDiarizationSettings = normalizeEchoNotesSettings({
 	offlineTranscription: {
@@ -6148,7 +6170,7 @@ const nestedModeSettings = normalizeEchoNotesSettings({
 	}
 });
 assert.equal(nestedModeSettings.transcriptionMode, "realtime");
-assert.deepEqual(nestedModeSettings.offlineTranscription, DEFAULT_SETTINGS.offlineTranscription);
+assert.deepEqual(nestedModeSettings.offlineTranscription, { ...DEFAULT_SETTINGS.offlineTranscription, model: "qwen-audio-3.0-asr-flash-filetrans" });
 assert.deepEqual(nestedModeSettings.realtimeTranscription, {
 	provider: "volcengine-agentplan",
 	baseUrl: "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async",

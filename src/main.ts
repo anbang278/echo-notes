@@ -162,6 +162,8 @@ import { diagnoseMemoryProviderSettings } from "./memory/memory-provider";
 import { parseMemoryCandidate } from "./memory/memory-output";
 import { shouldSkipAutomationForPrivateNote } from "./privacy/note-privacy";
 import { createTranscriptionProvider } from "./providers/provider-registry";
+import { isAliyunUpgradeModel } from "./providers/aliyun-model-upgrade";
+import { ALIYUN_UPGRADE_CONFIG_CHANGED, AliyunModelUpgradeModal, type AliyunUpgradeDecision } from "./ui/aliyun-model-upgrade-modal";
 import { createDualModelProofreadingSession, validateDualModelConfiguration } from "./proofreading/proofreading";
 import { requestIndependentProofreading } from "./proofreading/proofreading-provider";
 import { ProofreadingReviewModal } from "./proofreading/proofreading-review-modal";
@@ -211,7 +213,9 @@ import {
 } from "./local-asr";
 import {
 	ALIYUN_FILETRANS_MODEL,
+	ALIYUN_FILETRANS_V30_MODEL,
 	cloneHotkey,
+	isAliyunFiletransModel,
 	formatHotkey,
 	getSelectedTranscriptionConfig,
 	groupAnalysisTemplatesByCategory,
@@ -311,6 +315,12 @@ interface ProcessAudioResult {
 	diagnosticChainId: string;
 }
 
+interface TranscriptionUpgradeContext {
+	decided?: boolean;
+	config?: EchoNotesSettings["offlineTranscription"];
+	cancelled?: boolean;
+}
+
 interface ProcessAudioOptions {
 	onTranscriptFileReady?: (transcriptFile: TFile, final: boolean) => Promise<TranscriptLinkResult | void> | TranscriptLinkResult | void;
 	allowUploadConfirmation?: boolean;
@@ -320,7 +330,7 @@ interface ProcessAudioOptions {
 	diagnosticRetryOfSessionId?: string;
 	resumeRemoteTask?: RemoteTranscriptionTaskResume;
 	resumeLocalTask?: LocalTranscriptionTaskResume;
-	siliconFlowUpgradeDecision?: { value?: SiliconFlowUpgradeDecision; config?: EchoNotesSettings["offlineTranscription"] };
+	modelUpgrade?: TranscriptionUpgradeContext;
 }
 
 interface InternalPlugin {
@@ -432,6 +442,9 @@ export default class EchoNotesPlugin extends Plugin {
 	private siliconFlowUpgradePending: Promise<SiliconFlowUpgradeDecision | null> | null = null;
 	private siliconFlowUpgradeModal: SiliconFlowModelUpgradeModal | null = null;
 	private siliconFlowUpgradeRollback: (() => void) | null = null;
+	private aliyunUpgradePending: { config: EchoNotesSettings["offlineTranscription"]; result: Promise<AliyunUpgradeDecision | null> } | null = null;
+	private aliyunUpgradeModal: AliyunModelUpgradeModal | null = null;
+	private aliyunUpgradeRollback: (() => void) | null = null;
 	private activeTranscriptionControllers = new Map<string, AbortController>();
 	private localCancellationRequests?: Map<string, Promise<boolean>>;
 	private localCancellationConfirmations?: Map<string, LocalCancellationConfirmation>;
@@ -562,6 +575,10 @@ export default class EchoNotesPlugin extends Plugin {
 		this.siliconFlowUpgradeRollback = null;
 		this.siliconFlowUpgradeModal?.abort();
 		this.siliconFlowUpgradeModal = null;
+		this.aliyunUpgradeRollback?.();
+		this.aliyunUpgradeRollback = null;
+		this.aliyunUpgradeModal?.abort();
+		this.aliyunUpgradeModal = null;
 		this.realtimeStartingStream?.getTracks().forEach((track) => track.stop());
 		this.coreRecordingStorageAdapter?.dispose();
 		if (this.persistentStateTimer !== null) {
@@ -1221,6 +1238,13 @@ export default class EchoNotesPlugin extends Plugin {
 			new Notice("只有仍处于待处理状态的百炼云端任务可以取消。");
 			return false;
 		}
+		const config = this.settings.offlineTranscription;
+		if (config.provider !== "aliyun-bailian" ||
+			!this.matchesAliyunTaskOrigin(config.baseUrl, task.remoteTask) ||
+			(!task.remoteTask.origin && config.model !== (task.model || ALIYUN_FILETRANS_V30_MODEL))) {
+			new Notice("请恢复此任务原先的阿里百炼转写设置后再取消。");
+			return false;
+		}
 		const apiKey = this.getApiKey("aliyun-bailian").trim();
 		if (!apiKey) {
 			new Notice("无法取消云端任务：阿里百炼 API Key 当前不可用。");
@@ -1230,7 +1254,7 @@ export default class EchoNotesPlugin extends Plugin {
 		try {
 			await cancelAliyunFiletransTask(
 				requester,
-				this.settings.offlineTranscription.baseUrl,
+				config.baseUrl,
 				apiKey,
 				task.remoteTask
 			);
@@ -1249,7 +1273,7 @@ export default class EchoNotesPlugin extends Plugin {
 			try {
 				const refreshed = await queryAliyunFiletransTask(
 					requester,
-					this.settings.offlineTranscription.baseUrl,
+					config.baseUrl,
 					apiKey,
 					task.remoteTask
 				);
@@ -1319,19 +1343,28 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	private matchesAliyunTaskOrigin(baseUrl: string, remoteTask: RemoteTranscriptionTaskResume): boolean {
+		if (!remoteTask.origin) return true;
+		try {
+			return new URL(baseUrl).origin === remoteTask.origin;
+		} catch {
+			return false;
+		}
+	}
+
 	private async resumeRemoteTranscriptionTask(
 		recovery: Extract<EchoNotesTaskRecovery, { kind: "transcription" }>,
 		remoteTask: RemoteTranscriptionTaskResume
 	): Promise<void> {
-		if (
-			this.settings.offlineTranscription.provider !== "aliyun-bailian" ||
-			this.settings.offlineTranscription.model !== ALIYUN_FILETRANS_MODEL
-		) {
-			const taskId = createTaskId("transcription", recovery.audioPath);
+		const taskId = createTaskId("transcription", recovery.audioPath);
+		const taskModel = this.taskCenter.getTask(taskId)?.model || ALIYUN_FILETRANS_V30_MODEL;
+		const config = this.getTranscriptionUpgradeConfig();
+		if (config.provider !== "aliyun-bailian" || !isAliyunFiletransModel(taskModel) ||
+			config.model !== taskModel || !this.matchesAliyunTaskOrigin(config.baseUrl, remoteTask)) {
 			this.taskCenter.updateTask(taskId, {
 				status: "paused",
-				stage: "当前转写配置不是百炼异步模型，无法继续跟踪",
-				error: "请把阿里百炼模型切回 qwen-audio-3.0-asr-flash-filetrans 后，再点击“继续跟踪”。",
+				stage: "请恢复此百炼任务的转写设置",
+				error: `请切回阿里百炼的 ${taskModel} 和原服务地址后，再点击“继续跟踪”。`,
 				retry: {
 					label: "继续跟踪",
 					run: () => this.resumeRemoteTranscriptionTask(recovery, remoteTask)
@@ -1342,8 +1375,9 @@ export default class EchoNotesPlugin extends Plugin {
 		const inFlight = this.processingAudio.get(recovery.audioPath);
 		if (inFlight) {
 			await inFlight.catch(() => null);
+			return;
 		}
-		const current = this.taskCenter.getTask(createTaskId("transcription", recovery.audioPath));
+		const current = this.taskCenter.getTask(taskId);
 		if (current?.status === "cancelled") {
 			return;
 		}
@@ -1691,7 +1725,7 @@ export default class EchoNotesPlugin extends Plugin {
 						run: () => this.resumeLocalTranscriptionTask(task.id)
 					};
 				}
-				if (task.remoteTask) {
+				if (task.remoteTask && task.remoteTask.status !== "FAILED" && task.remoteTask.status !== "CANCELED") {
 					return {
 						label: "继续跟踪",
 						run: () => this.resumeRemoteTranscriptionTask(recovery, task.remoteTask!),
@@ -3530,16 +3564,18 @@ export default class EchoNotesPlugin extends Plugin {
 		let completed = 0;
 		const linkResults = new Map<SourceAudioAnchor, TranscriptLinkResult>();
 
-		const batchUpgradeDecision: { value?: SiliconFlowUpgradeDecision; config?: EchoNotesSettings["offlineTranscription"] } = {
+		const batchSourceConfig = this.getTranscriptionUpgradeConfig();
+		const batchUpgradeDecision: TranscriptionUpgradeContext = {
 			config: {
-				...this.settings.offlineTranscription,
-				aliyunFiletrans: this.settings.offlineTranscription.aliyunFiletrans
-					? { ...this.settings.offlineTranscription.aliyunFiletrans }
+				...batchSourceConfig,
+				aliyunFiletrans: batchSourceConfig.aliyunFiletrans
+					? { ...batchSourceConfig.aliyunFiletrans }
 					: undefined
 			}
 		};
 		const batchConfig = batchUpgradeDecision.config!;
-		if (shouldPromptSiliconFlowUpgrade({
+		const promptAliyun = this.shouldPromptAliyunUpgrade(batchConfig);
+		if (promptAliyun || shouldPromptSiliconFlowUpgrade({
 			usage: "offline",
 			provider: batchConfig.provider,
 			model: batchConfig.model,
@@ -3550,15 +3586,18 @@ export default class EchoNotesPlugin extends Plugin {
 		})) {
 			let needsUpload = false;
 			for (const task of audioTasks) {
-				if (this.processingAudio.has(task.audioFile.path)) continue;
-				if (!this.settings.skipExistingTranscript || !this.transcriptService.getTranscriptFile(task.audioFile)) {
+				if (this.processingAudio.has(task.audioFile.path) || this.hasUnfinishedAliyunTask(task.audioFile.path)) continue;
+				const filetrans = promptAliyun && isAliyunFiletransModel(batchConfig.model);
+				const enhanced = filetrans && (batchConfig.aliyunFiletrans?.hotwordEnhancementEnabled || batchConfig.aliyunFiletrans?.contextEnhancementEnabled);
+				if (enhanced || !this.settings.skipExistingTranscript || !this.transcriptService.getTranscriptFile(task.audioFile)) {
 					needsUpload = true;
 					break;
 				}
 				const reused = await this.transcriptService.getReusableTranscriptFile(
 					task.audioFile,
 					batchConfig.provider,
-					batchConfig.model
+					batchConfig.model,
+					filetrans ? createTranscriptionCheckpointIdentity(task.audioFile, batchConfig).configurationFingerprint : undefined
 				);
 				if (!reused) {
 					needsUpload = true;
@@ -3566,15 +3605,15 @@ export default class EchoNotesPlugin extends Plugin {
 				}
 			}
 			if (needsUpload) {
-				const decision = await this.resolveSiliconFlowUpgrade();
-				if (!decision || this.settings.offlineTranscription.provider !== batchConfig.provider ||
-					this.settings.offlineTranscription.baseUrl !== batchConfig.baseUrl ||
-					this.settings.offlineTranscription.model !== (decision.kind === "switch" ? decision.modelId : batchConfig.model)) {
+				const decision = promptAliyun ? await this.resolveAliyunUpgrade(batchConfig) : await this.resolveSiliconFlowUpgrade();
+				const model = decision === "switch" ? ALIYUN_FILETRANS_MODEL
+					: typeof decision === "object" && decision?.kind === "switch" ? decision.modelId : batchConfig.model;
+				if (!decision || !this.matchesOfflineConfiguration({ ...batchConfig, model })) {
 					if (decision) new Notice("转写配置已变化，请重新发起批量转写。");
 					return "processed";
 				}
-				batchUpgradeDecision.value = decision;
-				if (decision.kind === "switch") batchConfig.model = decision.modelId;
+				batchUpgradeDecision.decided = true;
+				batchConfig.model = model;
 			}
 		}
 
@@ -3597,10 +3636,11 @@ export default class EchoNotesPlugin extends Plugin {
 			await lease?.release("safe-terminal");
 		};
 		for (const task of [...audioTasks].reverse()) {
+			if (batchUpgradeDecision.cancelled) break;
 			await ensureBatchLocalAsrLease();
 			const result = await this.processAudioToTranscript(task.audioFile, sourceNote, {
 				audioLinkPath: task.audioMatch.linkPath,
-				siliconFlowUpgradeDecision: batchUpgradeDecision,
+				modelUpgrade: batchUpgradeDecision,
 				onTranscriptFileReady: async (transcriptFile) => {
 					const linkResult = await this.insertTranscriptLink(task.anchor, transcriptFile, false);
 					linkResults.set(task.anchor, linkResult);
@@ -3735,6 +3775,86 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 	}
 
+	private matchesOfflineConfiguration(config: EchoNotesSettings["offlineTranscription"]): boolean {
+		const current = this.settings.offlineTranscription;
+		return current.provider === config.provider && current.baseUrl === config.baseUrl && current.model === config.model;
+	}
+
+	private getTranscriptionUpgradeConfig(): EchoNotesSettings["offlineTranscription"] {
+		// Concurrent callers must not snapshot a model whose settings write is still pending.
+		const pending = this.aliyunUpgradePending;
+		const current = this.settings.offlineTranscription;
+		return this.aliyunUpgradeRollback && pending && current.provider === pending.config.provider &&
+			current.baseUrl === pending.config.baseUrl && current.model === ALIYUN_FILETRANS_MODEL
+			? { ...current, model: pending.config.model }
+			: current;
+	}
+
+	private shouldPromptAliyunUpgrade(config: EchoNotesSettings["offlineTranscription"]): boolean {
+		return config.provider === "aliyun-bailian" && isAliyunUpgradeModel(config.model) &&
+			(!this.settings.aliyunFiletrans31UpgradeNoticeDismissed || this.aliyunUpgradeRollback !== null) &&
+			diagnoseTranscriptionProviderSettings(config, this.getApiKey(config.provider), { usage: "offline" }).canAttemptTranscription;
+	}
+
+	private async resolveAliyunUpgrade(config: EchoNotesSettings["offlineTranscription"]): Promise<AliyunUpgradeDecision | null> {
+		const currentModel = config.model;
+		if (this.unloading || !isAliyunUpgradeModel(currentModel)) return null;
+		const pending = this.aliyunUpgradePending;
+		if (pending) {
+			return pending.config.model === config.model && pending.config.baseUrl === config.baseUrl ? pending.result : null;
+		}
+		if (!this.matchesOfflineConfiguration(config)) return null;
+		const result = new Promise<AliyunUpgradeDecision | null>(resolve => {
+			const modal = new AliyunModelUpgradeModal(this.app, currentModel, resolve, async decision => {
+				if (this.unloading || !this.matchesOfflineConfiguration(config)) {
+					throw new Error(ALIYUN_UPGRADE_CONFIG_CHANGED);
+				}
+				if (decision === "keep") return;
+				const switching = decision === "switch";
+				const previousDismissed = this.settings.aliyunFiletrans31UpgradeNoticeDismissed;
+				const expected = switching ? { ...config, model: ALIYUN_FILETRANS_MODEL } : config;
+				const rollback = () => {
+					if (switching) {
+						if (this.matchesOfflineConfiguration(expected)) this.settings.offlineTranscription.model = config.model;
+						const profile = this.settings.offlineTranscriptionByProvider["aliyun-bailian"];
+						if (profile?.baseUrl === config.baseUrl && profile.model === ALIYUN_FILETRANS_MODEL) profile.model = config.model;
+					} else {
+						this.settings.aliyunFiletrans31UpgradeNoticeDismissed = previousDismissed;
+					}
+				};
+				this.aliyunUpgradeRollback = rollback;
+				if (switching) {
+					this.settings.offlineTranscription.model = ALIYUN_FILETRANS_MODEL;
+				} else {
+					this.settings.aliyunFiletrans31UpgradeNoticeDismissed = true;
+				}
+				try {
+					await this.saveSettings();
+				} catch (error) {
+					rollback();
+					throw error;
+				} finally {
+					if (this.aliyunUpgradeRollback === rollback) this.aliyunUpgradeRollback = null;
+				}
+			});
+			this.aliyunUpgradeModal = modal;
+			this.app.workspace.onLayoutReady(() => {
+				if (!this.unloading) modal.open();
+			});
+		});
+		const active = { config, result };
+		this.aliyunUpgradePending = active;
+		try {
+			const decision = await result;
+			return this.unloading ? null : decision;
+		} finally {
+			if (this.aliyunUpgradePending === active) {
+				this.aliyunUpgradePending = null;
+				this.aliyunUpgradeModal = null;
+			}
+		}
+	}
+
 	private async saveSettingsOrThrow(context: string): Promise<void> {
 		try {
 			await this.saveSettings();
@@ -3743,6 +3863,12 @@ export default class EchoNotesPlugin extends Plugin {
 			throw error;
 		}
 	}
+	private hasUnfinishedAliyunTask(audioPath: string): boolean {
+		const task = this.taskCenter.getTask(createTaskId("transcription", audioPath));
+		const status = task?.remoteTask?.status;
+		return task?.status !== "cancelled" && (status === "PENDING" || status === "RUNNING" || status === "UNKNOWN");
+	}
+
 	private async processAudioToTranscript(
 		audioFile: TFile,
 		sourceNote: TFile | undefined,
@@ -3759,6 +3885,10 @@ export default class EchoNotesPlugin extends Plugin {
 		}
 
 		const previous = this.taskCenter.getTask(createTaskId("transcription", audioFile.path));
+		if (!options.resumeRemoteTask && this.hasUnfinishedAliyunTask(audioFile.path)) {
+			new Notice("此音频已有百炼云端任务，请在任务中心继续跟踪。");
+			return null;
+		}
 		if (previous?.localTask && previous.localTask.phase !== "canceled" && !options.resumeLocalTask) {
 			if (previous.localTask.cancelRequested || previous.localTask.phase === "cleanup-pending") {
 				await this.resumeLocalTranscriptionTask(previous.id);
@@ -3791,13 +3921,22 @@ export default class EchoNotesPlugin extends Plugin {
 		sourceNote: TFile | undefined,
 		options: ProcessAudioOptions
 	): Promise<ProcessAudioResult | null> {
-		const sourceConfig = options.siliconFlowUpgradeDecision?.config ?? this.settings.offlineTranscription;
+		const sourceConfig = options.modelUpgrade?.config ?? this.getTranscriptionUpgradeConfig();
 		const transcriptionConfig = Object.freeze({
 			...sourceConfig,
 			aliyunFiletrans: sourceConfig.aliyunFiletrans
 				? Object.freeze({ ...sourceConfig.aliyunFiletrans })
 				: undefined
 		});
+		if (options.resumeRemoteTask) {
+			const taskId = createTaskId("transcription", audioFile.path);
+			const model = this.taskCenter.getTask(taskId)?.model || ALIYUN_FILETRANS_V30_MODEL;
+			if (transcriptionConfig.provider !== "aliyun-bailian" || !isAliyunFiletransModel(model) ||
+				transcriptionConfig.model !== model || !this.matchesAliyunTaskOrigin(transcriptionConfig.baseUrl, options.resumeRemoteTask)) {
+				this.taskCenter.updateTask(taskId, { status: "paused", stage: "转写配置已变化，请恢复原模型和地址后继续跟踪" });
+				return null;
+			}
+		}
 		const diagnostic = this.startDiagnosticSession(
 			"transcription",
 			options.diagnosticChainId,
@@ -3815,7 +3954,7 @@ export default class EchoNotesPlugin extends Plugin {
 		});
 		let checkpointIdentity = createTranscriptionCheckpointIdentity(audioFile, transcriptionConfig);
 		const isAliyunFiletrans =
-			transcriptionConfig.provider === "aliyun-bailian" && transcriptionConfig.model === ALIYUN_FILETRANS_MODEL;
+			transcriptionConfig.provider === "aliyun-bailian" && isAliyunFiletransModel(transcriptionConfig.model);
 		const isLocalEnhancement = transcriptionConfig.provider === "local-openai-compatible";
 		const enhancementFlags = isLocalEnhancement ? transcriptionConfig.localEnhancement : transcriptionConfig.aliyunFiletrans;
 		const hotwordEnhancementEnabled = (isAliyunFiletrans || isLocalEnhancement) &&
@@ -3857,7 +3996,7 @@ export default class EchoNotesPlugin extends Plugin {
 		const transcriptionTaskId = createTaskId("transcription", audioFile.path);
 		const existingTranscript = this.transcriptService.getTranscriptFile(audioFile);
 		const reusableTranscript =
-			existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription && !usesMemoryEnhancement
+			existingTranscript && this.settings.skipExistingTranscript && !options.forceTranscription && !options.resumeRemoteTask && !usesMemoryEnhancement
 				? await this.transcriptService.getReusableTranscriptFile(
 						audioFile,
 						transcriptionConfig.provider,
@@ -3902,6 +4041,23 @@ export default class EchoNotesPlugin extends Plugin {
 			});
 		}
 
+		if (!options.modelUpgrade?.decided && options.allowUploadConfirmation !== false &&
+			!options.resumeRemoteTask && this.shouldPromptAliyunUpgrade(transcriptionConfig)) {
+			const decision = await this.resolveAliyunUpgrade(transcriptionConfig);
+			const model = decision === "switch" ? ALIYUN_FILETRANS_MODEL : transcriptionConfig.model;
+			if (!decision || !this.matchesOfflineConfiguration({ ...transcriptionConfig, model })) {
+				if (options.modelUpgrade) options.modelUpgrade.cancelled = true;
+				if (decision) new Notice("转写配置已变化，请重新发起转写。");
+				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "aliyun-upgrade-cancelled" });
+				return null;
+			}
+			const upgrade = options.modelUpgrade ?? {};
+			upgrade.decided = true;
+			upgrade.config = { ...transcriptionConfig, model };
+			this.diagnostics.complete(diagnostic.id, "skipped", { reason: "aliyun-upgrade-decided" });
+			return this.performAudioToTranscript(audioFile, sourceNote, { ...options, modelUpgrade: upgrade });
+		}
+
 		if (shouldPromptSiliconFlowUpgrade({
 			usage: "offline",
 			provider: transcriptionConfig.provider,
@@ -3911,7 +4067,7 @@ export default class EchoNotesPlugin extends Plugin {
 				diagnoseTranscriptionProviderSettings(transcriptionConfig, this.getApiKey(transcriptionConfig.provider), { usage: "offline" }).canAttemptTranscription,
 			reminderDismissed: this.settings.siliconflowSenseVoiceUpgradeNoticeDismissed,
 			isRemoteResume: Boolean(options.resumeRemoteTask)
-		}) && options.siliconFlowUpgradeDecision?.value === undefined) {
+		}) && options.modelUpgrade?.decided === undefined) {
 			const decision = await this.resolveSiliconFlowUpgrade();
 			if (!decision || this.settings.offlineTranscription.provider !== transcriptionConfig.provider ||
 				this.settings.offlineTranscription.baseUrl !== transcriptionConfig.baseUrl ||
@@ -3920,15 +4076,15 @@ export default class EchoNotesPlugin extends Plugin {
 				this.diagnostics.complete(diagnostic.id, "skipped", { reason: "siliconflow-upgrade-cancelled-or-save-failed" });
 				return null;
 			}
-			const upgradeContext = options.siliconFlowUpgradeDecision ?? { value: decision };
-			upgradeContext.value = decision;
-			if (options.siliconFlowUpgradeDecision?.config && decision.kind === "switch") {
-				options.siliconFlowUpgradeDecision.config.model = decision.modelId;
+			const upgradeContext = options.modelUpgrade ?? {};
+			upgradeContext.decided = true;
+			if (options.modelUpgrade?.config && decision.kind === "switch") {
+				options.modelUpgrade.config.model = decision.modelId;
 			}
 			this.diagnostics.complete(diagnostic.id, "skipped", { reason: "siliconflow-upgrade-restarted" });
 			return this.performAudioToTranscript(audioFile, sourceNote, {
 				...options,
-				siliconFlowUpgradeDecision: upgradeContext
+				modelUpgrade: upgradeContext
 			});
 		}
 
@@ -3958,6 +4114,7 @@ export default class EchoNotesPlugin extends Plugin {
 			status: "running",
 			stage: "准备转写",
 			localTask: options.resumeLocalTask,
+			remoteTask: options.resumeRemoteTask,
 			provider: transcriptionConfig.provider,
 			model: transcriptionConfig.model,
 			targetPath: audioFile.path,
@@ -4158,12 +4315,12 @@ export default class EchoNotesPlugin extends Plugin {
 					return;
 				}
 				if (progress.type === "filetrans-task-submitted" || progress.type === "filetrans-task-status") {
-					const waitingText = progress.task.status === "PENDING" ? "排队中" : "识别中";
-					this.taskCenter.updateTask(transcriptionTaskId, {
-						stage: `百炼异步任务${waitingText}`,
+					const updated = this.taskCenter.updateTask(transcriptionTaskId, {
+						stage: progress.task.status === "PENDING" ? "百炼异步任务排队中" : "百炼异步任务处理中",
 						remoteTask: progress.task,
 						traceId: progress.traceId
 					});
+					if (updated) this.taskCenter.updateTask(transcriptionTaskId, { retry: this.createTaskRecoveryRetry(updated) });
 					return;
 				}
 				if (progress.type === "filetrans-result-downloading") {

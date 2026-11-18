@@ -116,7 +116,7 @@ Echo Notes 不只是一个录音转写插件，也不只是一个会议纪要工
 
 离线转写 Provider：
 
-- 阿里百炼（Alibaba Bailian）：新安装默认异步模型 `qwen-audio-3.0-asr-flash-filetrans`；现有用户继续保留原模型，可在下拉框切换到 `qwen3-asr-flash`
+- 阿里百炼（Alibaba Bailian）：新安装默认 `qwen-audio-3.1-asr-flash-filetrans`。升级保留已有模型，也可在下拉框切换到 3.0 长录音版或 `qwen3-asr-flash`
 - 【免费】硅基流动（SiliconFlow）：内置模型依次为 `Qwen/Qwen3-ASR-1.7B`、`XingChenAGI/XingChenASR-Diarize-V3.0`、`XingChenAGI/XingChenASR-V3.2-Ultra`、`XingChenAGI/XingChenGSR-V1.0`、`FunAudioLLM/SenseVoiceSmall`，也可填写自定义模型 ID
 - MOSI（可选说话人分离）：可在普通转写 `moss-transcribe` 与多说话人转写 `moss-transcribe-diarize` 之间切换
 - Ollama：通过本地 OpenAI-compatible `/audio/transcriptions` 端点转写
@@ -195,7 +195,8 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 - 小音频遇到 HTTP `500/502/503/504` 时会按 1 秒、3 秒退避重试；仍失败则自动进入分段。单个分段持续失败时只二分该段，`413` 会直接触发二分，最短 60 秒、最多四层；鉴权、额度、限流和模型错误不会拆分。
 - 自动重试和缩段会产生额外 Provider 请求，但不会自动切换 Provider、API Key 或模型。已经成功的分段不会重传，失败时会保留已写入正文、Trace ID 和失败时间范围。
 - 限制与模型列表以[硅基流动转写接口文档](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions)为准。
-- 阿里百炼 `qwen-audio-3.0-asr-flash-filetrans`：使用临时上传、异步提交、轮询和结果下载链路。当前临时上传模式按 1 GB 上限设计，不宣称支持用户自有 OSS 场景的完整 2 GB；结果地址默认 24 小时有效。说话人分离默认开启、人数默认自动识别，可选填 2～100。关闭分离后仍使用整段异步任务。
+- 手动使用百炼旧模型时，升级弹窗并排展示当前模型和 3.1。可以切换并转写、仅本次继续旧版，或停用弹窗后继续。通过设置可以恢复提醒。北京区 3.1 参考价为输入 0.8 元/百万 Token、输出 2.7 元/百万 Token。两个旧版折合约 0.79 元/计费小时。[官方计费](https://help.aliyun.com/zh/model-studio/model-pricing)
+- 阿里百炼 3.1 和 3.0 Filetrans：使用临时上传、异步提交、轮询和结果下载链路。当前临时上传模式按 1 GB 上限设计，不宣称支持用户自有 OSS 场景的完整 2 GB；结果地址默认 24 小时有效。说话人分离默认开启、人数默认自动识别，可选填 2～100。关闭分离后仍使用整段异步任务。
 - 阿里百炼旧模型 `qwen3-asr-flash`：继续使用 Base64 Data URL；编码后超过 10 MB 时在本地转换为 16 千赫兹单声道 WAV 分段，并持续回写已完成分段。
 - MOSI：开启“说话人分离”时使用 `moss-transcribe-diarize`、版本 `moss-transcribe-diarize-20260325` 并传入 `diarize=true`；关闭时使用普通模型 `moss-transcribe` 和版本 `moss-transcribe-v1`，不发送 `diarize`。两种模式都使用官方同步非流式 multipart 请求。超过 3 分钟时在本地切成约 3 分钟的 WAV 分段并逐段回写；HTTP `500/502/503/504` 按 1 秒、3 秒重试，仍失败、收到 `413` 或明确过长/过大响应时，只缩小当前失败段，最短 30 秒、最多四层。MOSI 未公布稳定的文件大小上限；详见 [MOSI 转写接口文档](https://platform.mosi.cn/docs/reference/transcriptions)。
 - Ollama 和 LM Studio：超过 25 MB 的文件会在上传前被阻止。
@@ -205,7 +206,7 @@ Echo Notes 只在触发转写、AI 纪要分析或 Echo Memory 记忆提取时�
 | Provider 类型 | 上传方式 | 接口形态 | 限制 | Echo Notes 分段 | 语言参数 | 时间戳 | 说话人分离 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 火山引擎 AgentPlan 实时 `doubao-seed-asr-2.0` | 麦克风 PCM 鉴权优化双流 WebSocket | `/api/v3/plan/sauc/bigmodel_async` | 仅桌面端、本地文件系统 Vault | 不分段，单实时会话 | 中文或 auto | utterance 级支持 | 支持 |
-| 阿里百炼 `qwen-audio-3.0-asr-flash-filetrans` | 百炼临时 OSS | `/api/v1/services/audio/asr/transcription` + Task API | 临时上传 1 GB；模型最长 12 小时 | 不分段，整段异步任务 | 支持 | 句子与词级支持 | 默认开启 |
+| 阿里百炼 3.1 和 3.0 Filetrans | 百炼临时 OSS | `/api/v1/services/audio/asr/transcription` + Task API | 临时上传 1 GB；模型最长 12 小时 | 不分段，整段异步任务 | 支持 | 句子与词级支持 | 默认开启 |
 | 阿里百炼 `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 编码输入 10 MB | 支持 | 支持 | 暂不支持 | 暂不支持 |
 | 硅基流动 `Qwen/Qwen3-ASR-1.7B` / `XingChenAGI/XingChenASR-Diarize-V3.0` / `XingChenAGI/XingChenASR-V3.2-Ultra` / `XingChenAGI/XingChenGSR-V1.0` / `FunAudioLLM/SenseVoiceSmall` / 自定义模型 | multipart | SiliconFlow 专用端点 | 单次 50 MB 且 1 小时 | 支持；约 10 分钟切分并可缩段恢复 | 暂不支持 | 暂不支持 | 暂不支持 |
 | MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | 由 MOSI 服务端决定 | 支持；约 3 分钟切分并可缩段恢复 | 暂不支持 | 仅分离模式支持 segment 级时间 | 可选 |
@@ -244,7 +245,7 @@ AgentPlan 与开启说话人分离后的 MOSI 转写稿会显示说话人标签�
 | 服务商 | Base URL | Model | 默认语言 |
 | --- | --- | --- | --- |
 | 火山引擎 AgentPlan（实时） | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
-| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com` | `qwen-audio-3.0-asr-flash-filetrans` | `zh` |
+| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com` | `qwen-audio-3.1-asr-flash-filetrans` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | 默认 `FunAudioLLM/SenseVoiceSmall`；另有四个内置模型与自定义 ID | `auto` |
 | MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | 默认 `moss-transcribe-diarize`；关闭后 `moss-transcribe` | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |

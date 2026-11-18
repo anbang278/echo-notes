@@ -138,7 +138,7 @@ Real-time transcription:
 
 Offline transcription providers:
 
-- 阿里百炼（Alibaba Bailian） with `qwen3-asr-flash`
+- Alibaba Bailian with `qwen-audio-3.1-asr-flash-filetrans` (default on new installs), `qwen-audio-3.0-asr-flash-filetrans`, and legacy `qwen3-asr-flash`
 - 【免费】硅基流动（SiliconFlow） with the five built-in model IDs `Qwen/Qwen3-ASR-1.7B`, `XingChenAGI/XingChenASR-Diarize-V3.0`, `XingChenAGI/XingChenASR-V3.2-Ultra`, `XingChenAGI/XingChenGSR-V1.0`, and `FunAudioLLM/SenseVoiceSmall`, plus custom model IDs
 - MOSI with selectable `moss-transcribe` plain transcription or `moss-transcribe-diarize` speaker diarization
 - Ollama through its local OpenAI-compatible `/audio/transcriptions` endpoint
@@ -149,6 +149,8 @@ AgentPlan real-time transcription keeps its official `bigmodel_async` Base URL a
 The settings tab also includes a local "Check transcription configuration" action. It checks API key presence, Base URL format, example URLs, non-local HTTP risks, model hints, endpoint shape, and known capability limits. This check does not upload audio and does not call the provider.
 
 When SiliconFlow is still configured with the default `FunAudioLLM/SenseVoiceSmall`, each eligible offline transcription action shows one model selection prompt before any running task, empty transcript, upload, or provider request is created; files in the same batch or concurrent waiters share that prompt. It offers the four newer model IDs above, keeps the default model unchanged when dismissed, and can persist either a selected model or the reminder preference. The prompt does not change a later external Provider/Base URL/model edit, and the previous `TeleAI/TeleSpeechASR` value remains valid as a custom-compatible model ID; it is not forcibly migrated or described as retired.
+
+When you manually start a transcription with either older Bailian model, Echo Notes offers the 3.1 upgrade before any audio upload. You can switch for this and future runs, keep the old model for this run, or turn off the reminder and continue. The reminder can be restored in settings. Beijing reference rates are CNY 0.8 per million input tokens and CNY 2.7 per million output tokens for 3.1. The older models cost CNY 0.00022 per billable second, about CNY 0.79 per billable hour. See the [official pricing](https://help.aliyun.com/zh/model-studio/model-pricing).
 
 AI analysis supports SiliconFlow, **OpenCode Go**, Alibaba Bailian, DeepSeek, OpenAI official, Volcengine AgentPlan, Ollama, LM Studio, and a custom OpenAI-compatible endpoint, in that order. The global default remains Alibaba Bailian `deepseek-v4-pro`; OpenCode Go defaults to `deepseek-v4-flash` when selected, and SiliconFlow defaults to `Qwen/Qwen3.5-4B`. OpenCode Go is available only for AI analysis, keeps its official `https://opencode.ai/zen/go/v1` Base URL read-only, and offers the current documented model snapshot: Grok 4.5, GLM-5.2/5.1, GPT 5.6 Luna, Kimi K3/K2.7 Code/K2.6, MiMo-V2.5/Pro, MiniMax M3/M2.7, Qwen3.8 Max/Qwen3.7 Max/Plus/Qwen3.6 Plus, DeepSeek V4 Pro/Flash, and Hy3. Echo Notes automatically routes these models through their documented Chat Completions, Responses, or Messages endpoint. Availability, subscription limits, and data-retention policies may change; check the [OpenCode Go documentation](https://opencode.ai/docs/zh-cn/go) before sending content. Selecting AgentPlan locks the Base URL to the plan-specific `https://ark.cn-beijing.volces.com/api/plan/v3` endpoint and provides a model picker for the currently documented text models, including Doubao Seed 2.0 Mini/Lite/Pro, Doubao Seed Evolving, DeepSeek V4, MiniMax M2.7/M3, GLM-5.2, and Kimi K2.6/K2.7 Code/K3. Kimi K3 requires Medium or higher, and preview models may be rate-limited during peak traffic. AgentPlan analysis remains isolated from AgentPlan ASR configuration and secrets by purpose.
 
@@ -163,7 +165,7 @@ AgentPlan officially limits its text-generation and embedding benefits to AI-too
 Echo Notes makes network requests only when transcription, AI analysis, or Echo Memory extraction is triggered.
 
 - SiliconFlow default endpoint: `https://api.siliconflow.cn`
-- Alibaba Bailian default endpoint: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- Alibaba Bailian transcription default: `https://dashscope.aliyuncs.com`. You can also paste the workspace API Host from the Beijing console. The legacy model uses the OpenAI-compatible path.
 - MOSI transcription endpoint: `https://api.mosi.cn/v1/audio/transcriptions`
 - Volcengine AgentPlan real-time ASR endpoint: `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async`
 - Volcengine AgentPlan analysis endpoint: `https://ark.cn-beijing.volces.com/api/plan/v3`
@@ -225,6 +227,7 @@ Provider limits:
 - HTTP `500/502/503/504` responses use 1-second and 3-second backoff retries before falling back to chunking. GSR also retries `429` and recognizable transient network timeout/connection failures, then bisects only the failing chunk down to 30 seconds and at most four levels. Other SiliconFlow models retain the general behavior: `413` splits immediately, while authentication, quota, rate-limit, and invalid-model errors are not split.
 - Retries and smaller chunks can create extra provider requests, but Echo Notes never changes the selected provider, API key, or model. Completed chunks are not retransmitted; failures keep completed text, trace IDs, and the failed time range.
 - See the [SiliconFlow transcription API reference](https://docs.siliconflow.cn/cn/api-reference/audio/create-audio-transcriptions) for the current limits and model list.
+- Alibaba Bailian 3.1 and 3.0 Filetrans: Echo Notes uploads the source audio to Bailian temporary object storage, submits one asynchronous job, polls its status, and downloads the transcription. The plugin limits temporary uploads to 1 GB. Speaker diarization uses mono audio up to two hours. When enabled, configured hotwords and contextual prompts are sent with the task. Reopening a submitted job uses its original task ID, model, and service origin when recorded.
 - Alibaba Bailian `qwen3-asr-flash`: local files are encoded as Base64 Data URLs. If the full file would exceed the 10 MB Base64 input limit, Echo Notes decodes the file locally, converts it to 16 kHz mono WAV segments, transcribes each segment in order, and writes completed segments back to the same transcript draft.
 - MOSI: enabling **Speaker diarization** uses `moss-transcribe-diarize`, version `moss-transcribe-diarize-20260325`, and `diarize=true`; disabling it uses plain `moss-transcribe` with version `moss-transcribe-v1` and omits `diarize`. Both modes use the documented synchronous, non-streaming multipart request. Files longer than three minutes are split locally into roughly three-minute WAV segments and written back progressively. HTTP `500/502/503/504` retries use one- and three-second delays; a persistent server failure, `413`, or an explicit too-long/too-large response shrinks only the failing segment down to 30 seconds and at most four levels. MOSI does not publish a stable file-size limit. See the [MOSI transcription API reference](https://platform.mosi.cn/docs/reference/transcriptions).
 - Ollama and LM Studio: files over 25 MB are blocked before upload.
@@ -236,6 +239,7 @@ Capability matrix:
 | Provider family | Upload mode | Endpoint shape | Limit | Echo Notes chunking | Language parameter | Timestamp | Speaker diarization |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Volcengine AgentPlan real-time `doubao-seed-asr-2.0` | microphone PCM over authenticated optimized bidirectional WebSocket | `/api/v3/plan/sauc/bigmodel_async` | desktop and local filesystem vault only | No; one live session | Chinese or auto | Yes, utterance level | Yes |
+| Alibaba Bailian 3.1 / 3.0 Filetrans | Temporary OSS object | Async Filetrans + Task API | 1 GB temporary upload | Whole file; no chunking | Yes | Sentence and word | Optional |
 | Alibaba Bailian `qwen3-asr-flash` | Base64 Data URL | `/chat/completions` + `input_audio` | 10 MB encoded input | Yes | Yes | No | No |
 | SiliconFlow `Qwen/Qwen3-ASR-1.7B` / `XingChenAGI/XingChenASR-Diarize-V3.0` / `XingChenAGI/XingChenASR-V3.2-Ultra` / `XingChenAGI/XingChenGSR-V1.0` / `FunAudioLLM/SenseVoiceSmall` / custom model | multipart | dedicated SiliconFlow endpoint | 50 MB and one hour per request | Yes; ~10-minute chunks with adaptive shrinking | No | No | No |
 | MOSI `moss-transcribe` / `moss-transcribe-diarize` | multipart | `/v1/audio/transcriptions` | Determined by MOSI | Yes; ~3-minute chunks with adaptive shrinking | No | Diarization mode only, segment level | Optional |
@@ -274,7 +278,7 @@ Recommended defaults:
 | Provider | Base URL | Model | Default language |
 | --- | --- | --- | --- |
 | Volcengine AgentPlan (real-time) | `wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async` | `doubao-seed-asr-2.0` | `zh` |
-| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen3-asr-flash` | `zh` |
+| 阿里百炼（Alibaba Bailian） | `https://dashscope.aliyuncs.com` | `qwen-audio-3.1-asr-flash-filetrans` | `zh` |
 | 【免费】硅基流动（SiliconFlow） | `https://api.siliconflow.cn` | `FunAudioLLM/SenseVoiceSmall` (default); four additional built-in models and custom IDs are available | `auto` |
 | MOSI（可选说话人分离） | `https://api.mosi.cn/v1` | `moss-transcribe-diarize` by default; `moss-transcribe` when disabled | `auto` |
 | Ollama | `http://localhost:11434/v1` | `whisper-1` | `zh` |
@@ -606,7 +610,7 @@ unset SILICONFLOW_API_KEY AGENTPLAN_API_KEY
 - Universal large-file chunking across all providers is not supported yet. The shared AudioChunkPipeline currently covers Alibaba Bailian `qwen3-asr-flash`, SiliconFlow official or custom transcription models, and MOSI.
 - Local Whisper is not supported.
 - Long-text analysis uses sequential chunk extraction plus a final synthesis call, so it increases model calls and cost. Matching completed chunks resume after failure or restart, but final synthesis always runs again; whole-text analysis still retries the single request.
-- Task Center persists up to 100 safe task summaries and restores retry actions after restart. It is not a background queue and does not provide pause/cancel controls. Segment-level resume is limited to the chunked Alibaba Bailian, SiliconFlow, and MOSI paths; whole-audio requests and other providers restart the request.
+- Task Center persists up to 100 safe task summaries and restores retry actions after restart. Bailian Filetrans jobs can resume tracking the original cloud task ID. Other services can retry, with segment-level checkpoints on supported chunked paths.
 - Echo Memory relations require explicit user confirmation and do not automatically detect or resolve conflicts. Cross-record views use explicit subject normalization rather than semantic entity resolution and do not yet provide topic aggregation. Multi-reviewer identity, a vector database, cross-vault sync, external Agent execution, and automatic calendar or note actions are not included yet.
 
 ## Contact and Feedback

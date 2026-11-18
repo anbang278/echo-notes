@@ -60,6 +60,7 @@ export type RemoteTranscriptionTaskStatus = "PENDING" | "RUNNING" | "SUCCEEDED" 
 
 export interface RemoteTranscriptionTaskResume {
 	taskId: string;
+	origin?: string;
 	status: RemoteTranscriptionTaskStatus;
 	submittedAt: number;
 	configurationFingerprint: string;
