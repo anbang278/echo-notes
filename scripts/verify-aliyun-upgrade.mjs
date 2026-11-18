@@ -80,9 +80,20 @@ export async function verifyAliyunUpgrade(page, { pluginId, setViewportMode, vie
 		async function launch(indices, options) {
 			await page.evaluate(({ indices, options }) => window.__echoNotesAliyun.launch(indices, options), { indices, options });
 		}
-		const result = () => page.evaluate(async () => Promise.all((await window.__echoNotesAliyun.pending).map(async item =>
-			item ? { path: item.transcriptFile.path, text: await window.app.vault.read(item.transcriptFile) } : null
-		)));
+		const result = () => page.evaluate(async () => {
+			let timeout;
+			try {
+				const results = await Promise.race([
+					window.__echoNotesAliyun.pending,
+					new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("百炼隔离转写未结束")), 15_000); })
+				]);
+				return Promise.all(results.map(async item =>
+					item ? { path: item.transcriptFile.path, text: await window.app.vault.read(item.transcriptFile) } : null
+				));
+			} finally {
+				clearTimeout(timeout);
+			}
+		});
 		const dialog = page.locator(".echo-notes-aliyun-upgrade-dialog");
 		const keep = dialog.getByRole("button", { name: "继续使用旧版", exact: true });
 		const change = dialog.getByRole("button", { name: "切换到 3.1 并转写", exact: true });
@@ -100,6 +111,10 @@ export async function verifyAliyunUpgrade(page, { pluginId, setViewportMode, vie
 		for (const theme of themes) {
 			for (const viewport of viewports) {
 				await setViewportMode(page, viewport, theme);
+				await page.mouse.move(0, 0);
+				await dialog.locator(".modal-title").focus();
+				const tooltip = dialog.getByRole("tooltip");
+				if (await tooltip.isVisible()) await page.keyboard.press("Escape");
 				const placement = await dialog.locator(".echo-notes-aliyun-model-comparison").evaluate(node => {
 					const cards = [...node.children].map(card => card.getBoundingClientRect());
 					return { sideBySide: Math.abs(cards[0].top - cards[1].top) < 1, overflow: node.scrollWidth - node.clientWidth };
@@ -107,7 +122,7 @@ export async function verifyAliyunUpgrade(page, { pluginId, setViewportMode, vie
 				assert.equal(placement.sideBySide, viewport.width > 580, viewport.name + " 的模型卡片排列与原型不同");
 				assert.ok(placement.overflow <= 1, "模型卡片横向溢出");
 				const screenshot = `aliyun-upgrade-${viewport.name}-${theme}.png`;
-				await dialog.screenshot({ path: path.join(outputDir, screenshot) });
+				await dialog.screenshot({ path: path.join(outputDir, screenshot), style: ".notice-container { visibility: hidden; }" });
 				layouts.push({ viewport: viewport.name, theme, screenshot });
 			}
 		}
@@ -152,8 +167,14 @@ export async function verifyAliyunUpgrade(page, { pluginId, setViewportMode, vie
 		assert.ok((await result())[0]?.text.includes(longText));
 		assert.deepEqual(calls.filter(item => item.model).map(item => item.model), [v31, v31, v30, v30]);
 		const prior = calls.length;
+		await page.waitForFunction(async ({ pluginId, v30 }) => {
+			const plugin = window.app.plugins.plugins[pluginId];
+			const audio = window.__echoNotesAliyun.files[1];
+			return Boolean(await plugin.transcriptService.getReusableTranscriptFile(audio, "aliyun-bailian", v30));
+		}, { pluginId, v30 });
 		await launch([1]);
-		assert.ok((await result())[0]);
+		const reused = await result();
+		assert.ok(reused[0], "已完成的 3.0 转写稿应可复用");
 		assert.equal(await dialog.count(), 0, "已有可复用稿件时不能弹窗");
 		assert.equal(calls.length, prior);
 

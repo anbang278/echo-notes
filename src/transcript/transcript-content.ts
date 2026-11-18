@@ -12,6 +12,7 @@ const MANAGED_FRONTMATTER_KEYS = new Set([
 	"source_note",
 	"provider",
 	"model",
+	"transcription_configuration_fingerprint",
 	"transcribed_at",
 	"status",
 	"error",

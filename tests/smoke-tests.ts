@@ -2598,6 +2598,10 @@ assert.match(mergedManagedTranscript, /用户手工批注/);
 assert.match(mergedManagedTranscript, /新转写正文/);
 assert.doesNotMatch(mergedManagedTranscript, /旧转写正文/);
 assert.equal(mergeManagedTranscriptDocument("legacy transcript", nextManagedTranscript), null);
+const completedManagedTranscript = nextManagedTranscript.replace("status: transcribing",
+	'transcription_configuration_fingerprint: "completed-configuration"\nstatus: done');
+assert.match(mergeManagedTranscriptDocument(existingManagedTranscript, completedManagedTranscript) ?? "",
+	/transcription_configuration_fingerprint: "completed-configuration"/);
 
 assert.equal(
 	createTranscriptBackupPath("Folder/Meeting.transcript.md", "20260713-145810"),

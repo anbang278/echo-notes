@@ -3866,7 +3866,8 @@ export default class EchoNotesPlugin extends Plugin {
 	private hasUnfinishedAliyunTask(audioPath: string): boolean {
 		const task = this.taskCenter.getTask(createTaskId("transcription", audioPath));
 		const status = task?.remoteTask?.status;
-		return task?.status !== "cancelled" && (status === "PENDING" || status === "RUNNING" || status === "UNKNOWN");
+		return task?.status !== "cancelled" && task?.status !== "success" &&
+			(status === "PENDING" || status === "RUNNING" || status === "UNKNOWN");
 	}
 
 	private async processAudioToTranscript(
